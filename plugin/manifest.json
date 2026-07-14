@@ -1,0 +1,32 @@
+{
+  "id": "org.pproagentbridge.panel",
+  "name": "Agent Bridge",
+  "version": "0.1.0",
+  "main": "index.html",
+  "host": [
+    {
+      "app": "premierepro",
+      "minVersion": "25.6.0"
+    }
+  ],
+  "manifestVersion": 5,
+  "requiredPermissions": {
+    "network": {
+      "domains": "all"
+    },
+    "localFileSystem": "fullAccess"
+  },
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "claudeBridgePanel",
+      "minimumSize": { "width": 260, "height": 200 },
+      "maximumSize": { "width": 2000, "height": 2000 },
+      "preferredDockedSize": { "width": 300, "height": 360 },
+      "preferredFloatingSize": { "width": 340, "height": 420 },
+      "label": {
+        "default": "Agent Bridge"
+      }
+    }
+  ]
+}

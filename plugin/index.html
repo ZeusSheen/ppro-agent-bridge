@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {
+      margin: 0;
+      padding: 10px;
+      background: #1d1d1d;
+      color: #c8c8c8;
+      font-family: -apple-system, "Segoe UI", sans-serif;
+      font-size: 12px;
+    }
+    #statusRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    #dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #d64541; /* red = disconnected */
+      flex: 0 0 auto;
+    }
+    #dot.connected { background: #3fa45b; }
+    #dot.connecting { background: #d9a441; }
+    #statusText { flex: 1 1 auto; }
+    button {
+      background: #333;
+      color: #ddd;
+      border: 1px solid #555;
+      border-radius: 3px;
+      padding: 3px 10px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    button:hover { background: #444; }
+    #log {
+      background: #141414;
+      border: 1px solid #333;
+      border-radius: 3px;
+      padding: 6px;
+      height: 260px;
+      overflow-y: auto;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .ok  { color: #7cbf8a; }
+    .err { color: #e08a86; }
+    .cmd { color: #8ab4d8; }
+  </style>
+</head>
+<body>
+  <div id="statusRow">
+    <div id="dot"></div>
+    <div id="statusText">Not connected</div>
+    <button id="reconnectBtn">Reconnect</button>
+  </div>
+  <div id="log"></div>
+  <script src="main.js"></script>
+</body>
+</html>
