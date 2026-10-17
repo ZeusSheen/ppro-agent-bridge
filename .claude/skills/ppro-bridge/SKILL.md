@@ -1,9 +1,9 @@
 ---
 name: ppro-bridge
-description: Drive Adobe Premiere Pro through the ppro-agent-bridge CLI for transcript-driven, closed-loop video editing. Use when asked to inspect a Premiere project, transcribe footage (local Whisper), read transcripts, export frames or OTIO timelines, import media or transcripts, place clips or sentence-level cuts on the timeline, or assemble a rough cut / best-take edit from talking-head footage. Requires the broker running and the Agent Bridge UXP panel loaded in Premiere.
+description: Drive Adobe Premiere Pro through the ppro-agent-bridge CLI for transcript-driven, closed-loop video editing. Use when asked to inspect a Premiere project or timeline, transcribe footage (local Whisper), read transcripts, export frames / contact sheets / OTIO, import media into bins, place clips or sentence-level cuts, execute a JSON edit plan (B-roll, graphics), scale clips to fit/fill, interpret footage frame rates, add timeline markers, remove clips, or assemble a rough cut / best-take edit from talking-head footage. Requires the broker running and the Agent Bridge UXP panel loaded in Premiere.
 ---
 
-# Premiere Pro Agent Bridge (v0.2)
+# Premiere Pro Agent Bridge (v0.3.2)
 
 Control a live Premiere Pro session via CLI. Architecture: `python ppro.py <action>`
 → local broker (127.0.0.1:8017) → UXP panel inside Premiere. Every command prints
@@ -17,22 +17,40 @@ Run `python ppro.py ping`. If it fails: the broker isn't running (`python broker
 in `broker/`, separate terminal, keep open) or the panel isn't loaded (UXP
 Developer Tool → Load; Premiere: Window → UXP Plugins → Agent Bridge). Report
 the failure instead of retrying blindly. `transcribe.py` works without Premiere.
+If `ping` says `"compatible": false`, the loaded panel is an older build — ask the
+user to Reload the Agent Bridge panel in UXP Developer Tool before using v0.3 commands.
+
+Then run `python ppro.py get_sequence` once: it gives frame size (vertical
+sequences are common), fps, duration and every track's name and clip count.
+Never assume 1920×1080 or a frame rate.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `python ppro.py ping` | Liveness check |
-| `python ppro.py get_project` / `get_sequence` | Active project / sequence info |
+| `python ppro.py ping` | Liveness check + version handshake (`compatible`, `actions`) |
+| `python ppro.py get_project` | Active project name / path / active sequence |
+| `python ppro.py get_sequence` | Frame size, fps, duration, tracks (name, clip count), player position |
+| `python ppro.py list_items [--track V3] [--kind video\|audio]` | Clips on the timeline as JSON: start/end (sequence s), in/out (source s), project item, media path |
+| `python ppro.py inspect_items [--track V5] [--from s --to s] [--output f.json]` | What an editor changed: each clip's effect chain (Motion, Opacity, filters) with param values, keyframes; transitions are listed but read their names/positions from `export_otio` |
+| `python ppro.py replace_clip --track V5 --at s --with "item" [--in s --out s] [--dry-run]` | Premiere's "Replace With Clip", keeping effect params, added filters and edge transitions; verifies by reading back |
+| `python ppro.py list_transition_names` | Video transition match names (e.g. `AE.Impact_Film_Dissolve`) |
+| `python ppro.py list_project_items` | Project panel clips with bin path and media path |
 | `python ppro.py list_transcripts` | Every project clip + hasTranscript flag |
 | `python ppro.py export_transcript --output f.json [--item "name"]` | Export a clip's Premiere transcript |
 | `python transcribe.py <media file> --output f.json [--language en] [--model large-v3] [--digest]` | LOCAL Whisper transcription → Adobe-format JSON. GPU auto-detected; on CPU use `--model medium` |
 | `python transcript_digest.py f.json [--json] [--min-conf 0.8]` | Transcript → sentence list with timecodes |
 | `python ppro.py import_transcript --item "name" --file f.json` | Attach a transcript JSON to a clip in Premiere (optional; digest works without it) |
 | `python ppro.py export_otio --output f.otio` | Timeline structure as OpenTimelineIO (includes each clip's source media path) |
-| `python ppro.py export_frame --dir d [--at sec] [--width 640] [--height 360]` | One frame of the program output; real path in `resolvedPath` |
-| `python ppro.py import_media --path f [--path f2 ...]` | Import media into project root |
+| `python ppro.py export_frame --dir d [--at sec] [--width W --height H]` | One frame of the program output (default: sequence frame size); real path in `resolvedPath` |
+| `python ppro.py export_frames --dir d --at 4,18.5,31.6 [--sheet]` | Several frames at once, optionally a labelled contact sheet (needs Pillow) |
+| `python ppro.py import_media --path f [--path f2 ...] [--bin "Name"]` | Import media into the root or a top-level bin (created if missing); returns `newItems` names |
 | `python ppro.py insert_clip --item "name" [--at sec] [--vtrack N] [--atrack N] [--mode overwrite\|insert] [--in sec --out sec] [--label "text"]` | Place a clip — with `--in/--out`, only that source range ("cut by sentence") |
+| `python ppro.py apply_plan plan.json [--dry-run] [--only ids] [--notes-as-markers] [--overwrite] [--report r.json]` | Execute a JSON edit plan (see below) |
+| `python ppro.py set_scale --track V3 (--at s \| --from s --to s) (--value % \| --fit \| --fill) [--dry-run]` | Motion › Scale; fit/fill computed per clip from the media size (ffprobe) |
+| `python ppro.py set_fps --item "name" [--item …] --fps 59.94` | Interpret footage: override frame rate |
+| `python ppro.py add_marker --at s --name "…" [--comment "…"] [--duration s] [--color red]` | Sequence marker (flags, notes for the editor) |
+| `python ppro.py remove_items --track V3 [--track V4] --from s --to s [--mode inside\|overlap] [--ripple] [--dry-run]` | Remove clips in a range (default: only clips entirely inside) |
 
 Track indices are 0-based (0 = V1). `--mode overwrite` (default) replaces what's
 under it; `insert` pushes content rightward. `--in/--out` come as a pair, in
@@ -99,6 +117,75 @@ when unsure which take is cleaner, export a frame from each and compare, or ask.
 6. Report: chosen sentences with timecodes, skipped material and why, total
    runtime, undo labels used.
 
+## Edit plans: B-roll and graphics in one pass (`apply_plan`)
+
+When the edit is decided up front (B-roll over A-roll, graphics on an upper
+track), write it as a plan and execute it instead of placing clips one by one:
+
+```json
+{
+  "sequence": "Main", "media_root": "./media/",
+  "commands": [
+    {"command": "insert_clip", "id": "b01", "track": "V3", "timeline_at": 2.0,
+     "src": "stock/b01.mp4", "src_in": 9.0, "src_out": 14.0, "scale": "fill"},
+    {"command": "insert_clip", "id": "g01", "track": "V4", "timeline_at": 9.2,
+     "src": "graphics/g01.mov", "src_in": 0, "src_out": 5.0},
+    {"command": "insert_clip", "id": "g02", "track": "V4", "timeline_at": 16.0, "src": null},
+    {"command": "note", "id": "flag1", "timeline_at": 9.0, "note": "Check this claim"}
+  ]
+}
+```
+
+- `src` is relative to `media_root` (itself relative to the plan file). `src: null`
+  means "built by hand" and is skipped; `note` commands are reported. With
+  `--notes-as-markers` both become sequence markers the editor sees.
+- Optional per command: `atrack` (e.g. "A4"; default: a free audio track, highest
+  first — A1 dialogue is never the default), `scale` ("fit", "fill" or a percent).
+- Always `--dry-run` first. It resolves media, matches/plans imports (into a bin
+  named after the plan's `sequence`, or `--bin`), snaps both edges of every clip
+  to the sequence frame grid, and reports `conflict` wherever the target track is
+  already occupied. Nothing is written in a dry run.
+- A real run imports, places each clip (undo label `plan <sequence>: <id>`), applies
+  scale, then re-reads the timeline and marks each step `placed` only if the clip
+  is really there. Exit code 1 if anything is `conflict`/`error`/`failed`/`unverified`.
+- Re-running a plan on a timeline that already has it reports every step as a
+  conflict — use `remove_items` on the range (or `--overwrite`) deliberately.
+
+## Finishing tools
+
+- **Scale**: `insert_clip` places media at 1:1 pixels, so a 4K clip in a 1080-wide
+  sequence shows as a 2× crop. Check with `export_frames`, then
+  `set_scale --track V3 --at <s> --fill` (or `--fit`, or `--value 50`). Keyframed
+  Scale is refused rather than overwritten.
+- **Frame rate**: `set_fps --item g01.mov --fps 59.94` makes a 60 fps render play
+  frame-accurately in a 59.94 sequence.
+- **Markers**: put fact-check flags and open questions on the timeline with
+  `add_marker` rather than only in chat; colours: green, red, purple, orange,
+  yellow, white, blue, cyan.
+- **Removal**: `remove_items --dry-run` first; the default mode only removes clips
+  entirely inside the range, so neighbours are never trimmed by accident.
+
+## Swapping clips without losing the editor's work (`replace_clip`)
+
+Language versions, re-rendered graphics, new takes: never delete-and-re-place an
+edited clip by hand. First `inspect_items` (and `export_otio` for transitions) to
+see what was done to it, then `replace_clip --dry-run`, then for real. It carries
+over the source range, Motion/Opacity params and keyframes, added filters
+(re-created by match name) and start/end transitions, then re-reads everything
+and reports `verified` only if placement is within a frame and every param and
+transition matches. Lessons it encodes:
+- **Interpretation must match.** If the old item was interpreted at 59.94 and the
+  new file is 60 fps, run `set_fps --fps 59.94` on the new item first, or clips
+  come out a frame short (and adjacent pieces leave a one-frame gap).
+- A range covering the whole media is placed as the whole clip (an out point at
+  the very end is clamped against the native duration and loses a frame).
+- Transition durations are snapped to whole frames (+0.1 frame) — otherwise
+  Premiere's tick rounding drops one (25 → 24 frames).
+- Frame holds (clip menu) and time remapping are not exposed to UXP: pass an
+  explicit `--in/--out` over a static stretch of the new media instead.
+- Check the new asset itself: a translated title can be bilingual (original
+  language first), so the old clip's range may show the wrong half.
+
 ## Discipline and limits
 
 - NEVER edit without a digest or explicit user timecodes — no blind cutting.
@@ -108,7 +195,12 @@ when unsure which take is cleaner, export a frame from each and compare, or ask.
 - Speed-remapped clips break the coordinate formula — unsupported; stop and say so.
 - Duplicate clip names resolve to the first match; if ambiguous, ask.
 - Every write lands in Undo history under your `--label`; range placements are
-  three labelled steps (`[1/3]`…) — say so when reporting.
+  three labelled steps (`[1/3]`…) — say so when reporting. `set_scale`,
+  `set_fps`, `add_marker` and `remove_items` are one step each.
+- Before writing to a track, `list_items --track Vn` (or an `apply_plan --dry-run`)
+  to see what is already there; overwrite mode replaces whatever is underneath.
+- Media with an audio stream placed with `--atrack 0` lands on A1 — usually the
+  dialogue. Route B-roll audio to a free track, or let `apply_plan` choose.
 - Do not run write operations on production projects without explicit user
   confirmation; prefer test projects or copies.
 - If a command errors with a `[step name]` prefix, report the step verbatim.

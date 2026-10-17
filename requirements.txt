@@ -1,0 +1,12 @@
+# Required: broker, CLI and fake panel
+websockets>=14
+
+# Optional: labelled contact sheets (ppro.py export_frames --sheet)
+# pillow
+
+# Optional: local Whisper transcription (transcribe.py)
+# faster-whisper
+# GPU on Windows: nvidia-cublas-cu12 nvidia-cudnn-cu12
+
+# Optional, not on PyPI: ffprobe (from FFmpeg) on PATH for --fit/--fill scaling
+# and audio-stream detection in apply_plan.

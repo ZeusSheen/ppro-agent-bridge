@@ -2,7 +2,7 @@
 """
 transcript_digest — turn Adobe Transcript JSON into a sentence list.
 
-This is the artifact Claude reads for text-domain editing: every sentence
+This is the artifact an agent reads for text-domain editing: every sentence
 with speaker, start/end in seconds, and average ASR confidence, so cut
 decisions can be made in text and mapped straight back to timecodes.
 

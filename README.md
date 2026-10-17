@@ -5,8 +5,9 @@ Adobe Premiere Pro session for **transcript-driven, closed-loop video editing** 
 built entirely on Premiere's official UXP APIs (GA since 25.6), with fully local
 Whisper transcription.
 
-> **Status: experimental.** Tested on Premiere Pro 26.x / Windows 11.
-> Eleven whitelisted operations, ~1,200 lines total, reviewable in one sitting.
+> **Status: experimental (v0.3.2).** Tested on Premiere Pro 26.x–27.1 / Windows 11.
+> Twenty whitelisted panel operations plus CLI orchestration (edit plans,
+> contact sheets, effect-preserving clip swaps), reviewable in one sitting.
 
 ## Why this exists
 
@@ -73,23 +74,53 @@ Premiere Pro project      every write is a named entry in Undo history
    ```
 
 No Premiere at hand? `python broker/fake_panel.py` stands in for the panel so
-the whole pipeline can be tested headlessly.
+the whole pipeline can be tested headlessly. It keeps an in-memory project and
+timeline, so `apply_plan`, `list_items`, `set_scale` and `remove_items` can be
+exercised end to end. To test without disturbing a live Premiere session, run it
+against a second broker, in three terminals (Windows `cmd` shown; PowerShell:
+`$env:PPRO_BRIDGE_PORT = "8018"`, bash: `export PPRO_BRIDGE_PORT=8018`):
+
+```
+:: terminal 1
+set PPRO_BRIDGE_PORT=8018
+python broker/broker.py
+
+:: terminal 2
+set PPRO_BRIDGE_URL=ws://127.0.0.1:8018
+python broker/fake_panel.py
+
+:: terminal 3
+set PPRO_BRIDGE_URL=ws://127.0.0.1:8018
+python cli/ppro.py ping
+```
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `ping` | Liveness check |
-| `get_project` / `get_sequence` | Active project / sequence info |
+| `ping` | Liveness check + version handshake (`compatible`, supported `actions`) |
+| `get_project` | Active project / sequence name |
+| `get_sequence` | Frame size, fps, duration, every track's name and clip count |
+| `list_items [--track V3]` | Timeline clips as JSON (sequence start/end, source in/out, media path) — no OTIO round-trip |
+| `inspect_items [--track V5]` | Effect chains (params, keyframes, added filters) of timeline clips — what the editor changed |
+| `replace_clip --track V5 --at s --with "item"` | "Replace With Clip" that keeps effect params, filters and edge transitions, verified by read-back |
+| `list_transition_names` | Video transition match names |
+| `list_project_items` | Project panel clips with bin and media path |
 | `list_transcripts` | Every project clip + whether it has a transcript |
 | `transcribe.py <media> --output f.json [--language en] [--model large-v3]` | **Local Whisper** → Adobe-format transcript JSON (no cloud, no key) |
 | `export_transcript --output f.json [--item "name"]` | Export a Premiere-native transcript |
 | `transcript_digest.py f.json [--json] [--min-conf 0.8]` | Transcript → sentence list with timecodes |
 | `import_transcript --item "name" --file f.json` | Attach a transcript JSON to a clip in Premiere |
 | `export_otio --output f.otio` | Timeline structure as OpenTimelineIO (includes source media paths) |
-| `export_frame --dir d [--at sec] [--width 640] [--height 360]` | One frame of the program output |
-| `import_media --path f [...]` | Import media into the project root |
+| `export_frame --dir d [--at sec] [--width W --height H]` | One frame of the program output (default: the sequence's frame size) |
+| `export_frames --dir d --at 4,18.5,31.6 [--sheet]` | Several frames, optionally a labelled contact sheet |
+| `import_media --path f [...] [--bin "Name"]` | Import media into the root or a bin (created if missing); returns the new item names |
 | `insert_clip --item "name" [--at sec] [--vtrack N] [--atrack N] [--mode overwrite\|insert] [--in sec --out sec] [--label "text"]` | Place a clip — or, with `--in/--out`, just that source range ("cut by sentence") |
+| `apply_plan plan.json [--dry-run] [--notes-as-markers] [--report r.json]` | Execute a JSON edit plan: imports, frame-snapped placements, free audio-track routing, conflict check, post-placement verification |
+| `set_scale --track V3 --at sec (--fit \| --fill \| --value %)` | Motion › Scale, fit/fill computed per clip from the media size |
+| `set_fps --item "name" --fps 59.94` | Interpret footage (frame-rate override) |
+| `add_marker --at sec --name "…" [--comment] [--color red]` | Sequence marker |
+| `remove_items --track V3 --from s --to s [--dry-run]` | Remove clips in a range (default: only those entirely inside) |
 
 Everything prints a single JSON object. `insert_clip` with a source range runs
 three labelled transactions (set range → place → clear range), each one step in
@@ -129,6 +160,12 @@ Open your agent in the repo root and it can run the loop autonomously;
 
 - The broker binds **127.0.0.1 only**. No remote access, by design — do not
   port-forward it.
+- The broker refuses WebSocket handshakes from web pages. Browsers let any site
+  open a socket to localhost; such a request carries the site's `http(s)`
+  Origin, which the CLI and the UXP panel do not send, and is rejected with 403.
+- The panel manifest asks for `network: all` because UXP has been reported to
+  reject `localhost`/`127.0.0.1` as listed domains; the code only ever dials the
+  local broker.
 - The panel executes a **fixed whitelist**; there is intentionally no
   eval / run-arbitrary-script command. New capability = a new named handler
   in `plugin/main.js`, reviewable in a diff.
@@ -149,10 +186,38 @@ Open your agent in the repo root and it can run the loop autonomously;
   local Whisper is the primary path.
 - Frame export inherits a known Adobe double-extension quirk; the CLI resolves
   the real filename automatically (`resolvedPath`).
-- Tested on one machine, one Premiere version. Expect edges.
+- Placed media is not auto-scaled: a 4K clip in an HD-wide sequence lands as a
+  2× crop. Use `set_scale --fit/--fill` (or `"scale"` in a plan).
+- Premiere 27.1 rejects `importFiles` without a real target bin; v0.3 passes the
+  root bin (or the named `--bin`).
+- Tested on one machine. Expect edges.
+
+## Changelog
+
+- **0.3.2** — `replace_clip` (CLI, `cli/replace.py`) on new panel actions `set_params`
+  (values/keyframes, re-creates filters by match name), `add_transition`,
+  `list_transition_names`. Proven on a language-version swap of 11 edited clips:
+  before/after effect + transition reports identical. Frame-accurate checks
+  (tolerance < 1 frame) caught and fixed interpretation (60 vs 59.94), end-of-media
+  clamping and transition tick rounding. The broker now refuses connections from
+  web pages (browser `Origin` check); needs `websockets>=14`. Added LICENSE,
+  requirements.txt, .gitignore/.gitattributes.
+- **0.3.1** — `inspect_items`: read-only effect chains (Motion, Opacity, filters,
+  params, keyframes) so an agent can see an editor's changes before touching clips.
+- **0.3.0** — Learned from a real B-roll/graphics job on a vertical 59.94 sequence.
+  `get_sequence` reports frame size, fps, duration and tracks; new `list_items`,
+  `list_project_items`, `export_frames` (contact sheets), `apply_plan` (JSON edit
+  plans with dry-run, frame snapping, audio routing, conflict check, verification),
+  `set_scale`, `set_fps`, `add_marker`, `remove_items`; `import_media --bin` and
+  `newItems`; frame export defaults to the sequence size; version handshake in
+  `ping`; fixed `import_media` on Premiere 27.1; stateful fake panel; port override
+  for headless tests.
+- **0.2** — Local Whisper transcription (`transcribe.py`), sentence digest,
+  `import_transcript`, sentence-level `insert_clip --in/--out`, AGENTS.md for Codex.
 
 ## Roadmap
 
+- Range placement as one undo step (subclip-based, Premiere 26.3+)
 - Unique-ID clip addressing; clip type/word-count in `list_transcripts`
 - Sequence-level transcripts and SRT/caption export for finished cuts
 - Speaker diarization option in the Whisper path
@@ -166,4 +231,4 @@ This project is not affiliated with or endorsed by Adobe, OpenAI, or Anthropic.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

@@ -16,16 +16,22 @@ and receive the panel's {"id": ..., "ok": ..., "data"/"error": ...}.
 
 Security:
   - Binds 127.0.0.1 ONLY. Do not change this to 0.0.0.0.
+  - Refuses handshakes from web pages: browsers let any site open a WebSocket
+    to localhost and send an http(s) Origin, which the CLI and panel do not
+    (the CLI sends none; the UXP panel sends "file://" on Premiere 27.1).
   - The broker forwards blindly; the whitelist lives in the panel.
 
-Requires: Python 3.10+, `pip install websockets`
+Requires: Python 3.10+, `pip install "websockets>=14"`
 """
 
 import asyncio
+import http
 import json
 import logging
 import signal
+import os
 import sys
+from urllib.parse import urlsplit
 
 try:
     import websockets
@@ -34,7 +40,7 @@ except ImportError:
     sys.exit(1)
 
 HOST = "127.0.0.1"   # localhost only — this is a security boundary
-PORT = 8017
+PORT = int(os.environ.get("PPRO_BRIDGE_PORT", "8017"))  # override only for headless tests
 PANEL_TIMEOUT = 30   # seconds a controller waits for the panel to answer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -42,6 +48,27 @@ log = logging.getLogger("broker")
 
 panel_ws = None                 # the single connected Premiere panel
 pending: dict[str, asyncio.Future] = {}   # msg id -> future awaiting reply
+LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+
+
+def is_web_origin(origin: str | None) -> bool:
+    """True for an http(s) Origin from a non-local host, i.e. a web page in a browser."""
+    if not origin:
+        return False
+    try:
+        parts = urlsplit(origin)
+    except ValueError:
+        return True
+    return parts.scheme in ("http", "https") and (parts.hostname or "") not in LOOPBACK
+
+
+def check_origin(connection, request):
+    """Handshake hook: refuse web pages before they get a socket."""
+    origin = request.headers.get("Origin")
+    if is_web_origin(origin):
+        log.warning("Refused a connection from web origin %s", origin)
+        return connection.respond(http.HTTPStatus.FORBIDDEN, "Web pages may not connect to the bridge.\n")
+    return None
 
 
 async def handle_panel(ws):
@@ -54,7 +81,7 @@ async def handle_panel(ws):
         except Exception:
             pass
     panel_ws = ws
-    log.info("Panel registered.")
+    log.info("Panel registered (origin: %s).", ws.request.headers.get("Origin") or "none")
     try:
         async for raw in ws:
             try:
@@ -95,7 +122,7 @@ async def handle_controller(ws):
         if panel_ws is None:
             await ws.send(json.dumps({
                 "id": msg_id, "ok": False,
-                "error": "No Premiere panel connected. Is Premiere open with the Claude Bridge panel loaded?",
+                "error": "No Premiere panel connected. Is Premiere open with the Agent Bridge panel loaded?",
             }))
             continue
 
@@ -143,7 +170,7 @@ async def route(ws):
 async def main():
     log.info("ppro-agent-bridge broker listening on ws://%s:%d", HOST, PORT)
     log.info("Waiting for the Premiere panel to connect...")
-    async with websockets.serve(route, HOST, PORT, max_size=16 * 1024 * 1024):
+    async with websockets.serve(route, HOST, PORT, max_size=16 * 1024 * 1024, process_request=check_origin):
         stop = asyncio.get_running_loop().create_future()
         try:
             asyncio.get_running_loop().add_signal_handler(signal.SIGINT, lambda: stop.set_result(None))

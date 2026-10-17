@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local agent settings (may hold machine paths or permissions)
+.claude/settings.local.json
+.claude/projects/
+
+# Working output: frames, transcripts, subtitles, timelines, plans, reports, media.
+# These carry your projects' content and paths; `git add -f` a file you do mean to publish.
+frames/
+*.otio
+*.prproj
+*.mp4
+*.mov
+*.mxf
+*.wav
+*.mp3
+*.m4a
+*.png
+*.jpg
+*.srt
+*.vtt
+tr*.json
+*transcript*.json
+plan*.json
+report*.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
