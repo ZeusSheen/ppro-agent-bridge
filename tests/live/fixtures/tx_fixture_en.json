@@ -1,0 +1,19 @@
+{
+  "language": "en-us",
+  "segments": [
+    {
+      "start": 0.5,
+      "duration": 1.3,
+      "language": "en-us",
+      "speaker": "6f1d2c3b-8a4e-4b7f-9e2d-1c5a7b9d3e08",
+      "words": [
+        {"text": "Bridge", "start": 0.5, "duration": 0.4, "eos": false, "confidence": 0.97, "tags": [], "type": "word"},
+        {"text": "smoke", "start": 0.95, "duration": 0.35, "eos": false, "confidence": 0.95, "tags": [], "type": "word"},
+        {"text": "test", "start": 1.35, "duration": 0.45, "eos": true, "confidence": 0.96, "tags": [], "type": "word"}
+      ]
+    }
+  ],
+  "speakers": [
+    {"id": "6f1d2c3b-8a4e-4b7f-9e2d-1c5a7b9d3e08", "name": "Speaker 1"}
+  ]
+}

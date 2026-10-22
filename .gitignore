@@ -32,3 +32,11 @@ report*.json
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Local research output (not part of the release)
+research_notes/
+reports/
+
+# Repo data that the patterns above would otherwise hide
+!tests/**/*.json
+!ppro_bridge/*.json

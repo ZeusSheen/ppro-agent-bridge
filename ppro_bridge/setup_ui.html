@@ -1,0 +1,1864 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Premiere Agent Bridge Setup</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2320232b'/%3E%3Cg transform='translate(4 3)' fill='none' stroke='%238B7CFF' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 17h20'/%3E%3Cpath d='M4 17c1.5-5 4.5-8 8-8s6.5 3 8 8'/%3E%3Cpath d='M8 17v-6.3M12 17V9M16 17v-6.3'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+:root {
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, "Microsoft YaHei UI", sans-serif;
+  --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+
+  /* Dark is the default theme; [data-theme="light"] below is the alternative. */
+  --page: #16181e;
+  --plate: rgba(28, 31, 39, 0.55);
+  --plate-solid: #1c1f27;
+  --plate-shadow: rgba(0, 0, 0, 0.5);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --el: rgba(32, 35, 43, 0.95);
+  --el-solid: #20232b;
+  --well: rgba(25, 27, 34, 0.92);
+  --sh-d: rgba(0, 0, 0, 0.55);
+  --sh-l: rgba(255, 255, 255, 0.05);
+  --hairline: rgba(255, 255, 255, 0.06);
+  --text: #f5f6f8;
+  --muted: #a7adba;
+  --accent: #8b7cff;
+  --accent-btn: #6d5ef0;
+  --accent-hover: #6352e6;
+  --on-accent: #ffffff;
+  --accent-text: #9b8eff;
+  --accent-well: rgba(139, 124, 255, 0.2);
+  --accent-sh-d: rgba(0, 0, 0, 0.55);
+  --focus: #9b8eff;
+  --ok: #4ade80;
+  --bad: #f87171;
+  --opt: #fbbf24;
+  --blob-1: #3b3672;
+  --blob-2: #1c4d4f;
+  --blob-3: #4e2d4a;
+  --blob-4: #253559;
+  --blob-o: 0.55;
+
+  --raise: 9px 9px 20px var(--sh-d), -9px -9px 20px var(--sh-l);
+  --raise-sm: 5px 5px 12px var(--sh-d), -5px -5px 12px var(--sh-l);
+  --raise-xs: 3px 3px 7px var(--sh-d), -3px -3px 7px var(--sh-l);
+  --inset: inset 5px 5px 11px var(--sh-d), inset -5px -5px 11px var(--sh-l);
+  --inset-sm: inset 3px 3px 7px var(--sh-d), inset -3px -3px 7px var(--sh-l);
+  --raise-accent: 5px 5px 12px var(--accent-sh-d), -5px -5px 12px var(--sh-l);
+  --inset-accent: inset 3px 3px 8px rgba(18, 10, 60, 0.42), inset -3px -3px 8px rgba(255, 255, 255, 0.16);
+}
+:root { color-scheme: dark; }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page: #dde1eb;
+  --plate: rgba(234, 237, 245, 0.64);
+  --plate-solid: #e9ecf3;
+  --plate-shadow: rgba(70, 76, 110, 0.22);
+  --glass-border: rgba(255, 255, 255, 0.6);
+  --el: rgba(237, 240, 247, 0.92);
+  --el-solid: #eef0f7;
+  --well: rgba(225, 229, 239, 0.88);
+  --sh-d: rgba(136, 145, 178, 0.42);
+  --sh-l: rgba(255, 255, 255, 0.92);
+  --hairline: rgba(40, 46, 80, 0.08);
+  --text: #1c2030;
+  --muted: #4b5264;
+  --accent: #5f51c6;
+  --accent-btn: #5f51c6;
+  --accent-hover: #5648bb;
+  --on-accent: #ffffff;
+  --accent-text: #4a3eae;
+  --accent-well: rgba(95, 81, 198, 0.16);
+  --accent-sh-d: rgba(60, 45, 150, 0.35);
+  --focus: #4a3eae;
+  --ok: #17663f;
+  --bad: #a3302a;
+  --opt: #7a5200;
+  --blob-1: #a79ae0;
+  --blob-2: #7cc2ba;
+  --blob-3: #f2bba3;
+  --blob-4: #9db3e3;
+  --blob-o: 0.7;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { height: 100%; background: var(--page); }
+body {
+  margin: 0; min-height: 100%;
+  display: flow-root; /* keeps .app's margin inside body: no 16px page scroll */
+  font-family: var(--font); font-size: 15px; line-height: 1.5;
+  color: var(--text); background: var(--page);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+button { font: inherit; color: inherit; }
+h1, h2, h3, p { margin: 0; }
+b, strong { font-weight: 650; }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* ---------- background: soft colour blobs behind frosted glass ---------- */
+.backdrop { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.blob {
+  position: absolute; width: 58vmax; height: 58vmax; border-radius: 50%;
+  opacity: var(--blob-o); filter: blur(80px); will-change: transform;
+}
+.blob-1 { background: var(--blob-1); top: -22vmax; left: -14vmax; animation: drift-a 64s ease-in-out infinite alternate; }
+.blob-2 { background: var(--blob-2); bottom: -28vmax; left: 16vw; animation: drift-b 78s ease-in-out infinite alternate; }
+.blob-3 { background: var(--blob-3); top: -12vmax; right: -20vmax; width: 50vmax; height: 50vmax; animation: drift-c 70s ease-in-out infinite alternate; }
+.blob-4 { background: var(--blob-4); bottom: -18vmax; right: -12vmax; width: 44vmax; height: 44vmax; animation: drift-a 90s ease-in-out infinite alternate-reverse; }
+@keyframes drift-a { to { transform: translate3d(6vmax, 5vmax, 0); } }
+@keyframes drift-b { to { transform: translate3d(-7vmax, -4vmax, 0); } }
+@keyframes drift-c { to { transform: translate3d(-5vmax, 6vmax, 0); } }
+
+/* ---------- the glass plate ---------- */
+.app {
+  position: relative; z-index: 1;
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(1088px, calc(100% - 32px));
+  height: calc(100vh - 32px);
+  margin: 16px auto;
+  border-radius: 28px;
+  background: var(--plate);
+  border: 1px solid var(--glass-border);
+  -webkit-backdrop-filter: blur(28px) saturate(150%);
+  backdrop-filter: blur(28px) saturate(150%);
+  box-shadow: 0 30px 70px -30px var(--plate-shadow);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .app { background: var(--plate-solid); }
+}
+
+/* ---------- top bar ---------- */
+.topbar { display: flex; align-items: center; flex-wrap: wrap; gap: 14px 18px; padding: 18px 24px 12px; }
+.brand { display: flex; align-items: center; gap: 14px; flex: 1 1 auto; min-width: 0; }
+.mark {
+  flex: none; width: 42px; height: 42px; border-radius: 14px;
+  display: grid; place-items: center;
+  background: var(--el); box-shadow: var(--raise-sm); color: var(--accent-text);
+}
+.mark svg { width: 24px; height: 24px; display: block; }
+.brand-text { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.brand-name { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; line-height: 1.3; }
+.brand-sub { font-size: 15px; font-weight: 500; color: var(--muted); }
+.tag {
+  display: inline-flex; align-items: center; height: 24px; padding: 0 10px;
+  border-radius: 999px; background: var(--well); box-shadow: var(--inset-sm);
+  font-size: 12px; font-weight: 600; color: var(--muted);
+}
+.tag.mono { font-family: var(--mono); font-weight: 500; }
+.tag-demo { color: var(--opt); }
+.top-actions { display: flex; align-items: center; gap: 14px; }
+.seg { display: inline-flex; gap: 8px; }
+.seg button {
+  min-width: 52px; height: 36px; padding: 0 12px;
+  border: 0; border-radius: 12px; cursor: pointer;
+  background: var(--el); box-shadow: var(--raise-xs);
+  font-size: 13px; font-weight: 600; color: var(--muted);
+  transition: transform 160ms var(--ease);
+}
+.seg button[aria-pressed="true"] { background: var(--well); box-shadow: var(--inset-sm); color: var(--accent-text); }
+.icon-btn {
+  width: 42px; height: 42px; display: grid; place-items: center;
+  border: 0; border-radius: 14px; cursor: pointer;
+  background: var(--el); box-shadow: var(--raise-sm); color: var(--text);
+  font-size: 20px;
+  transition: transform 160ms var(--ease);
+}
+
+/* ---------- icons ---------- */
+.ic { display: inline-flex; flex: none; width: 1em; height: 1em; line-height: 0; }
+.ic svg { width: 100%; height: 100%; display: block; overflow: visible; }
+
+/* ---------- layout ---------- */
+.layout { display: grid; grid-template-columns: 288px minmax(0, 1fr); gap: 16px; padding: 4px 18px 0; min-height: 0; }
+.rail { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+
+.overall {
+  margin: 8px 8px 10px; padding: 14px 16px 16px;
+  border-radius: 20px; background: var(--el); box-shadow: var(--raise-sm);
+}
+.overall-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 2px 10px; }
+.overall-title { font-size: 15px; font-weight: 650; }
+.overall-sub { font-size: 12.5px; color: var(--muted); }
+.track {
+  position: relative; height: 10px; margin-top: 12px;
+  border-radius: 999px; background: var(--well); box-shadow: var(--inset-sm); overflow: hidden;
+}
+.fill {
+  position: absolute; inset: 2px; border-radius: 999px; background: var(--accent);
+  transform: translateX(calc(-100% - 4px));
+  transition: transform 240ms var(--ease);
+}
+.overall-count { margin-top: 9px; font-size: 13px; color: var(--muted); }
+
+.steps {
+  position: relative; list-style: none; margin: 0; padding: 8px 8px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  overflow-y: auto; min-height: 0;
+}
+.rail-item {
+  position: relative;
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 9px 12px 9px 10px;
+  border: 0; border-radius: 16px; cursor: pointer; text-align: left;
+  background: var(--el); box-shadow: var(--raise-xs);
+  transition: transform 160ms var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+.rail-item[aria-current="step"] { background: var(--well); box-shadow: var(--inset-sm); }
+.rail-icon {
+  flex: none; width: 36px; height: 36px; display: grid; place-items: center;
+  border-radius: 50%; background: var(--el); box-shadow: var(--raise-xs);
+  color: var(--accent-text); font-size: 19px;
+}
+.rail-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.rail-title { font-size: 14px; font-weight: 600; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-title .short { display: none; }
+.rail-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500; line-height: 1.35; }
+.rail-sicon { display: inline-flex; font-size: 14px; }
+
+/* ---------- detail card ---------- */
+.detail { min-height: 0; min-width: 0; display: flex; flex-direction: column; padding: 8px 8px 0; }
+.card {
+  position: relative; flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+  border-radius: 24px; background: var(--el); box-shadow: var(--raise);
+}
+.card-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 26px 28px 22px; }
+.card-nav {
+  flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+  padding: 14px 22px 18px; border-top: 1px solid var(--hairline);
+}
+.card-nav .spacer { flex: 1 1 auto; }
+.card-head { display: flex; align-items: flex-start; gap: 16px; }
+.head-main { display: flex; align-items: flex-start; gap: 18px; flex: 1 1 auto; min-width: 0; }
+.head-pill { flex: none; }
+.hero {
+  flex: none; width: 64px; height: 64px; display: grid; place-items: center;
+  border-radius: 50%; background: var(--el); box-shadow: var(--raise-sm);
+  color: var(--accent-text); font-size: 30px;
+}
+.head-text { min-width: 0; padding-top: 2px; }
+.eyebrow { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.card-head h2 { margin-top: 2px; font-size: 22px; line-height: 1.25; font-weight: 650; letter-spacing: -0.012em; border-radius: 6px; }
+.why { margin-top: 6px; max-width: 60ch; color: var(--muted); }
+.pill {
+  display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 14px 0 11px;
+  border-radius: 999px; background: var(--well); box-shadow: var(--inset-sm);
+  font-size: 13px; font-weight: 600; white-space: nowrap;
+}
+.pill .ic { font-size: 17px; }
+.center-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; min-height: 280px; text-align: center; color: var(--muted);
+}
+.big-spin { font-size: 36px; color: var(--accent-text); }
+
+.section { margin-top: 22px; }
+.label { margin-bottom: 10px; font-size: 12.5px; font-weight: 650; letter-spacing: 0.01em; color: var(--muted); }
+.well { padding: 12px 16px; border-radius: 14px; background: var(--well); box-shadow: var(--inset); }
+.mono { font-family: var(--mono); }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 18px; align-items: baseline; }
+.kv .k { font-size: 13px; color: var(--muted); }
+.kv .v { font-family: var(--mono); font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+
+.howto { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.howto > li { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 14px; align-items: start; }
+.num {
+  width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%;
+  background: var(--el); box-shadow: var(--raise-xs);
+  font-size: 13px; font-weight: 650; color: var(--accent-text);
+}
+.howto-text { min-width: 0; padding-top: 4px; }
+.inline-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0 4px; }
+.sub { margin-top: 10px; font-size: 13.5px; color: var(--muted); }
+.cmd { display: flex; align-items: center; gap: 10px; margin-top: 8px; max-width: 580px; }
+.cmd-text {
+  flex: 1 1 auto; min-width: 0; display: block; padding: 9px 14px;
+  border-radius: 12px; background: var(--well); box-shadow: var(--inset-sm);
+  font-family: var(--mono); font-size: 13px; color: var(--text);
+  white-space: nowrap; overflow-x: auto;
+}
+.actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+
+.note, .banner {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 14px 16px; border-radius: 16px;
+  background: var(--well); box-shadow: var(--inset-sm);
+  color: var(--accent-text);
+}
+.note { margin-top: 18px; }
+.banner { margin-bottom: 20px; }
+.center-state .banner { margin: 0; max-width: 560px; text-align: left; }
+.note > .ic, .banner > .ic { font-size: 20px; margin-top: 1px; }
+.note-text { flex: 1 1 auto; min-width: 0; color: var(--text); }
+.note > .btn, .banner > .btn { flex: none; align-self: center; }
+.done-line { display: flex; align-items: center; gap: 10px; margin-top: 20px; color: var(--muted); }
+.done-line .ic { font-size: 20px; }
+
+.result {
+  display: flex; align-items: flex-start; gap: 12px; margin-top: 20px;
+  padding: 12px 16px; border-radius: 14px; background: var(--well); box-shadow: var(--inset-sm);
+}
+.result > .ic { font-size: 20px; margin-top: 1px; }
+.result-text { min-width: 0; color: var(--text); overflow-wrap: anywhere; }
+.result-sub { display: block; margin-top: 3px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+.elapsed { margin-left: 6px; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+
+.log { margin-top: 12px; }
+.log > summary { list-style: none; }
+.log > summary::-webkit-details-marker { display: none; }
+.log:not([open]) .when-open, .log[open] .when-closed { display: none; }
+.log-body { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin-top: 12px; }
+.log pre {
+  margin: 0; width: 100%; max-height: 240px; overflow: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.55;
+}
+
+.allset {
+  display: flex; align-items: center; gap: 18px; margin-top: 22px;
+  padding: 18px 20px; border-radius: 20px; background: var(--well); box-shadow: var(--inset);
+}
+.allset-ic { font-size: 44px; }
+.allset-title { margin-bottom: 4px; font-size: 18px; font-weight: 650; }
+
+/* ---------- rows (extras, options) ---------- */
+.rows { display: flex; flex-direction: column; gap: 14px; }
+.section .rows, .rows:first-child { margin-top: 0; }
+[data-region="main"] > .rows { margin-top: 22px; }
+.row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px 16px;
+  padding: 14px 16px; border-radius: 18px; background: var(--el); box-shadow: var(--raise-sm);
+}
+.row-icon {
+  width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%;
+  background: var(--well); box-shadow: var(--inset-sm); color: var(--accent-text); font-size: 20px;
+}
+.row-text { min-width: 0; }
+.row-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; font-weight: 650; }
+.row-state { font-size: 12.5px; font-weight: 600; }
+.row-sub { font-size: 13.5px; color: var(--muted); }
+.row-sub + .cmd { margin-top: 6px; }
+.cmd-intro { margin-top: 10px; }
+.row-detail { margin-top: 6px; font-family: var(--mono); font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+
+.switch {
+  flex: none; display: inline-flex; align-items: center; gap: 10px; padding: 4px;
+  border: 0; border-radius: 999px; background: transparent; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.switch-track { position: relative; width: 54px; height: 30px; border-radius: 999px; background: var(--well); box-shadow: var(--inset-sm); }
+.switch-knob {
+  position: absolute; top: 4px; left: 4px; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--el-solid); box-shadow: var(--raise-xs);
+  transition: transform 200ms var(--ease);
+}
+.switch[aria-checked="true"] .switch-track { background: var(--accent-well); }
+.switch[aria-checked="true"] .switch-knob { transform: translateX(24px); background: var(--accent); }
+.switch-word { display: inline-flex; align-items: center; min-width: 2.6em; font-size: 13px; font-weight: 600; color: var(--muted); }
+.switch-word .ic { font-size: 16px; color: var(--accent-text); }
+.switch[aria-checked="true"] .switch-word { color: var(--accent-text); }
+.switch[aria-disabled="true"] { cursor: default; }
+.switch[aria-disabled="true"] .switch-track { opacity: 0.75; }
+
+/* ---------- buttons ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 40px; padding: 9px 16px;
+  border: 0; border-radius: 14px; cursor: pointer;
+  background: var(--el); box-shadow: var(--raise-sm); color: var(--text);
+  font-size: 14px; font-weight: 600; line-height: 1.2; text-decoration: none;
+  user-select: none; -webkit-tap-highlight-color: transparent;
+  transition: transform 160ms var(--ease);
+}
+.btn .ic { font-size: 18px; }
+.btn.primary { background: var(--accent-btn); color: var(--on-accent); box-shadow: var(--raise-accent); }
+.btn.small { min-height: 34px; padding: 6px 12px; border-radius: 12px; font-size: 13px; }
+.btn.small .ic { font-size: 16px; }
+.btn.ghost { background: transparent; box-shadow: none; color: var(--muted); }
+.btn[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+
+/* ---------- footer, toast ---------- */
+.foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 12px 26px 16px; font-size: 12px; color: var(--muted); }
+.credit { flex: 1 1 260px; min-width: 0; }
+.toast {
+  position: fixed; left: 50%; bottom: 22px; z-index: 10;
+  display: flex; align-items: center; gap: 10px; max-width: calc(100% - 32px);
+  padding: 11px 16px; border-radius: 14px;
+  background: var(--el-solid); box-shadow: var(--raise-sm);
+  font-size: 14px; pointer-events: none;
+  opacity: 0; transform: translate(-50%, 8px);
+  transition: opacity 200ms var(--ease), transform 200ms var(--ease);
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast .ic { font-size: 18px; }
+.toast > span:last-child { color: var(--text); }
+
+.card-body, .steps, .log pre, .cmd-text {
+  scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
+}
+
+/* ---------- status colours (after components so they win) ---------- */
+.st-ok { color: var(--ok); }
+.st-missing { color: var(--bad); }
+.st-optional, .st-xmiss { color: var(--opt); }
+.st-checking, .st-running { color: var(--accent-text); }
+.st-unknown, .st-waiting, .st-todo { color: var(--muted); }
+
+/* ---------- motion ---------- */
+@keyframes enter { from { opacity: 0; transform: translateY(6px); filter: blur(2px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+.enter { animation: enter 200ms var(--ease) both; }
+.intro .overall, .intro .rail-item { animation: rise-in 220ms var(--ease) both; animation-delay: calc(var(--i, 0) * 40ms); }
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .btn:hover:not([aria-disabled="true"]), .icon-btn:hover, .seg button:hover:not([aria-pressed="true"]),
+  .rail-item:hover:not([aria-current="step"]) { transform: translateY(-1px); }
+}
+@media (hover: hover) and (pointer: fine) {
+  .btn.primary:hover:not([aria-disabled="true"]) { background: var(--accent-hover); }
+  .btn.ghost:hover:not([aria-disabled="true"]) { color: var(--text); }
+}
+.btn:active:not([aria-disabled="true"]), .icon-btn:active, .seg button:active, .rail-item:active {
+  transform: scale(0.97); box-shadow: var(--inset-sm);
+}
+.btn.primary:active:not([aria-disabled="true"]) { box-shadow: var(--inset-accent); }
+.switch:active:not([aria-disabled="true"]) .switch-knob { transform: scale(0.92); }
+.switch[aria-checked="true"]:active:not([aria-disabled="true"]) .switch-knob { transform: translateX(24px) scale(0.92); }
+
+@media (prefers-reduced-motion: reduce) {
+  .blob { animation: none; }
+  .enter { animation-name: fade-in; }
+  .intro .overall, .intro .rail-item { animation-name: fade-in; }
+  .btn, .icon-btn, .seg button, .rail-item, .switch-knob, .fill { transition: none; }
+  .btn:active:not([aria-disabled="true"]), .icon-btn:active, .seg button:active, .rail-item:active { transform: none; }
+  .switch:active:not([aria-disabled="true"]) .switch-knob { transform: none; }
+  .switch[aria-checked="true"]:active:not([aria-disabled="true"]) .switch-knob { transform: translateX(24px); }
+  .toast, .toast.show { transform: translate(-50%, 0); transition: opacity 200ms var(--ease); }
+}
+
+/* ---------- small windows ---------- */
+@media (min-width: 761px) and (max-height: 600px) {
+  .app { height: auto; min-height: calc(100vh - 32px); }
+  .card-body, .steps { overflow: visible; }
+}
+@media (max-width: 760px) {
+  .app { width: calc(100% - 20px); height: auto; min-height: calc(100vh - 20px); margin: 10px auto; border-radius: 22px; grid-template-rows: auto auto auto; }
+  .topbar { padding: 14px 16px 8px; }
+  .layout { grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 0 10px; }
+  .overall { margin: 6px 6px 4px; padding: 12px 14px 14px; }
+  .steps { flex-direction: row; overflow-x: auto; overflow-y: hidden; gap: 10px; padding: 8px 8px 14px; scroll-snap-type: x proximity; overscroll-behavior-x: contain; }
+  .steps > li { flex: none; scroll-snap-align: start; }
+  .rail-item { width: auto; gap: 8px; padding: 8px 14px 8px 12px; border-radius: 999px; }
+  .rail-icon { display: none; }
+  .rail-text { flex-direction: row-reverse; align-items: center; gap: 7px; }
+  .rail-title .full { display: none; }
+  .rail-title .short { display: inline; }
+  .rail-status { gap: 0; }
+  .rail-sicon { font-size: 16px; }
+  .rail-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+  .detail { padding: 6px 6px 0; }
+  .card { flex: none; }
+  .card-body { overflow: visible; padding: 20px 18px 16px; }
+  .card-nav { padding: 12px 16px 16px; }
+  .card-head { flex-wrap: wrap; }
+  .head-pill { flex-basis: 100%; }
+  .hero { width: 52px; height: 52px; font-size: 25px; }
+  .card-head h2 { font-size: 20px; }
+  .kv { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .kv .v { margin-bottom: 6px; }
+  .row { grid-template-columns: auto minmax(0, 1fr); }
+  .row-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .foot { padding: 10px 18px 14px; }
+}
+</style>
+</head>
+<body>
+<noscript><p style="padding:24px">This setup page needs JavaScript.</p></noscript>
+<div class="backdrop" aria-hidden="true">
+  <span class="blob blob-1"></span><span class="blob blob-2"></span><span class="blob blob-3"></span><span class="blob blob-4"></span>
+</div>
+
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 17h20"/><path d="M4 17c1.5-5 4.5-8 8-8s6.5 3 8 8"/><path d="M8 17v-6.3M12 17V9M16 17v-6.3"/></svg></span>
+      <div class="brand-text">
+        <h1 class="brand-name" data-t="product">Premiere Agent Bridge</h1>
+        <span class="brand-sub" data-t="setup">Setup</span>
+        <span class="tag mono" id="version" hidden></span>
+        <span class="tag tag-demo" id="demoBadge" data-t="demo" hidden>Demo: made-up data, not this PC</span>
+      </div>
+    </div>
+    <div class="top-actions">
+      <div class="seg" role="group" data-t-label="langLabel" aria-label="Language">
+        <button type="button" data-lang="en" aria-pressed="true" lang="en">EN</button>
+        <button type="button" data-lang="zh" aria-pressed="false" lang="zh-CN">中文</button>
+      </div>
+      <button type="button" class="icon-btn" id="themeBtn" aria-label="Switch to dark theme"></button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" id="rail" data-t-label="stepsNav" aria-label="Setup steps">
+      <div class="overall" style="--i:0">
+        <div class="overall-head">
+          <span class="overall-title" data-t="railTitle">Get set up</span>
+          <span class="overall-sub" data-t="railSub">One step at a time</span>
+        </div>
+        <div class="track" id="progress" role="progressbar" aria-valuemin="0" aria-valuemax="6" aria-valuenow="0" data-t-label="progressLabel" aria-label="Setup progress"><span class="fill" id="fill"></span></div>
+        <div class="overall-count" id="overallCount" aria-hidden="true"></div>
+      </div>
+      <ol class="steps" id="steps"></ol>
+    </nav>
+    <main class="detail" id="detail"></main>
+  </div>
+
+  <footer class="foot">
+    <span class="credit" data-t="credit">Icons: Material Line Icons (Vjacheslav Trushkin) and SVG Spinners (Utkarsh Verma), MIT</span>
+    <button type="button" class="btn small ghost" id="folderBtn" data-action="open-folder" hidden><span class="ic" data-ic="folder" aria-hidden="true"></span><span data-t="openFolder">Open the bridge folder</span></button>
+  </footer>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="sr-only" id="sr" aria-live="polite"></div>
+
+<!-- ICONS: animated SVG icons inlined verbatim from two MIT-licensed sets:
+     "Material Line Icons" (line-md) by Vjacheslav Trushkin, and "SVG Spinners" by Utkarsh Verma.
+     Both are MIT licensed; the full licence texts are in THIRD_PARTY_NOTICES.md. -->
+<script>
+/* Material Line Icons (Vjacheslav Trushkin, MIT) and SVG Spinners (Utkarsh Verma, MIT).
+   Full licence texts: THIRD_PARTY_NOTICES.md */
+const ICONS = {
+  'document-code': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path stroke-dasharray="64" stroke-width="2" d="M13 3l6 6v12h-14v-18h8"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="64;0"/></path><path stroke-dasharray="14" stroke-dashoffset="14" d="M12.5 3v5.5h6.5"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path><g stroke-dasharray="8" stroke-dashoffset="8" stroke-width="2"><path d="M10 13l-2 2l2 2"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.9s" dur="0.2s" to="0"/></path><path d="M14 13l2 2l-2 2"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1.1s" dur="0.2s" to="0"/></path></g></g></svg>',
+  'cloud-alt-download': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="60" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 19h11c2.21 0 4 -1.79 4 -4c0 -2.21 -1.79 -4 -4 -4h-1v-1c0 -2.76 -2.24 -5 -5 -5c-2.42 0 -4.44 1.72 -4.9 4h-0.1c-2.76 0 -5 2.24 -5 5c0 2.76 2.24 5 5 5Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="60;0"/></path><path fill="currentColor" d="M10.5 10h3v0h2.5l-4 0l-4 0h2.5Z"><animate fill="freeze" attributeName="d" begin="0.6s" dur="0.4s" keyTimes="0;0.4;1" values="M10.5 10h3v0h2.5l-4 0l-4 0h2.5Z;M10.5 10h3v0h2.5l-4 4l-4 -4h2.5Z;M10.5 10h3v3h2.5l-4 4l-4 -4h2.5Z"/></path></svg>',
+  'monitor': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="70" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 17h-10v-14h20v14Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="70;0"/></path><path fill="currentColor" d="M10 16h4v0h-4Z"><animate fill="freeze" attributeName="d" begin="0.6s" dur="0.2s" to="M10 16h4v6h-4Z"/></path><path fill="none" stroke="currentColor" stroke-dasharray="6" stroke-dashoffset="6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 21h3M12 21h-3"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.8s" dur="0.4s" to="0"/></path></svg>',
+  'cloud-alt-braces': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><defs><mask id="SVGdX8jVbrp"><path fill="#fff" fill-opacity="0" stroke="#fff" stroke-dasharray="60" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 19h11c2.21 0 4 -1.79 4 -4c0 -2.21 -1.79 -4 -4 -4h-1v-1c0 -2.76 -2.24 -5 -5 -5c-2.42 0 -4.44 1.72 -4.9 4h-0.1c-2.76 0 -5 2.24 -5 5c0 2.76 2.24 5 5 5Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="60;0"/><animate fill="freeze" attributeName="fill-opacity" begin="0.6s" dur="0.4s" to="1"/></path><path d="M7 13c1.1 0 2 -0.9 2 -2v-1h1.5v-2h-1.5c-1.1 0 -2 0.9 -2 2v1c0 0.55 -0.45 1 -1 1h-0.5v2h0.5c0.55 0 1 0.45 1 1v1c0 1.1 0.9 2 2 2h1.5v-2h-1.5v-1c0 -1.1 -0.9 -2 -2 -2ZM17 13c-1.1 0 -2 -0.9 -2 -2v-1h-1.5v-2h1.5c1.1 0 2 0.9 2 2v1c0 0.55 0.45 1 1 1h0.5v2h-0.5c-0.55 0 -1 0.45 -1 1v1c0 1.1 -0.9 2 -2 2h-1.5v-2h1.5v-1c0 -1.1 0.9 -2 2 -2Z" transform="scale(0 1)" transform-origin="12px 12px"><animateTransform fill="freeze" attributeName="transform" begin="1.1s" dur="0.2s" type="scale" values="0 1;1 1"/></path></mask></defs><path fill="currentColor" d="M0 0h24v24H0z" mask="url(#SVGdX8jVbrp)"/></svg>',
+  'cog': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="22" d="M12 9c1.66 0 3 1.34 3 3c0 1.66 -1.34 3 -3 3c-1.66 0 -3 -1.34 -3 -3c0 -1.66 1.34 -3 3 -3Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.3s" values="22;0"/></path><path stroke-dasharray="44" stroke-dashoffset="44" d="M12 5.5c3.59 0 6.5 2.91 6.5 6.5c0 3.59 -2.91 6.5 -6.5 6.5c-3.59 0 -6.5 -2.91 -6.5 -6.5c0 -3.59 2.91 -6.5 6.5 -6.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.3s" dur="0.5s" to="0"/><set fill="freeze" attributeName="opacity" begin="0.8s" to="0"/></path><path d="M15.24 6.37c0.41 0.23 0.8 0.51 1.14 0.83c0 0 2.62 -1.08 2.63 -1.06c0 0 1.56 2.7 1.56 2.7c0.01 0.03 -2.22 1.75 -2.22 1.75c0.1 0.45 0.15 0.93 0.15 1.41" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.8s" to="1"/><animate fill="freeze" attributeName="d" begin="0.8s" dur="0.2s" values="M15.24 6.37c0.41 0.23 0.8 0.51 1.14 0.83c0.22 0.2 0.42 0.41 0.61 0.63c0.47 0.57 0.86 1.22 1.12 1.94c0.09 0.26 0.17 0.54 0.24 0.82c0.1 0.45 0.15 0.93 0.15 1.41;M15.24 6.37c0.41 0.23 0.8 0.51 1.14 0.83c0 0 2.62 -1.08 2.63 -1.06c0 0 1.56 2.7 1.56 2.7c0.01 0.03 -2.22 1.75 -2.22 1.75c0.1 0.45 0.15 0.93 0.15 1.41"/></path><path d="M18.5 11.99c0.01 0.47 -0.04 0.95 -0.15 1.4c0 0 2.25 1.73 2.23 1.75c0 0 -1.56 2.7 -1.56 2.7c-0.02 0.02 -2.63 -1.05 -2.63 -1.05c-0.34 0.31 -0.73 0.59 -1.15 0.83" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.8s" to="1"/><animate fill="freeze" attributeName="d" begin="0.8s" dur="0.2s" values="M18.5 11.99c0.01 0.47 -0.04 0.95 -0.15 1.4c-0.06 0.29 -0.15 0.57 -0.24 0.84c-0.26 0.69 -0.63 1.35 -1.12 1.94c-0.18 0.21 -0.38 0.42 -0.59 0.62c-0.34 0.31 -0.73 0.59 -1.15 0.83;M18.5 11.99c0.01 0.47 -0.04 0.95 -0.15 1.4c0 0 2.25 1.73 2.23 1.75c0 0 -1.56 2.7 -1.56 2.7c-0.02 0.02 -2.63 -1.05 -2.63 -1.05c-0.34 0.31 -0.73 0.59 -1.15 0.83"/></path><path d="M15.26 17.62c-0.4 0.24 -0.84 0.44 -1.29 0.57c0 0 -0.37 2.81 -0.4 2.81c0 0 -3.12 0 -3.12 0c-0.03 -0.01 -0.41 -2.8 -0.41 -2.8c-0.44 -0.14 -0.88 -0.34 -1.3 -0.58" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.8s" to="1"/><animate fill="freeze" attributeName="d" begin="0.8s" dur="0.2s" values="M15.26 17.62c-0.4 0.24 -0.84 0.44 -1.29 0.57c-0.28 0.09 -0.57 0.16 -0.85 0.21c-0.73 0.12 -1.49 0.13 -2.24 0c-0.27 -0.05 -0.55 -0.12 -0.83 -0.2c-0.44 -0.14 -0.88 -0.34 -1.3 -0.58;M15.26 17.62c-0.4 0.24 -0.84 0.44 -1.29 0.57c0 0 -0.37 2.81 -0.4 2.81c0 0 -3.12 0 -3.12 0c-0.03 -0.01 -0.41 -2.8 -0.41 -2.8c-0.44 -0.14 -0.88 -0.34 -1.3 -0.58"/></path><path d="M8.76 17.63c-0.41 -0.23 -0.8 -0.51 -1.14 -0.83c0 0 -2.62 1.08 -2.63 1.06c0 0 -1.56 -2.7 -1.56 -2.7c-0.01 -0.03 2.22 -1.75 2.22 -1.75c-0.1 -0.45 -0.15 -0.93 -0.15 -1.41" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.8s" to="1"/><animate fill="freeze" attributeName="d" begin="0.8s" dur="0.2s" values="M8.76 17.63c-0.41 -0.23 -0.8 -0.51 -1.14 -0.83c-0.22 -0.2 -0.42 -0.41 -0.61 -0.63c-0.47 -0.57 -0.86 -1.22 -1.12 -1.94c-0.09 -0.26 -0.17 -0.54 -0.24 -0.82c-0.1 -0.45 -0.15 -0.93 -0.15 -1.41;M8.76 17.63c-0.41 -0.23 -0.8 -0.51 -1.14 -0.83c0 0 -2.62 1.08 -2.63 1.06c0 0 -1.56 -2.7 -1.56 -2.7c-0.01 -0.03 2.22 -1.75 2.22 -1.75c-0.1 -0.45 -0.15 -0.93 -0.15 -1.41"/></path><path d="M5.5 12.01c-0.01 -0.47 0.04 -0.95 0.15 -1.4c0 0 -2.25 -1.73 -2.23 -1.75c0 0 1.56 -2.7 1.56 -2.7c0.02 -0.02 2.63 1.05 2.63 1.05c0.34 -0.31 0.73 -0.59 1.15 -0.83" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.8s" to="1"/><animate fill="freeze" attributeName="d" begin="0.8s" dur="0.2s" values="M5.5 12.01c-0.01 -0.47 0.04 -0.95 0.15 -1.4c0.06 -0.29 0.15 -0.57 0.24 -0.84c0.26 -0.69 0.63 -1.35 1.12 -1.94c0.18 -0.21 0.38 -0.42 0.59 -0.62c0.34 -0.31 0.73 -0.59 1.15 -0.83;M5.5 12.01c-0.01 -0.47 0.04 -0.95 0.15 -1.4c0 0 -2.25 -1.73 -2.23 -1.75c0 0 1.56 -2.7 1.56 -2.7c0.02 -0.02 2.63 1.05 2.63 1.05c0.34 -0.31 0.73 -0.59 1.15 -0.83"/></path><path d="M8.74 6.38c0.4 -0.24 0.84 -0.44 1.29 -0.57c0 0 0.37 -2.81 0.4 -2.81c0 0 3.12 0 3.12 0c0.03 0.01 0.41 2.8 0.41 2.8c0.44 0.14 0.88 0.34 1.3 0.58" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.8s" to="1"/><animate fill="freeze" attributeName="d" begin="0.8s" dur="0.2s" values="M8.74 6.38c0.4 -0.24 0.84 -0.44 1.29 -0.57c0.28 -0.09 0.57 -0.16 0.85 -0.21c0.73 -0.12 1.49 -0.13 2.24 0c0.27 0.05 0.55 0.12 0.83 0.2c0.44 0.14 0.88 0.34 1.3 0.58;M8.74 6.38c0.4 -0.24 0.84 -0.44 1.29 -0.57c0 0 0.37 -2.81 0.4 -2.81c0 0 3.12 0 3.12 0c0.03 0.01 0.41 2.8 0.41 2.8c0.44 0.14 0.88 0.34 1.3 0.58"/></path></g></svg>',
+  'check-list-3': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><g stroke-dasharray="24"><path d="M11.5 5c0 -0.83 0.67 -1.5 1.5 -1.5h6c0.83 0 1.5 0.67 1.5 1.5c0 0.83 -0.67 1.5 -1.5 1.5h-6c-0.83 0 -1.5 -0.67 -1.5 -1.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.3s" values="24;0"/></path><path stroke-dashoffset="24" d="M11.5 12c0 -0.83 0.67 -1.5 1.5 -1.5h6c0.83 0 1.5 0.67 1.5 1.5c0 0.83 -0.67 1.5 -1.5 1.5h-6c-0.83 0 -1.5 -0.67 -1.5 -1.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.4s" dur="0.3s" to="0"/></path><path stroke-dashoffset="24" d="M11.5 19c0 -0.83 0.67 -1.5 1.5 -1.5h6c0.83 0 1.5 0.67 1.5 1.5c0 0.83 -0.67 1.5 -1.5 1.5h-6c-0.83 0 -1.5 -0.67 -1.5 -1.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.8s" dur="0.3s" to="0"/></path></g><g stroke-dasharray="12" stroke-dashoffset="12" stroke-width="2"><path d="M3 5l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.2s" dur="0.2s" to="0"/></path><path d="M3 12l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.6s" dur="0.2s" to="0"/></path><path d="M3 19l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1s" dur="0.2s" to="0"/></path></g></g></svg>',
+  'play': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="38" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 6l10 6l-10 6Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.5s" values="38;0"/></path></svg>',
+  'confirm-circle': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="60" d="M3 12c0 -4.97 4.03 -9 9 -9c4.97 0 9 4.03 9 9c0 4.97 -4.03 9 -9 9c-4.97 0 -9 -4.03 -9 -9Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="60;0"/></path><path stroke-dasharray="14" stroke-dashoffset="14" d="M8 12l3 3l5 -5"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.6s" dur="0.2s" to="0"/></path></g></svg>',
+  'confirm': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="26" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 11l6 6l10 -10"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="26;0"/></path></svg>',
+  'alert-circle': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="60" d="M12 3c4.97 0 9 4.03 9 9c0 4.97 -4.03 9 -9 9c-4.97 0 -9 -4.03 -9 -9c0 -4.97 4.03 -9 9 -9Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="60;0"/></path><path stroke-dasharray="8" stroke-dashoffset="8" d="M12 7v6"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path><path stroke-dasharray="4" stroke-dashoffset="4" d="M12 17v0.01"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg>',
+  'alert': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="60" d="M12 3l9 17h-18l9 -17Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="60;0"/></path><path stroke-dasharray="6" stroke-dashoffset="6" d="M12 10v4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path><path stroke-dasharray="4" stroke-dashoffset="4" d="M12 17v0.01"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg>',
+  'question-circle': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="60" d="M12 3c4.97 0 9 4.03 9 9c0 4.97 -4.03 9 -9 9c-4.97 0 -9 -4.03 -9 -9c0 -4.97 4.03 -9 9 -9Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="60;0"/></path><path stroke-dasharray="18" stroke-dashoffset="18" d="M9 10c0 -1.66 1.34 -3 3 -3c1.66 0 3 1.34 3 3c0 0.98 -0.47 1.85 -1.2 2.4c-0.73 0.55 -1.3 0.6 -1.8 1.6"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.3s" to="0"/></path><path stroke-dasharray="4" stroke-dashoffset="4" d="M12 17v0.01"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg>',
+  'ring-resize': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g stroke="currentColor"><circle cx="12" cy="12" r="9.5" fill="none" stroke-linecap="round" stroke-width="3"><animate attributeName="stroke-dasharray" calcMode="spline" dur="1.5s" keySplines="0.42,0,0.58,1;0.42,0,0.58,1;0.42,0,0.58,1" keyTimes="0;0.475;0.95;1" repeatCount="indefinite" values="0 150;42 150;42 150;42 150"/><animate attributeName="stroke-dashoffset" calcMode="spline" dur="1.5s" keySplines="0.42,0,0.58,1;0.42,0,0.58,1;0.42,0,0.58,1" keyTimes="0;0.475;0.95;1" repeatCount="indefinite" values="0;-16;-59;-59"/></circle><animateTransform attributeName="transform" dur="2s" repeatCount="indefinite" type="rotate" values="0 12 12;360 12 12"/></g></svg>',
+  'arrow-right': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="20" d="M3 12h17.5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.3s" values="20;0"/></path><path stroke-dasharray="12" stroke-dashoffset="12" d="M21 12l-7 7M21 12l-7 -7"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.3s" dur="0.2s" to="0"/></path></g></svg>',
+  'arrow-left': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="20" d="M21 12h-17.5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.3s" values="20;0"/></path><path stroke-dasharray="12" stroke-dashoffset="12" d="M3 12l7 7M3 12l7 -7"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.3s" dur="0.2s" to="0"/></path></g></svg>',
+  'rotate-270': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="34" d="M12 6c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6v-2.5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.4s" values="34;0"/></path><path stroke-dasharray="8" stroke-dashoffset="8" d="M6 9l-3 3M6 9l3 3"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.4s" dur="0.2s" to="0"/></path></g></svg>',
+  'external-link': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="42" d="M11 5h-6v14h14v-6"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.5s" values="42;0"/></path><path stroke-dasharray="12" stroke-dashoffset="12" d="M13 11l7 -7"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.5s" dur="0.2s" to="0"/></path><path stroke-dasharray="8" stroke-dashoffset="8" d="M21 3h-6M21 3v6"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg>',
+  'folder': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="62" d="M12 7h8c0.55 0 1 0.45 1 1v10c0 0.55 -0.45 1 -1 1h-16c-0.55 0 -1 -0.45 -1 -1v-11Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="62;0"/></path><path d="M12 7h-9v-1c0 -0.55 0.45 -1 1 -1h6Z" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.6s" to="1"/><animate fill="freeze" attributeName="d" begin="0.6s" dur="0.2s" values="M12 7h-9v0c0 0 0.45 0 1 0h6Z;M12 7h-9v-1c0 -0.55 0.45 -1 1 -1h6Z"/></path></g></svg>',
+  'document-list': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path stroke-dasharray="64" stroke-width="2" d="M13 3l6 6v12h-14v-18h8"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="64;0"/></path><path stroke-dasharray="14" stroke-dashoffset="14" d="M12.5 3v5.5h6.5"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path><g stroke-width="2"><path stroke-dasharray="6" stroke-dashoffset="6" d="M9 13h4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.9s" dur="0.2s" to="0"/></path><path stroke-dasharray="8" stroke-dashoffset="8" d="M9 16h6"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1.1s" dur="0.2s" to="0"/></path></g></g></svg>',
+  'clipboard-arrow': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><g stroke-width="2"><path stroke-dasharray="18" d="M12 3h7v8"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.3s" values="18;0"/></path><path stroke-dasharray="46" stroke-dashoffset="46" d="M19 17v4h-14v-18h7"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.3s" dur="0.5s" to="0"/></path></g><path stroke-dasharray="14" stroke-dashoffset="14" d="M14.5 3.5v3h-5v-3"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.9s" dur="0.2s" to="0"/></path><g stroke-width="2"><path stroke-dasharray="12" stroke-dashoffset="12" d="M21 14h-8.5"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1.1s" dur="0.2s" to="0"/></path><path stroke-dasharray="8" stroke-dashoffset="8" d="M12 14l3 3M12 14l3 -3"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1.3s" dur="0.2s" to="0"/></path></g></g></svg>',
+  'clipboard-check': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path stroke-width="2" d="M12 3h7v18h-14v-18h7Z"/><path d="M14.5 3.5v3h-5v-3"/><path stroke-dasharray="12" stroke-width="2" d="M9 13l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.2s" values="12;0"/></path></g></svg>',
+  'monitor-arrow-down': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="70" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 17h-10v-14h20v14Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="70;0"/></path><path fill="currentColor" d="M10 16h4v0h-4Z"><animate fill="freeze" attributeName="d" begin="0.6s" dur="0.2s" to="M10 16h4v6h-4Z"/></path><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="6" stroke-dashoffset="6" d="M12 21h3M12 21h-3"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.8s" dur="0.4s" to="0"/></path><g stroke-dasharray="8" stroke-dashoffset="8"><path d="M12 7v6"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1.2s" dur="0.2s" to="0"/></path><path d="M12 13l3 -3M12 13l-3 -3"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1.4s" dur="0.2s" to="0"/></path></g></g></svg>',
+  'sun-rising': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 6c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6c0 -3.31 2.69 -6 6 -6Z"><animate fill="freeze" attributeName="d" dur="0.6s" values="M12 26c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6c0 -3.31 2.69 -6 6 -6Z;M12 6c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6c0 -3.31 2.69 -6 6 -6Z"/></path><path d="M12 21v1M21 12h1M12 3v-1M3 12h-1" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.7s" to="1"/><animate fill="freeze" attributeName="d" begin="0.7s" dur="0.2s" values="M12 19v1M19 12h1M12 5v-1M5 12h-1;M12 21v1M21 12h1M12 3v-1M3 12h-1"/></path><path d="M18.5 18.5l0.5 0.5M18.5 5.5l0.5 -0.5M5.5 5.5l-0.5 -0.5M5.5 18.5l-0.5 0.5" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.9s" to="1"/><animate fill="freeze" attributeName="d" begin="0.9s" dur="0.2s" values="M17 17l0.5 0.5M17 7l0.5 -0.5M7 7l-0.5 -0.5M7 17l-0.5 0.5;M18.5 18.5l0.5 0.5M18.5 5.5l0.5 -0.5M5.5 5.5l-0.5 -0.5M5.5 18.5l-0.5 0.5"/></path></g></svg>',
+  'close': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="12" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 12l7 7M12 12l-7 -7M12 12l-7 7M12 12l7 -7"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.4s" values="12;0"/></path></svg>',
+  'moon-to-sunny': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><defs><mask id="SVGUXuaaerw"><path fill="#fff" d="M12 6c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6c0 -3.31 2.69 -6 6 -6Z"><animate fill="freeze" attributeName="d" dur="0.4s" values="M12 2c5.52 0 10 4.48 10 10c0 5.52 -4.48 10 -10 10c-5.52 0 -10 -4.48 -10 -10c0 -5.52 4.48 -10 10 -10Z;M12 6c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6c0 -3.31 2.69 -6 6 -6Z"/></path><path d="M22 -4c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6c0 -3.31 2.69 -6 6 -6Z"><animate fill="freeze" attributeName="d" dur="0.4s" values="M18 -4c5.52 0 10 4.48 10 10c0 5.52 -4.48 10 -10 10c-5.52 0 -10 -4.48 -10 -10c0 -5.52 4.48 -10 10 -10Z;M22 -4c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6c0 -3.31 2.69 -6 6 -6Z"/><set fill="freeze" attributeName="opacity" begin="0.4s" to="0"/></path><path d="M12 8c2.21 0 4 1.79 4 4c0 2.21 -1.79 4 -4 4c-2.21 0 -4 -1.79 -4 -4c0 -2.21 1.79 -4 4 -4Z"><animate fill="freeze" attributeName="d" dur="0.4s" values="M12 4c4.42 0 8 3.58 8 8c0 4.42 -3.58 8 -8 8c-4.42 0 -8 -3.58 -8 -8c0 -4.42 3.58 -8 8 -8Z;M12 8c2.21 0 4 1.79 4 4c0 2.21 -1.79 4 -4 4c-2.21 0 -4 -1.79 -4 -4c0 -2.21 1.79 -4 4 -4Z"/></path></mask><mask id="SVGjqg97bFZ"><path fill="#fff" d="M22 -6c4.42 0 8 3.58 8 8c0 4.42 -3.58 8 -8 8c-4.42 0 -8 -3.58 -8 -8c0 -4.42 3.58 -8 8 -8Z"><animate fill="freeze" attributeName="d" dur="0.4s" values="M18 -6c6.62 0 12 5.38 12 12c0 6.62 -5.38 12 -12 12c-6.62 0 -12 -5.38 -12 -12c0 -6.62 5.38 -12 12 -12Z;M22 -6c4.42 0 8 3.58 8 8c0 4.42 -3.58 8 -8 8c-4.42 0 -8 -3.58 -8 -8c0 -4.42 3.58 -8 8 -8Z"/><set fill="freeze" attributeName="opacity" begin="0.4s" to="0"/></path><path d="M22 -4c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6c0 -3.31 2.69 -6 6 -6ZM6 12v-20h26v26h-20c3.31 0 6 -2.69 6 -6c0 -3.31 -2.69 -6 -6 -6c-3.31 0 -6 2.69 -6 6Z"><animate fill="freeze" attributeName="d" dur="0.4s" values="M18 -4c5.52 0 10 4.48 10 10c0 5.52 -4.48 10 -10 10c-5.52 0 -10 -4.48 -10 -10c0 -5.52 4.48 -10 10 -10ZM2 12v-20h30v30h-20c5.52 0 10 -4.48 10 -10c0 -5.52 -4.48 -10 -10 -10c-5.52 0 -10 4.48 -10 10Z;M22 -4c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6c0 -3.31 2.69 -6 6 -6ZM6 12v-20h26v26h-20c3.31 0 6 -2.69 6 -6c0 -3.31 -2.69 -6 -6 -6c-3.31 0 -6 2.69 -6 6Z"/><set fill="freeze" attributeName="opacity" begin="0.4s" to="0"/></path></mask></defs><g fill="currentColor"><path d="M0 0h24v24H0z" mask="url(#SVGUXuaaerw)"/><path d="M0 0h24v24H0z" mask="url(#SVGjqg97bFZ)"/></g><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 21v1M21 12h1M12 3v-1M3 12h-1" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.4s" to="1"/><animate fill="freeze" attributeName="d" begin="0.4s" dur="0.2s" values="M12 19v1M19 12h1M12 5v-1M5 12h-1;M12 21v1M21 12h1M12 3v-1M3 12h-1"/></path><path d="M18.5 18.5l0.5 0.5M18.5 5.5l0.5 -0.5M5.5 5.5l-0.5 -0.5M5.5 18.5l-0.5 0.5" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.6s" to="1"/><animate fill="freeze" attributeName="d" begin="0.6s" dur="0.2s" values="M17 17l0.5 0.5M17 7l0.5 -0.5M7 7l-0.5 -0.5M7 17l-0.5 0.5;M18.5 18.5l0.5 0.5M18.5 5.5l0.5 -0.5M5.5 5.5l-0.5 -0.5M5.5 18.5l-0.5 0.5"/></path></g></svg>',
+  'sunny-to-moon': '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><defs><mask id="SVGHXYFDcmX"><path fill="#fff" d="M12 2c5.52 0 10 4.48 10 10c0 5.52 -4.48 10 -10 10c-5.52 0 -10 -4.48 -10 -10c0 -5.52 4.48 -10 10 -10Z"><animate fill="freeze" attributeName="d" dur="0.4s" values="M12 6c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6c0 -3.31 2.69 -6 6 -6Z;M12 2c5.52 0 10 4.48 10 10c0 5.52 -4.48 10 -10 10c-5.52 0 -10 -4.48 -10 -10c0 -5.52 4.48 -10 10 -10Z"/><set fill="freeze" attributeName="opacity" begin="0.4s" to="0"/></path><path d="M18 -4c5.52 0 10 4.48 10 10c0 5.52 -4.48 10 -10 10c-5.52 0 -10 -4.48 -10 -10c0 -5.52 4.48 -10 10 -10ZM12 4c4.42 0 8 3.58 8 8c0 4.42 -3.58 8 -8 8c-4.42 0 -8 -3.58 -8 -8c0 -4.42 3.58 -8 8 -8Z"><animate fill="freeze" attributeName="d" dur="0.4s" values="M22 -4c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6c0 -3.31 2.69 -6 6 -6ZM12 8c2.21 0 4 1.79 4 4c0 2.21 -1.79 4 -4 4c-2.21 0 -4 -1.79 -4 -4c0 -2.21 1.79 -4 4 -4Z;M18 -4c5.52 0 10 4.48 10 10c0 5.52 -4.48 10 -10 10c-5.52 0 -10 -4.48 -10 -10c0 -5.52 4.48 -10 10 -10ZM12 4c4.42 0 8 3.58 8 8c0 4.42 -3.58 8 -8 8c-4.42 0 -8 -3.58 -8 -8c0 -4.42 3.58 -8 8 -8Z"/><set fill="freeze" attributeName="opacity" begin="0.4s" to="0"/></path></mask><mask id="SVGYzLhkdyh"><path fill="#fff" d="M18 -6c6.62 0 12 5.38 12 12c0 6.62 -5.38 12 -12 12c-6.62 0 -12 -5.38 -12 -12c0 -6.62 5.38 -12 12 -12Z"><animate fill="freeze" attributeName="d" dur="0.4s" values="M22 -6c4.42 0 8 3.58 8 8c0 4.42 -3.58 8 -8 8c-4.42 0 -8 -3.58 -8 -8c0 -4.42 3.58 -8 8 -8Z;M18 -6c6.62 0 12 5.38 12 12c0 6.62 -5.38 12 -12 12c-6.62 0 -12 -5.38 -12 -12c0 -6.62 5.38 -12 12 -12Z"/><set fill="freeze" attributeName="opacity" begin="0.4s" to="0"/></path><path d="M18 -4c5.52 0 10 4.48 10 10c0 5.52 -4.48 10 -10 10c-5.52 0 -10 -4.48 -10 -10c0 -5.52 4.48 -10 10 -10ZM2 12v-20h30v30h-20c5.52 0 10 -4.48 10 -10c0 -5.52 -4.48 -10 -10 -10c-5.52 0 -10 4.48 -10 10Z"><animate fill="freeze" attributeName="d" dur="0.4s" values="M22 -4c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6c0 -3.31 2.69 -6 6 -6ZM6 12v-20h26v26h-20c3.31 0 6 -2.69 6 -6c0 -3.31 -2.69 -6 -6 -6c-3.31 0 -6 2.69 -6 6Z;M18 -4c5.52 0 10 4.48 10 10c0 5.52 -4.48 10 -10 10c-5.52 0 -10 -4.48 -10 -10c0 -5.52 4.48 -10 10 -10ZM2 12v-20h30v30h-20c5.52 0 10 -4.48 10 -10c0 -5.52 -4.48 -10 -10 -10c-5.52 0 -10 4.48 -10 10Z"/><set fill="freeze" attributeName="opacity" begin="0.4s" to="0"/></path></mask></defs><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 21v1M21 12h1M12 3v-1M3 12h-1M18.5 18.5l0.5 0.5M18.5 5.5l0.5 -0.5M5.5 5.5l-0.5 -0.5M5.5 18.5l-0.5 0.5"><animate fill="freeze" attributeName="opacity" dur="0.4s" values="1;0"/></path><g fill="currentColor"><path d="M0 0h24v24H0z" mask="url(#SVGHXYFDcmX)"/><path d="M0 0h24v24H0z" mask="url(#SVGYzLhkdyh)"/></g><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 6c0 6.08 4.92 11 11 11c0.53 0 1.05 -0.04 1.56 -0.11c-1.61 2.47 -4.39 4.11 -7.56 4.11c-4.97 0 -9 -4.03 -9 -9c0 -3.17 1.64 -5.95 4.11 -7.56c-0.07 0.51 -0.11 1.03 -0.11 1.56Z" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.4s" to="1"/></path><g fill="currentColor"><path d="M15.22 6.03l2.53 -1.94l-3.19 -0.09l-1.06 -3l-1.06 3l-3.19 0.09l2.53 1.94l-0.91 3.06l2.63 -1.81l2.63 1.81l-0.91 -3.06Z" opacity="0"><animate fill="freeze" attributeName="opacity" begin="0.4s" dur="0.4s" to="1"/></path><path d="M19.61 12.25l1.64 -1.25l-2.06 -0.05l-0.69 -1.95l-0.69 1.95l-2.06 0.05l1.64 1.25l-0.59 1.98l1.7 -1.17l1.7 1.17l-0.59 -1.98Z" opacity="0"><animate fill="freeze" attributeName="opacity" begin="0.8s" dur="0.4s" to="1"/></path></g></svg>',
+};
+</script>
+
+<script>
+(() => {
+'use strict';
+
+/* ------------------------------------------------------------------ constants */
+const FILE_MODE = !/^https?:$/.test(location.protocol);   // opened directly (file:, or a viewer's data: copy): Python is missing
+const POST_HEADERS = { 'Content-Type': 'application/json', 'X-Bridge-Setup': '1' };
+const PY_URL = 'https://www.python.org/downloads/windows/';
+const PY_WINGET = 'winget install -e --id Python.Python.3.12';
+const FFMPEG_WINGET = 'winget install -e --id Gyan.FFmpeg';
+const DEFAULT_PREMIERE_MIN = '26.3';
+const root = document.documentElement;
+const reducedMQ = window.matchMedia('(prefers-reduced-motion: reduce)');
+const $ = (sel, scope) => (scope || document).querySelector(sel);
+
+/* ------------------------------------------------------------------ copy (EN / 中文)
+   Strings are trusted HTML fragments (a few use <b>); {name} placeholders are escaped. */
+const STRINGS = {
+  en: {
+    docTitle: 'Premiere Agent Bridge Setup',
+    product: 'Premiere Agent Bridge',
+    setup: 'Setup',
+    demo: 'Demo: made-up data, not this PC',
+    demoTitle: 'Demo mode: nothing on this computer is changed',
+    langLabel: 'Language',
+    'theme.toDark': 'Switch to dark theme',
+    'theme.toLight': 'Switch to light theme',
+    railTitle: 'Get set up',
+    railSub: 'One step at a time',
+    stepsNav: 'Setup steps',
+    progress: '{n} of {m} required steps ready',
+    progressDone: 'Everything required is ready',
+    progressLabel: 'Setup progress',
+    stepOf: 'Step {n} of {m}',
+    optionalTag: 'optional',
+    'status.ok': 'Ready',
+    'status.missing': 'Needs setup',
+    'status.optional': 'Optional',
+    'status.checking': 'Checking…',
+    'status.waiting': 'Waiting for Python',
+    'status.unknown': 'Unknown',
+    'status.todo': 'Not started',
+    'status.running': 'Working…',
+    loading: 'Checking your computer…',
+    detected: 'What we found',
+    howto: 'What to do',
+    found: 'found',
+    notFound: 'not found',
+    notReported: 'not reported',
+    nothingToDo: 'All good. Nothing to do here.',
+    waitingNote: 'This step opens up once Python is installed.',
+    back: 'Back',
+    next: 'Next',
+    checkAgain: 'Check again',
+    checking: 'Checking…',
+    checked: 'Checked again. {n} of {m} required steps ready.',
+    tryAgain: 'Try again',
+    copy: 'Copy',
+    copied: 'Copied',
+    copyFailed: 'Couldn’t copy. Select the text and press Ctrl+C.',
+    copyCmd: 'Copy command',
+    copyLog: 'Copy log',
+    showLog: 'Show details',
+    hideLog: 'Hide details',
+    install: 'Install',
+    working: 'Working…',
+    done: 'Done.',
+    failed: 'That didn’t work.',
+    busy: 'Setup is busy with another task. Try again in a moment.',
+    busyNote: 'Setup is finishing another task…',
+    unknownAction: 'This version of setup doesn’t know that action.',
+    httpError: 'The setup helper answered with an error ({code}).',
+    lost: 'Can’t reach the setup helper.',
+    lostHelp: 'If you closed its console window, double-click setup_bridge.bat again.',
+    goTo: 'Go to that step',
+    openFolder: 'Open the bridge folder',
+    credit: 'Icons: Material Line Icons (Vjacheslav Trushkin) and SVG Spinners (Utkarsh Verma), MIT',
+    on: 'On',
+    off: 'Off',
+
+    'k.Python': 'Python',
+    'k.websockets': 'websockets',
+    'k.Premiere Pro (UXP)': 'Premiere Pro',
+    'k.UXP Developer Tool': 'UXP Developer Tool',
+    'k.UXP developer mode': 'Developer mode',
+    'k.Bridge data folder': 'Data folder',
+    'k.Start script': 'Start script',
+    'k.Broker': 'Bridge',
+
+    'run.install-deps': 'Installing packages…',
+    'run.install-pillow': 'Installing Pillow…',
+    'run.install-whisper': 'Installing faster-whisper. This can take a few minutes…',
+    'run.shortcut-desktop': 'Adding the desktop shortcut…',
+    'run.autostart-on': 'Turning on start with Windows…',
+    'run.autostart-off': 'Turning off start with Windows…',
+    'run.open-udt': 'Opening UXP Developer Tool…',
+    'run.open-cc': 'Opening Creative Cloud…',
+    'run.open-ffmpeg': 'Opening the FFmpeg download page…',
+    'run.open-folder': 'Opening the bridge folder…',
+    'run.start-bridge': 'Starting the bridge…',
+    'ok.install-deps': 'Packages installed.',
+    'ok.install-pillow': 'Pillow installed.',
+    'ok.install-whisper': 'faster-whisper installed.',
+    'ok.shortcut-desktop': 'Shortcut added to your desktop.',
+    'ok.autostart-on': 'The bridge will start with Windows.',
+    'ok.autostart-off': 'The bridge won’t start with Windows any more.',
+    'ok.open-udt': 'UXP Developer Tool is opening.',
+    'ok.open-cc': 'Creative Cloud is opening. Come back here when you’re done.',
+    'ok.open-ffmpeg': 'The FFmpeg page is opening in your browser.',
+    'ok.open-folder': 'The bridge folder is opening.',
+    'ok.start-bridge': 'The bridge is starting. Leave its window open while you edit.',
+
+    'python.title': 'Python 3.10+',
+    'python.short': 'Python',
+    'python.why': 'The bridge’s command line runs on Python.',
+    'python.version': 'Version',
+    'python.location': 'Location',
+    'python.missingFile': 'Setup couldn’t find Python 3.10 or newer on this computer, so it opened this guide on its own.',
+    'python.missingServed': 'This Python is too old for the bridge.',
+    'python.get': 'Get Python',
+    'python.s1': 'Download Python from python.org.',
+    'python.s1b': 'Or paste this into a terminal:',
+    'python.s2': 'In the installer, tick <b>Add python.exe to PATH</b>.',
+    'python.s3': 'Close this page and double-click <b>setup_bridge.bat</b> again.',
+    'python.s3s': 'Close this window and double-click <b>setup_bridge.bat</b> again.',
+
+    'packages.title': 'Python packages',
+    'packages.short': 'Packages',
+    'packages.why': 'One small package, websockets, lets the bridge talk to Premiere.',
+    'packages.s1': 'Click <b>Install</b>. It usually takes less than a minute.',
+    'packages.s2': 'Keep this window open until the step turns green.',
+    'packages.btn': 'Install',
+
+    'premiere.title': 'Premiere Pro {min}+',
+    'premiere.short': 'Premiere Pro',
+    'premiere.why': 'The bridge is a panel inside Premiere Pro {min} or newer. The Beta works too.',
+    'premiere.s1': 'Open Creative Cloud.',
+    'premiere.s2': 'Install or update <b>Premiere Pro</b> (or <b>Premiere Pro Beta</b>) to {min} or newer.',
+    'premiere.s3': 'Come back here. This page checks again on its own.',
+    'premiere.btn': 'Open Creative Cloud',
+
+    'udt.title': 'UXP Developer Tool',
+    'udt.short': 'UXP Tool',
+    'udt.why': 'A free Adobe app that loads the bridge panel into Premiere.',
+    'udt.s1': 'Open Creative Cloud.',
+    'udt.s2': 'Search for <b>UXP Developer Tools</b>.',
+    'udt.s3': 'Click <b>Install</b>.',
+    'udt.s4': 'Come back here. We check again automatically.',
+    'udt.btn': 'Open Creative Cloud',
+
+    'devmode.title': 'Developer mode',
+    'devmode.short': 'Dev mode',
+    'devmode.why': 'Premiere only loads panels from outside the Adobe store when developer mode is on.',
+    'devmode.s1': 'Open UXP Developer Tool.',
+    'devmode.s2': 'Click <b>Enable Developer Mode</b>. Windows asks for admin rights: click <b>Yes</b>.',
+    'devmode.s3': 'In Premiere, open <b>Settings → Plugins</b>, tick <b>Enable developer mode</b> and restart Premiere.',
+    'devmode.btn': 'Open UXP Developer Tool',
+    'devmode.needUdt': 'Install UXP Developer Tool first (step 4).',
+    'devmode.noteTitle': 'One part we can’t check from here',
+    'devmode.note': 'The Premiere setting in step 3 isn’t visible to this page. Tick it once, restart Premiere, and you’re done.',
+    'devmode.okNote': 'In Premiere, make sure <b>Settings → Plugins → Enable developer mode</b> is ticked too, then restart Premiere. This page can’t see that setting.',
+
+    'extras.title': 'Extras',
+    'extras.short': 'Extras',
+    'extras.why': 'Nice to have. The bridge works without them, but a few tools need them.',
+    'x.ffmpeg': 'Scaling clips to fit, and the listening report.',
+    'x.ffmpegBtn': 'Get FFmpeg',
+    'x.ffmpegCmd': 'Or paste this into a terminal:',
+    'x.ffmpegAfter': 'Still missing after installing? Close this window and run setup again.',
+    'x.pil': 'Contact sheets of exported frames.',
+    'x.whisper': 'Local transcription on this computer. A large download.',
+    'x.ok': 'Installed',
+    'x.missing': 'Not installed',
+
+    'start.title': 'Start the bridge',
+    'start.short': 'Start',
+    'start.why': 'The bridge runs in a small window while you edit, and the Premiere panel connects to it by itself.',
+    'start.options': 'Handy options',
+    'start.desk': 'Shortcut on the desktop',
+    'start.deskSub': 'Start the bridge with a double-click.',
+    'start.deskHave': 'Already on your desktop.',
+    'start.auto': 'Start with Windows',
+    'start.autoSub': 'The bridge starts quietly when you sign in.',
+    'start.btn': 'Start the bridge',
+    'start.s1': 'Click <b>Start the bridge</b>. A small window opens: leave it open while you edit.',
+    'start.s2': 'In Premiere, open <b>Window → UXP Plugins → Agent Bridge</b>.',
+    'start.isRunning': 'running',
+    'start.notRunning': 'not running',
+    'start.allTitle': 'All set',
+    'start.all': 'Open Premiere → <b>Window → UXP Plugins → Agent Bridge</b> — the panel loads by itself; the dot turns green.',
+    'start.runningBut': 'The bridge is running, but <b>{step}</b> still needs attention.',
+    'start.notReady': '<b>{step}</b> still needs setup: the bridge can start, but the panel will not load in Premiere until it is done.',
+  },
+  zh: {
+    docTitle: 'Premiere Agent Bridge 安装向导',
+    product: 'Premiere Agent Bridge',
+    setup: '安装向导',
+    demo: '演示数据，不是这台电脑',
+    demoTitle: '演示模式：不会改动这台电脑上的任何东西',
+    langLabel: '语言',
+    'theme.toDark': '切换到深色主题',
+    'theme.toLight': '切换到浅色主题',
+    railTitle: '环境检查',
+    railSub: '一步一步装好',
+    stepsNav: '安装步骤',
+    progress: '必需步骤已就绪 {n} / {m}',
+    progressDone: '必需项全部就绪',
+    progressLabel: '安装进度',
+    stepOf: '第 {n} 步，共 {m} 步',
+    optionalTag: '可选',
+    'status.ok': '已就绪',
+    'status.missing': '需要设置',
+    'status.optional': '可选',
+    'status.checking': '检查中…',
+    'status.waiting': '等待 Python',
+    'status.unknown': '未知',
+    'status.todo': '未启动',
+    'status.running': '进行中…',
+    loading: '正在检查你的电脑…',
+    detected: '检测结果',
+    howto: '怎么做',
+    found: '已找到',
+    notFound: '未找到',
+    notReported: '没有数据',
+    nothingToDo: '这一步已经好了，不用再做什么。',
+    waitingNote: '装好 Python 之后才能进行这一步。',
+    back: '上一步',
+    next: '下一步',
+    checkAgain: '再检查一次',
+    checking: '检查中…',
+    checked: '已重新检查：必需步骤已就绪 {n} / {m}。',
+    tryAgain: '重试',
+    copy: '复制',
+    copied: '已复制',
+    copyFailed: '复制失败，请选中文字后按 Ctrl+C。',
+    copyCmd: '复制命令',
+    copyLog: '复制日志',
+    showLog: '查看详情',
+    hideLog: '收起详情',
+    install: '安装',
+    working: '进行中…',
+    done: '完成。',
+    failed: '没有成功。',
+    busy: '安装向导正在处理另一项任务，请稍后再试。',
+    busyNote: '安装向导正在完成另一项任务…',
+    unknownAction: '这个版本的安装向导不支持这个操作。',
+    httpError: '安装助手返回了错误（{code}）。',
+    lost: '连不上安装助手。',
+    lostHelp: '如果你关掉了它的命令行窗口，请再双击一次 setup_bridge.bat。',
+    goTo: '去那一步',
+    openFolder: '打开桥接文件夹',
+    credit: '图标：Material Line Icons（Vjacheslav Trushkin）与 SVG Spinners（Utkarsh Verma），MIT 许可',
+    on: '开',
+    off: '关',
+
+    'k.UXP developer mode': '开发者模式',
+    'k.Bridge data folder': '数据文件夹',
+    'k.Start script': '启动脚本',
+    'k.Broker': '桥接服务',
+
+    'run.install-deps': '正在安装组件…',
+    'run.install-pillow': '正在安装 Pillow…',
+    'run.install-whisper': '正在安装 faster-whisper，可能需要几分钟…',
+    'run.shortcut-desktop': '正在创建桌面快捷方式…',
+    'run.autostart-on': '正在开启开机自动启动…',
+    'run.autostart-off': '正在关闭开机自动启动…',
+    'run.open-udt': '正在打开 UXP Developer Tool…',
+    'run.open-cc': '正在打开 Creative Cloud…',
+    'run.open-ffmpeg': '正在打开 FFmpeg 下载页面…',
+    'run.open-folder': '正在打开桥接文件夹…',
+    'run.start-bridge': '正在启动桥接…',
+    'ok.install-deps': '组件已装好。',
+    'ok.install-pillow': 'Pillow 已装好。',
+    'ok.install-whisper': 'faster-whisper 已装好。',
+    'ok.shortcut-desktop': '桌面快捷方式已创建。',
+    'ok.autostart-on': '以后开机会自动启动桥接。',
+    'ok.autostart-off': '已关闭开机自动启动。',
+    'ok.open-udt': 'UXP Developer Tool 正在打开。',
+    'ok.open-cc': 'Creative Cloud 正在打开，弄好后回到这里就行。',
+    'ok.open-ffmpeg': 'FFmpeg 页面正在浏览器里打开。',
+    'ok.open-folder': '桥接文件夹正在打开。',
+    'ok.start-bridge': '桥接正在启动。剪辑时别关掉它的窗口。',
+
+    'python.why': '桥接工具的命令行靠 Python 运行。',
+    'python.version': '版本',
+    'python.location': '位置',
+    'python.missingFile': '安装向导没在这台电脑上找到 Python 3.10 或更新版本，所以直接打开了这份指南。',
+    'python.missingServed': '这个 Python 版本太旧，桥接工具用不了。',
+    'python.get': '下载 Python',
+    'python.s1': '从 python.org 下载 Python。',
+    'python.s1b': '或者把这行命令粘贴到终端里运行：',
+    'python.s2': '安装时勾选 <b>Add python.exe to PATH</b>。',
+    'python.s3': '装好后关掉这个页面，再双击一次 <b>setup_bridge.bat</b>。',
+    'python.s3s': '装好后关掉这个窗口，再双击一次 <b>setup_bridge.bat</b>。',
+
+    'packages.title': 'Python 组件',
+    'packages.short': '组件',
+    'packages.why': '桥接工具靠一个小组件 websockets 和 Premiere 通信。',
+    'packages.s1': '点 <b>安装</b>，一般不到一分钟。',
+    'packages.s2': '这一步变绿之前，先别关这个窗口。',
+    'packages.btn': '安装',
+
+    'premiere.why': '桥接工具是 Premiere Pro {min} 或更新版本里的一个面板，Beta 版也可以。',
+    'premiere.s1': '打开 Creative Cloud。',
+    'premiere.s2': '安装或更新 <b>Premiere Pro</b>（或 <b>Premiere Pro Beta</b>）到 {min} 或更新版本。',
+    'premiere.s3': '回到这里，页面会自己再检查一次。',
+    'premiere.btn': '打开 Creative Cloud',
+
+    'udt.short': 'UXP 工具',
+    'udt.why': 'Adobe 的免费小工具，负责把桥接面板加载进 Premiere。',
+    'udt.s1': '打开 Creative Cloud。',
+    'udt.s2': '搜索 <b>UXP Developer Tools</b>。',
+    'udt.s3': '点 <b>安装</b>。',
+    'udt.s4': '回到这里，会自动再检查一次。',
+    'udt.btn': '打开 Creative Cloud',
+
+    'devmode.title': '开发者模式',
+    'devmode.short': '开发者模式',
+    'devmode.why': '只有打开开发者模式，Premiere 才会加载 Adobe 商店以外的面板。',
+    'devmode.s1': '打开 UXP Developer Tool。',
+    'devmode.s2': '点 <b>Enable Developer Mode</b>。Windows 会请求管理员权限，点 <b>是</b>。',
+    'devmode.s3': '在 Premiere 里打开 <b>设置 → 增效工具</b>（Settings → Plugins），勾选 <b>启用开发者模式</b>（Enable developer mode），然后重启 Premiere。',
+    'devmode.btn': '打开 UXP Developer Tool',
+    'devmode.needUdt': '请先装好 UXP Developer Tool（第 4 步）。',
+    'devmode.noteTitle': '有一项这里检查不到',
+    'devmode.note': '第 3 步是 Premiere 里的设置，这个页面看不到。勾选一次、重启 Premiere 就好。',
+    'devmode.okNote': '记得在 Premiere 里也勾选 <b>设置 → 增效工具 → 启用开发者模式</b>（Settings → Plugins → Enable developer mode），然后重启 Premiere。这个设置这里看不到。',
+
+    'extras.title': '附加工具',
+    'extras.short': '附加工具',
+    'extras.why': '锦上添花：没有它们桥接也能用，但个别功能需要它们。',
+    'x.ffmpeg': '把画面缩放到合适大小，以及生成试听检查报告。',
+    'x.ffmpegBtn': '获取 FFmpeg',
+    'x.ffmpegCmd': '或者把这行命令粘贴到终端里运行：',
+    'x.ffmpegAfter': '装好后还显示未安装？关掉这个窗口，重新打开安装向导。',
+    'x.pil': '把导出的画面拼成一张预览图。',
+    'x.whisper': '在本机把语音转成文字。下载量比较大。',
+    'x.ok': '已安装',
+    'x.missing': '未安装',
+
+    'start.title': '启动桥接',
+    'start.short': '启动',
+    'start.why': '剪辑时桥接在一个小窗口里运行，Premiere 里的面板会自己连上它。',
+    'start.options': '方便的小设置',
+    'start.desk': '桌面快捷方式',
+    'start.deskSub': '以后双击就能启动桥接。',
+    'start.deskHave': '桌面上已经有了。',
+    'start.auto': '开机自动启动',
+    'start.autoSub': '登录 Windows 后，桥接会在后台安静地启动。',
+    'start.btn': '启动桥接',
+    'start.s1': '点 <b>启动桥接</b>，会弹出一个小窗口，剪辑时别关掉它。',
+    'start.s2': '在 Premiere 里打开 <b>窗口 → UXP 插件 → Agent Bridge</b>（Window → UXP Plugins → Agent Bridge）。',
+    'start.isRunning': '运行中',
+    'start.notRunning': '未运行',
+    'start.allTitle': '全部就绪',
+    'start.all': '打开 Premiere → <b>窗口 → UXP 插件 → Agent Bridge</b>（Window → UXP Plugins → Agent Bridge），面板会自己加载，圆点变绿就好了。',
+    'start.runningBut': '桥接已经在运行，但 <b>{step}</b> 还需要处理。',
+    'start.notReady': '<b>{step}</b> 还没装好：桥接可以先启动，但要等这一步完成，Premiere 里的面板才会加载。',
+  },
+};
+
+/* ------------------------------------------------------------------ steps */
+const STEPS = [
+  { id: 'python', icon: 'document-code', checks: ['Python'] },
+  { id: 'packages', icon: 'cloud-alt-download', checks: ['websockets'] },
+  { id: 'premiere', icon: 'monitor', checks: ['Premiere Pro (UXP)'] },
+  { id: 'udt', icon: 'cloud-alt-braces', checks: ['UXP Developer Tool'] },
+  { id: 'devmode', icon: 'cog', checks: ['UXP developer mode'] },
+  { id: 'extras', icon: 'check-list-3', checks: ['ffmpeg', 'ffprobe', 'PIL', 'faster_whisper'], optional: true },
+  { id: 'start', icon: 'play', checks: ['Bridge data folder', 'Start script', 'Broker'] },
+];
+const KNOWN_CHECKS = new Set(STEPS.reduce((all, s) => all.concat(s.checks), []));
+const REQUIRED_STEPS = STEPS.filter(s => !s.optional);
+const STATUS_ICON = {
+  ok: 'confirm-circle', missing: 'alert-circle', optional: 'alert', xmiss: 'alert', unknown: 'question-circle',
+  checking: 'ring-resize', running: 'ring-resize', waiting: 'question-circle', todo: 'play',
+};
+
+/* ------------------------------------------------------------------ state */
+let lang = 'en';
+let state = null;            // last reply of GET api/state
+let loadError = false;       // the last state request failed
+let connLost = false;        // heartbeats keep failing
+let selected = null;         // id of the step shown on the right
+let running = null;          // { name, step, started } while an action runs
+const lastRun = Object.create(null);   // step id -> result of the last action run there
+const logOpen = Object.create(null);   // step id -> output log expanded
+const railShown = Object.create(null); // step id -> status the rail currently shows
+let cardKey = '';
+let cardParts = null;
+let checkingManual = false;
+let inflight = null;
+let lastRefreshAt = 0;
+let pingFails = 0;
+let iconSeq = 0;
+let busyTimer = 0;
+let recheckTimer = 0;
+let elapsedTimer = 0;
+let toastTimer = 0;
+
+/* ------------------------------------------------------------------ small helpers */
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+function load(key) { try { return window.localStorage.getItem(key); } catch (e) { return null; } }
+function save(key, value) { try { window.localStorage.setItem(key, value); } catch (e) { /* storage unavailable */ } }
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function has(key) { return hasOwn(STRINGS[lang], key) || hasOwn(STRINGS.en, key); }
+function raw(key) {
+  if (hasOwn(STRINGS[lang], key)) return STRINGS[lang][key];
+  if (hasOwn(STRINGS.en, key)) return STRINGS.en[key];
+  return key;
+}
+/** HTML fragment from the table; placeholder values are escaped. */
+function T(key, vars) {
+  const s = raw(key);
+  return vars ? s.replace(/\{(\w+)\}/g, (m, k) => (hasOwn(vars, k) ? esc(vars[k]) : m)) : s;
+}
+/** Plain text (tags stripped) for aria labels, titles and announcements. */
+function P(key, vars) {
+  const s = raw(key).replace(/<[^>]*>/g, '');
+  return vars ? s.replace(/\{(\w+)\}/g, (m, k) => (hasOwn(vars, k) ? String(vars[k]) : m)) : s;
+}
+function A(key, vars) { return esc(P(key, vars)); }
+
+/* ------------------------------------------------------------------ icons
+   ic() writes a placeholder; hydrate() fills it with the SVG. Inserting an SVG starts
+   its draw-in animation, so an icon replays whenever it is (re)inserted. Mask ids get a
+   unique suffix so two copies of one icon never share a mask. */
+function ic(name, cls) {
+  return '<span class="ic' + (cls ? ' ' + cls : '') + '" data-ic="' + name + '" aria-hidden="true"></span>';
+}
+function hydrate(scope) {
+  if (!scope) return;
+  const list = Array.from(scope.querySelectorAll('[data-ic]'));
+  if (scope.matches && scope.matches('[data-ic]')) list.unshift(scope);
+  for (const el of list) {
+    if (el.firstElementChild) continue;
+    const name = el.getAttribute('data-ic');
+    const src = ICONS[name];
+    if (!src) continue;
+    const n = ++iconSeq;
+    el.innerHTML = src.replace(/id="([^"]+)"/g, 'id="$1-' + n + '"').replace(/url\(#([^)]+)\)/g, 'url(#$1-' + n + ')');
+    const svg = el.firstElementChild;
+    if (!svg) continue;
+    svg.setAttribute('focusable', 'false');
+    if (reducedMQ.matches && name !== 'ring-resize') settle(svg, true);
+  }
+}
+/** Jump an icon to its final frame (and pause it under reduced motion). */
+function settle(svg, pause) {
+  try {
+    if (pause) svg.pauseAnimations();
+    svg.setCurrentTime(5);
+  } catch (e) { /* no SMIL support */ }
+}
+function swapIcon(el, name) {
+  if (!el) return;
+  el.setAttribute('data-ic', name);
+  el.textContent = '';
+  hydrate(el);
+}
+
+/* ------------------------------------------------------------------ checks and status */
+function checksByName() {
+  const m = Object.create(null);
+  const list = state && Array.isArray(state.checks) ? state.checks : [];
+  for (const c of list) if (c && typeof c.name === 'string') m[c.name] = c;
+  return m;
+}
+function extraUnknown() {
+  const list = state && Array.isArray(state.checks) ? state.checks : [];
+  return list.filter(c => c && typeof c.name === 'string' && !KNOWN_CHECKS.has(c.name));
+}
+const isRequired = c => c.required !== false;
+function brokerRunning() {
+  if (!state) return false;
+  if (typeof state.brokerRunning === 'boolean') return state.brokerRunning;
+  const b = checksByName().Broker;
+  return !!(b && b.ok);
+}
+function premiereMin() { return state && state.premiereMin ? String(state.premiereMin) : DEFAULT_PREMIERE_MIN; }
+function vars() { return { min: premiereMin() }; }
+function stepById(id) { return STEPS.find(s => s.id === id) || null; }
+function stepTitle(step, short) { return T(step.id + (short ? '.short' : '.title'), vars()); }
+function label(name) { return has('k.' + name) ? T('k.' + name) : esc(name); }
+
+/** ok | missing | optional | todo | unknown | checking | waiting */
+function baseStatus(step) {
+  if (FILE_MODE) return step.id === 'python' ? 'missing' : 'waiting';
+  if (!state) return loadError ? 'unknown' : 'checking';
+  const m = checksByName();
+  const list = step.checks.map(n => m[n]).filter(Boolean);
+  if (step.id === 'extras') list.push(...extraUnknown());
+  if (list.some(c => isRequired(c) && !c.ok)) return 'missing';
+  if (step.id === 'start') {
+    if (!list.length && typeof state.brokerRunning !== 'boolean') return 'unknown';
+    return brokerRunning() ? 'ok' : 'todo';
+  }
+  if (!list.length) return 'unknown';
+  if (!step.optional && step.checks.some(n => !m[n])) return 'unknown';
+  if (list.some(c => !c.ok)) return 'optional';
+  return 'ok';
+}
+function shownStatus(step) { return running && running.step === step.id ? 'running' : baseStatus(step); }
+function readyCount() { return REQUIRED_STEPS.filter(s => baseStatus(s) === 'ok').length; }
+function allSet() { return !FILE_MODE && !!state && readyCount() === REQUIRED_STEPS.length; }
+function firstSelection() {
+  if (FILE_MODE || !state) return 'python';
+  const miss = STEPS.find(s => baseStatus(s) === 'missing');
+  return miss ? miss.id : 'start';
+}
+function locked() { return FILE_MODE || !!running || !state || !!state.busy || loadError || connLost; }
+
+/* ------------------------------------------------------------------ card building blocks */
+function section(labelKey, inner) {
+  return '<section class="section"><h3 class="label">' + T(labelKey) + '</h3>' + inner + '</section>';
+}
+function foundSection(rows) {
+  if (!rows.length) return '';
+  return section('detected', '<div class="well kv">' +
+    rows.map(r => '<span class="k">' + r.k + '</span><span class="v">' + esc(r.v) + '</span>').join('') + '</div>');
+}
+function checkRows(names) {
+  const m = checksByName();
+  return names.map(n => {
+    const c = m[n];
+    return { k: label(n), v: c ? (c.detail || P(c.ok ? 'found' : 'notFound')) : P('notReported') };
+  });
+}
+function howto(items) {
+  return section('howto', '<ol class="howto">' + items.map((h, i) =>
+    '<li><span class="num" aria-hidden="true">' + (i + 1) + '</span><div class="howto-text">' + h + '</div></li>').join('') + '</ol>');
+}
+function note(iconName, html, extra, cls) {
+  return '<div class="note' + (cls ? ' ' + cls : '') + '">' + (iconName ? ic(iconName) : '') +
+    '<div class="note-text">' + html + '</div>' + (extra || '') + '</div>';
+}
+function waitingNote() { return note('question-circle', T('waitingNote'), '', 'st-waiting'); }
+function doneLine() { return '<p class="done-line">' + ic('confirm', 'st-ok') + '<span>' + T('nothingToDo') + '</span></p>'; }
+function cmdBox(cmd, key) {
+  return '<div class="cmd"><code class="cmd-text" tabindex="0">' + esc(cmd) + '</code>' +
+    '<button type="button" class="btn small" data-copy="' + esc(cmd) + '" data-fk="copy-' + key + '" aria-label="' + A('copyCmd') + '">' +
+    ic('clipboard-arrow') + '<span class="copy-label" data-label="copy">' + T('copy') + '</span></button></div>';
+}
+function actBtn(action, stepId, labelHtml, iconName, opt) {
+  opt = opt || {};
+  const isRun = !!running && running.name === action;
+  const off = locked() || !!opt.disabled;
+  return '<button type="button" class="btn' + (opt.primary ? ' primary' : '') + '" data-action="' + action + '" data-step="' + stepId +
+    '" data-fk="act-' + action + '"' + (off ? ' aria-disabled="true"' : '') + '>' +
+    ic(isRun ? 'ring-resize' : iconName) + '<span>' + (isRun ? T('working') : labelHtml) + '</span></button>';
+}
+function linkBtn(href, labelHtml, primary, key) {
+  return '<a class="btn' + (primary ? ' primary' : '') + '" href="' + esc(href) + '" target="_blank" rel="noopener noreferrer" data-fk="link-' + key + '">' +
+    ic('external-link') + '<span>' + labelHtml + '</span></a>';
+}
+function gotoBtn(stepId) {
+  return '<button type="button" class="btn small" data-goto="' + stepId + '" data-fk="goto-' + stepId + '"><span>' + T('goTo') + '</span>' + ic('arrow-right') + '</button>';
+}
+function actionsRow(btns) {
+  const list = btns.filter(Boolean);
+  return list.length ? '<div class="actions">' + list.join('') + '</div>' : '';
+}
+
+/** The text of an action result, in the current language (plain text). */
+function resultMessage(r) {
+  if (r.ok) return has('ok.' + r.action) ? P('ok.' + r.action) : (r.message || P('done'));
+  if (r.kind === 'busy') return P('busy');
+  if (r.kind === 'lost') return P('lost') + ' ' + P('lostHelp');
+  if (r.message) return r.message;
+  if (r.kind === 'unknown') return P('unknownAction');
+  if (r.kind === 'http') return P('httpError', { code: r.code });
+  return '';
+}
+function resultBlock(stepId) {
+  if (running && running.step === stepId) {
+    return '<div class="result st-running">' + ic('ring-resize') + '<div class="result-text"><b>' +
+      (has('run.' + running.name) ? T('run.' + running.name) : T('working')) + '</b><span class="elapsed" data-elapsed></span></div></div>';
+  }
+  const r = lastRun[stepId];
+  if (!r) return '';
+  const msg = resultMessage(r);
+  let text = r.ok ? '<b>' + esc(msg) + '</b>' : '<b>' + T('failed') + '</b> ' + esc(msg);
+  if (r.ok && r.message && r.message !== msg) text += '<span class="result-sub">' + esc(r.message) + '</span>';
+  let h = '<div class="result st-' + (r.ok ? 'ok' : 'missing') + '">' + ic(r.ok ? 'confirm-circle' : 'alert-circle') +
+    '<div class="result-text">' + text + '</div></div>';
+  if (r.output) {
+    h += '<details class="log" data-log="' + stepId + '"><summary class="btn small" data-fk="log-' + stepId + '">' + ic('document-list') +
+      '<span class="when-closed">' + T('showLog') + '</span><span class="when-open">' + T('hideLog') + '</span></summary>' +
+      '<div class="log-body"><pre class="well mono" tabindex="0">' + esc(r.output) + '</pre>' +
+      '<button type="button" class="btn small" data-copy-log="' + stepId + '" data-fk="copylog-' + stepId + '">' + ic('clipboard-arrow') +
+      '<span class="copy-label" data-label="copyLog">' + T('copyLog') + '</span></button></div></details>';
+  }
+  return h;
+}
+
+function headHtml(step, idx) {
+  return '<div class="hero">' + ic(step.icon) + '</div>' +
+    '<div class="head-text">' +
+    '<p class="eyebrow">' + T('stepOf', { n: idx + 1, m: STEPS.length }) + (step.optional ? ' · ' + T('optionalTag') : '') + '</p>' +
+    '<h2 id="card-title" tabindex="-1">' + stepTitle(step) + '</h2>' +
+    '<p class="why">' + T(step.id + '.why', vars()) + '</p>' +
+    '</div>';
+}
+function pillHtml(st) {
+  return '<span class="pill st-' + st + '">' + ic(STATUS_ICON[st]) + '<span>' + T('status.' + st) + '</span></span>';
+}
+function navHtml(step, st, idx) {
+  const last = idx === STEPS.length - 1;
+  const good = st === 'ok' || (step.optional && st !== 'running');
+  let h = '';
+  if (idx > 0) h += '<button type="button" class="btn" data-nav="-1" data-fk="nav-back">' + ic('arrow-left') + '<span>' + T('back') + '</span></button>';
+  h += '<span class="spacer"></span>';
+  if (!FILE_MODE) {
+    h += '<button type="button" class="btn" data-recheck data-label="checkAgain" data-fk="recheck">' + ic('rotate-270') +
+      '<span class="btn-label">' + T('checkAgain') + '</span></button>';
+  }
+  if (!last) h += '<button type="button" class="btn' + (good ? ' primary' : '') + '" data-nav="1" data-fk="nav-next"><span>' + T('next') + '</span>' + ic('arrow-right') + '</button>';
+  return h;
+}
+function bannerHtml() {
+  if (FILE_MODE) return '';
+  if (loadError || connLost) {
+    return '<div class="banner st-missing" role="alert">' + ic('alert-circle') + '<div class="note-text"><b>' + T('lost') + '</b> ' + T('lostHelp') + '</div>' +
+      '<button type="button" class="btn small" data-recheck data-label="tryAgain" data-fk="banner-retry">' + ic('rotate-270') +
+      '<span class="btn-label">' + T('tryAgain') + '</span></button></div>';
+  }
+  if (state && state.busy && !running) return '<div class="banner st-running">' + ic('ring-resize') + '<div class="note-text">' + T('busyNote') + '</div></div>';
+  return '';
+}
+function loadingCard() {
+  return '<article class="card"><div class="card-body center-state" role="status">' + ic('ring-resize', 'big-spin') + '<p>' + T('loading') + '</p></div></article>';
+}
+function errorCard() {
+  return '<article class="card"><div class="card-body center-state">' + bannerHtml() + '</div></article>';
+}
+
+/* ------------------------------------------------------------------ per-step content */
+function pythonHowto(fileMode) {
+  return howto([
+    T('python.s1') + '<div class="inline-actions">' + linkBtn(PY_URL, T('python.get'), true, 'py') + '</div>' +
+      '<p class="sub">' + T('python.s1b') + '</p>' + cmdBox(PY_WINGET, 'py'),
+    T('python.s2'),
+    T(fileMode ? 'python.s3' : 'python.s3s'),
+  ]);
+}
+
+function extraRow(o) {
+  const m = checksByName();
+  const cs = o.checks.map(n => m[n]);
+  const present = cs.filter(Boolean);
+  let st;
+  if (FILE_MODE) st = 'waiting';
+  else if (!state) st = 'checking';
+  else if (!present.length) st = 'unknown';
+  else if (present.some(c => !c.ok)) st = present.some(c => !c.ok && isRequired(c)) ? 'missing' : 'xmiss';
+  else st = present.length === cs.length ? 'ok' : 'unknown';
+  const word = st === 'ok' ? T('x.ok') : (st === 'xmiss' || st === 'missing') ? T('x.missing') : T('status.' + st);
+  const isRun = !!(running && o.action && running.name === o.action[0]);
+  const needs = st !== 'ok';
+  let detail = '';
+  if (present.length) {
+    detail = '<div class="row-detail">' + present.map(c => (o.checks.length > 1 ? esc(c.name) + ': ' : '') + esc(c.detail || P(c.ok ? 'found' : 'notFound'))).join('<br>') + '</div>';
+  }
+  let extra = '';
+  if (needs && o.cmd) extra += '<p class="row-sub cmd-intro">' + o.cmdIntro + '</p>' + cmdBox(o.cmd, o.key);
+  if (needs && o.after && !FILE_MODE) extra += '<p class="row-sub cmd-intro">' + o.after + '</p>';
+  const act = needs && o.action && !FILE_MODE ? actBtn(o.action[0], 'extras', o.action[1], o.action[2]) : '';
+  return '<div class="row">' +
+    '<span class="row-icon st-' + st + '">' + ic(isRun ? 'ring-resize' : STATUS_ICON[st]) + '</span>' +
+    '<div class="row-text"><div class="row-title"><span>' + esc(o.name) + '</span><span class="row-state st-' + st + '">' + word + '</span></div>' +
+    (o.purpose ? '<div class="row-sub">' + o.purpose + '</div>' : '') + detail + extra + '</div>' +
+    (act ? '<div class="row-actions">' + act + '</div>' : '') +
+    '</div>';
+}
+
+function switchRow(key, iconName, title, sub, on, action, related) {
+  const busy = !!(running && related.indexOf(running.name) >= 0);
+  const off = !action || locked();
+  return '<div class="row">' +
+    '<span class="row-icon">' + ic(iconName) + '</span>' +
+    '<div class="row-text"><div class="row-title" id="sw-' + key + '-t">' + title + '</div><div class="row-sub" id="sw-' + key + '-d">' + sub + '</div></div>' +
+    '<button type="button" class="switch" role="switch" aria-checked="' + (on ? 'true' : 'false') + '" aria-labelledby="sw-' + key + '-t" aria-describedby="sw-' + key + '-d"' +
+    ' data-fk="sw-' + key + '"' + (action ? ' data-action="' + action + '" data-step="start"' : '') + (off ? ' aria-disabled="true"' : '') + '>' +
+    '<span class="switch-track"><span class="switch-knob"></span></span>' +
+    '<span class="switch-word">' + (busy ? ic('ring-resize') : T(on ? 'on' : 'off')) + '</span></button>' +
+    '</div>';
+}
+function switchRows() {
+  const sc = (state && state.shortcuts) || {};
+  const desk = !!sc.desktop;
+  const auto = !!sc.autostart;
+  return switchRow('desktop', 'monitor-arrow-down', T('start.desk'), T(desk ? 'start.deskHave' : 'start.deskSub'), desk,
+      desk ? '' : 'shortcut-desktop', ['shortcut-desktop']) +
+    switchRow('autostart', 'sun-rising', T('start.auto'), T('start.autoSub'), auto,
+      auto ? 'autostart-off' : 'autostart-on', ['autostart-on', 'autostart-off']);
+}
+
+const MAIN = {
+  python(step, st) {
+    if (FILE_MODE) return note('alert-circle', T('python.missingFile'), '', 'st-missing') + pythonHowto(true);
+    const c = checksByName().Python;
+    const rows = [{ k: T('python.version'), v: (c && c.detail) || state.python || P('notReported') }];
+    if (state.pythonExe) rows.push({ k: T('python.location'), v: state.pythonExe });
+    let h = foundSection(rows);
+    if (st === 'ok') h += doneLine();
+    else if (st === 'missing') h += note('alert-circle', T('python.missingServed'), '', 'st-missing') + pythonHowto(false);
+    return h + resultBlock('python');
+  },
+
+  packages(step, st) {
+    const list = [T('packages.s1'), T('packages.s2')];
+    if (FILE_MODE) return waitingNote() + howto(list);
+    let h = foundSection(checkRows(['websockets']));
+    if (st === 'ok') h += doneLine();
+    else h += howto(list) + actionsRow([actBtn('install-deps', 'packages', T('packages.btn'), 'cloud-alt-download', { primary: true })]);
+    return h + resultBlock('packages');
+  },
+
+  premiere(step, st) {
+    const list = [T('premiere.s1'), T('premiere.s2', vars()), T('premiere.s3')];
+    if (FILE_MODE) return waitingNote() + howto(list);
+    let h = foundSection(checkRows(['Premiere Pro (UXP)']));
+    if (st === 'ok') h += doneLine();
+    else h += howto(list) + actionsRow([actBtn('open-cc', 'premiere', T('premiere.btn'), 'external-link', { primary: true })]);
+    return h + resultBlock('premiere');
+  },
+
+  udt(step, st) {
+    const list = [T('udt.s1'), T('udt.s2'), T('udt.s3'), T('udt.s4')];
+    if (FILE_MODE) return waitingNote() + howto(list);
+    let h = foundSection(checkRows(['UXP Developer Tool']));
+    if (st === 'ok') h += doneLine();
+    else h += howto(list) + actionsRow([actBtn('open-cc', 'udt', T('udt.btn'), 'external-link', { primary: true })]);
+    return h + resultBlock('udt');
+  },
+
+  devmode(step, st) {
+    const list = [T('devmode.s1'), T('devmode.s2'), T('devmode.s3')];
+    if (FILE_MODE) return waitingNote() + howto(list);
+    const udt = checksByName()['UXP Developer Tool'];
+    const udtMissing = !!(udt && !udt.ok);
+    let h = foundSection(checkRows(['UXP developer mode']));
+    if (st === 'ok') {
+      h += doneLine() + note('question-circle', '<b>' + T('devmode.noteTitle') + '</b><br>' + T('devmode.okNote'));
+    } else {
+      h += howto(list);
+      if (udtMissing) h += note('alert', T('devmode.needUdt'), gotoBtn('udt'), 'st-optional');
+      h += actionsRow([actBtn('open-udt', 'devmode', T('devmode.btn'), 'external-link', { primary: true, disabled: udtMissing })]);
+      h += note('question-circle', '<b>' + T('devmode.noteTitle') + '</b><br>' + T('devmode.note'));
+    }
+    return h + resultBlock('devmode');
+  },
+
+  extras() {
+    const rows = [
+      extraRow({ key: 'ffmpeg', name: 'FFmpeg', checks: ['ffmpeg', 'ffprobe'], purpose: T('x.ffmpeg'),
+        action: ['open-ffmpeg', T('x.ffmpegBtn'), 'external-link'], cmd: FFMPEG_WINGET, cmdIntro: T('x.ffmpegCmd'), after: T('x.ffmpegAfter') }),
+      extraRow({ key: 'pil', name: 'Pillow', checks: ['PIL'], purpose: T('x.pil'), action: ['install-pillow', T('install'), 'cloud-alt-download'] }),
+      extraRow({ key: 'whisper', name: 'faster-whisper', checks: ['faster_whisper'], purpose: T('x.whisper'),
+        action: ['install-whisper', T('install'), 'cloud-alt-download'] }),
+    ];
+    extraUnknown().forEach((c, i) => {
+      rows.push(extraRow({ key: 'other' + i, name: c.name, checks: [c.name], purpose: c.fix ? esc(c.fix) : '' }));
+    });
+    return '<div class="rows">' + rows.join('') + '</div>' + resultBlock('extras');
+  },
+
+  start() {
+    const list = [T('start.s1'), T('start.s2')];
+    if (FILE_MODE) return waitingNote() + howto(list);
+    const m = checksByName();
+    const live = brokerRunning();
+    let h = '';
+    if (allSet()) {
+      h += '<div class="allset">' + ic('confirm-circle', 'allset-ic st-ok') +
+        '<div><h3 class="allset-title st-ok">' + T('start.allTitle') + '</h3><p>' + T('start.all') + '</p></div></div>';
+    } else {
+      const miss = REQUIRED_STEPS.find(s => s.id !== 'start' && baseStatus(s) !== 'ok');
+      if (miss) h += note('alert', T(live ? 'start.runningBut' : 'start.notReady', { step: P(miss.id + '.title', vars()) }),
+        gotoBtn(miss.id), 'st-optional');
+    }
+    ['Bridge data folder', 'Start script'].forEach(n => {
+      const c = m[n];
+      if (c && !c.ok) h += note('alert-circle', '<b>' + label(n) + '</b> ' + esc(c.fix || c.detail || ''), '', 'st-missing');
+    });
+    const rows = checkRows(['Bridge data folder', 'Start script']);
+    const b = m.Broker;
+    rows.push({ k: label('Broker'), v: b && b.detail && !!b.ok === live ? b.detail : P(live ? 'start.isRunning' : 'start.notRunning') });
+    h += foundSection(rows);
+    if (!live) h += howto(list) + actionsRow([actBtn('start-bridge', 'start', T('start.btn'), 'play', { primary: true })]);
+    h += section('start.options', '<div class="rows">' + switchRows() + '</div>');
+    return h + resultBlock('start');
+  },
+};
+
+/* ------------------------------------------------------------------ rendering
+   The card is split into regions; on a refresh only the regions whose HTML changed are
+   replaced, so unchanged icons do not replay. A new step (or language) rebuilds the card
+   with the enter animation. */
+const REGIONS = ['banner', 'head', 'pill', 'main', 'nav'];
+
+function buildParts() {
+  if (!FILE_MODE && !state) {
+    return { key: lang + ':' + (loadError ? 'error' : 'loading'), whole: loadError ? errorCard() : loadingCard() };
+  }
+  const step = stepById(selected) || STEPS[0];
+  const st = shownStatus(step);
+  const idx = STEPS.indexOf(step);
+  return {
+    key: lang + ':' + step.id,
+    banner: bannerHtml(),
+    head: headHtml(step, idx),
+    pill: pillHtml(st),
+    main: MAIN[step.id](step, st),
+    nav: navHtml(step, st, idx),
+  };
+}
+function cardSkeleton(p) {
+  if (p.whole != null) return p.whole;
+  return '<article class="card" aria-labelledby="card-title"><div class="card-body">' +
+    '<div data-region="banner">' + p.banner + '</div>' +
+    '<header class="card-head"><div class="head-main" data-region="head">' + p.head + '</div>' +
+    '<div class="head-pill" data-region="pill">' + p.pill + '</div></header>' +
+    '<div data-region="main">' + p.main + '</div>' +
+    '</div><footer class="card-nav" data-region="nav">' + p.nav + '</footer></article>';
+}
+function applyLogState(scope) {
+  scope.querySelectorAll('details[data-log]').forEach(d => { d.open = !!logOpen[d.getAttribute('data-log')]; });
+}
+function focusHeading() {
+  const h = document.getElementById('card-title');
+  if (h) h.focus({ preventScroll: true });
+}
+function renderDetail() {
+  const host = $('#detail');
+  const parts = buildParts();
+  const sameCard = parts.key === cardKey && cardParts && (parts.whole == null) === (cardParts.whole == null);
+  if (!sameCard || (parts.whole != null && parts.whole !== cardParts.whole)) {
+    host.innerHTML = cardSkeleton(parts);
+    hydrate(host);
+    applyLogState(host);
+    if (!sameCard && host.firstElementChild) host.firstElementChild.classList.add('enter');
+    cardKey = parts.key;
+    cardParts = parts;
+    tickElapsed();
+    return;
+  }
+  if (parts.whole != null) return;
+  for (const r of REGIONS) {
+    if (parts[r] === cardParts[r]) continue;
+    const el = host.querySelector('[data-region="' + r + '"]');
+    if (!el) continue;
+    const active = document.activeElement;
+    const fk = active && el.contains(active) ? active.getAttribute('data-fk') : null;
+    el.innerHTML = parts[r];
+    hydrate(el);
+    applyLogState(el);
+    if (fk) {
+      const target = el.querySelector('[data-fk="' + fk + '"]');
+      if (target) target.focus({ preventScroll: true });
+      else focusHeading();
+    }
+  }
+  cardParts = parts;
+  tickElapsed();
+}
+
+function buildRail(intro) {
+  const ol = $('#steps');
+  ol.innerHTML = STEPS.map((s, i) =>
+    '<li style="--i:' + (i + 1) + '"><button type="button" class="rail-item" data-rail="' + s.id + '" id="rail-' + s.id + '">' +
+    '<span class="rail-icon">' + ic(s.icon) + '</span>' +
+    '<span class="rail-text"><span class="rail-title"><span class="full"></span><span class="short"></span></span>' +
+    '<span class="rail-status"><span class="rail-sicon"></span><span class="rail-word"></span></span></span>' +
+    '</button></li>').join('');
+  Object.keys(railShown).forEach(k => { delete railShown[k]; });
+  hydrate(ol);
+  updateRail();
+  if (intro) {
+    const rail = $('#rail');
+    rail.classList.add('intro');
+    setTimeout(() => rail.classList.remove('intro'), 1000);
+  }
+}
+function setOnce(el, html) {
+  if (el.getAttribute('data-v') === html) return;
+  el.innerHTML = html;
+  el.setAttribute('data-v', html);
+}
+function updateRail() {
+  for (const s of STEPS) {
+    const btn = document.getElementById('rail-' + s.id);
+    if (!btn) continue;
+    setOnce(btn.querySelector('.full'), stepTitle(s));
+    setOnce(btn.querySelector('.short'), stepTitle(s, true));
+    const st = shownStatus(s);
+    if (railShown[s.id] !== st) {
+      railShown[s.id] = st;
+      const box = btn.querySelector('.rail-status');
+      box.className = 'rail-status st-' + st;
+      const si = box.querySelector('.rail-sicon');
+      si.innerHTML = ic(STATUS_ICON[st]);
+      box.querySelector('.rail-word').innerHTML = T('status.' + st);
+      hydrate(si);
+    }
+    if (s.id === selected) btn.setAttribute('aria-current', 'step');
+    else btn.removeAttribute('aria-current');
+  }
+  const ready = readyCount();
+  const total = REQUIRED_STEPS.length;
+  const text = allSet() ? P('progressDone') : P('progress', { n: ready, m: total });
+  $('#overallCount').textContent = text;
+  const bar = $('#progress');
+  bar.setAttribute('aria-valuenow', String(ready));
+  bar.setAttribute('aria-valuemax', String(total));
+  bar.setAttribute('aria-valuetext', text);
+  const p = ready / total;
+  $('#fill').style.transform = p <= 0 ? 'translateX(calc(-100% - 4px))' : 'translateX(' + ((p - 1) * 100).toFixed(2) + '%)';
+}
+function renderTop() {
+  const v = $('#version');
+  const ver = state && state.version ? String(state.version) : '';
+  v.hidden = !ver;
+  v.textContent = ver ? (/^v/i.test(ver) ? ver : 'v' + ver) : '';
+  $('#demoBadge').hidden = !(state && state.demo);
+  const fb = $('#folderBtn');
+  fb.hidden = FILE_MODE;
+  if (state && state.repo) fb.title = String(state.repo);
+  if (locked()) fb.setAttribute('aria-disabled', 'true');
+  else fb.removeAttribute('aria-disabled');
+}
+function renderAll() {
+  renderTop();
+  updateRail();
+  renderDetail();
+}
+
+/** Keep the selected rail item inside the rail's own scroll area (never scrolls the page). */
+function revealRailItem(id) {
+  const ol = $('#steps');
+  const btn = document.getElementById('rail-' + id);
+  if (!ol || !btn) return;
+  const li = btn.parentElement;
+  const behavior = reducedMQ.matches ? 'auto' : 'smooth';
+  if (ol.scrollWidth > ol.clientWidth + 1) {
+    if (li.offsetLeft < ol.scrollLeft) ol.scrollTo({ left: li.offsetLeft - 8, behavior });
+    else if (li.offsetLeft + li.offsetWidth > ol.scrollLeft + ol.clientWidth) ol.scrollTo({ left: li.offsetLeft + li.offsetWidth - ol.clientWidth + 8, behavior });
+  } else if (ol.scrollHeight > ol.clientHeight + 1) {
+    if (li.offsetTop < ol.scrollTop) ol.scrollTo({ top: li.offsetTop - 8, behavior });
+    else if (li.offsetTop + li.offsetHeight > ol.scrollTop + ol.clientHeight) ol.scrollTo({ top: li.offsetTop + li.offsetHeight - ol.clientHeight + 8, behavior });
+  }
+}
+function select(id, moveFocus) {
+  if (!stepById(id)) return;
+  const changed = id !== selected;
+  selected = id;
+  updateRail();
+  renderDetail();
+  if (changed) {
+    const body = $('#detail .card-body');
+    if (body) body.scrollTop = 0;
+    revealRailItem(id);
+  }
+  if (moveFocus) {
+    focusHeading();
+    const detail = $('#detail');
+    if (detail.getBoundingClientRect().top < 0) detail.scrollIntoView({ block: 'start', behavior: reducedMQ.matches ? 'auto' : 'smooth' });
+  }
+}
+function go(delta) {
+  const i = STEPS.findIndex(s => s.id === selected);
+  const j = i + delta;
+  if (i < 0 || j < 0 || j >= STEPS.length) return;
+  select(STEPS[j].id, true);
+}
+
+/* ------------------------------------------------------------------ talking to the setup helper
+   Relative URLs only: the page lives at http://127.0.0.1:<port>/<secret>/. Every POST
+   carries X-Bridge-Setup: 1 and a JSON object body. No timeout on actions (pip can take
+   up to 15 minutes). */
+function post(path, body, extra) {
+  return fetch(path, Object.assign({ method: 'POST', headers: POST_HEADERS, body: JSON.stringify(body || {}), cache: 'no-store' }, extra || {}));
+}
+
+function refreshState(manual) {
+  if (FILE_MODE) return Promise.resolve();
+  if (inflight) return inflight;
+  const t0 = Date.now();
+  inflight = fetch('api/state', { cache: 'no-store' })
+    .then(res => {
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      return res.json();
+    })
+    .then(s => {
+      if (!s || typeof s !== 'object') throw new Error('bad state');
+      state = s;
+      loadError = false;
+      connLost = false;
+      pingFails = 0;
+    })
+    .catch(() => { loadError = true; })
+    .then(() => (manual ? sleep(Math.max(0, 420 - (Date.now() - t0))) : null))
+    .then(() => {
+      inflight = null;
+      lastRefreshAt = Date.now();
+      if (state && !selected) selected = firstSelection();
+      renderAll();
+      scheduleBusyPoll();
+    });
+  return inflight;
+}
+function scheduleBusyPoll() {
+  clearTimeout(busyTimer);
+  if (!FILE_MODE && state && state.busy && !running) busyTimer = setTimeout(() => refreshState(), 2000);
+}
+function scheduleRecheck() {
+  clearTimeout(recheckTimer);
+  recheckTimer = setTimeout(() => { if (Date.now() - lastRefreshAt > 1500) refreshState(); }, 350);
+}
+
+async function manualRecheck() {
+  if (FILE_MODE || checkingManual) return;
+  checkingManual = true;
+  document.querySelectorAll('[data-recheck]').forEach(b => {
+    b.setAttribute('aria-disabled', 'true');
+    b.setAttribute('aria-busy', 'true');
+    swapIcon(b.querySelector('[data-ic]'), 'ring-resize');
+    const l = b.querySelector('.btn-label');
+    if (l) l.textContent = P('checking');
+  });
+  announce(P('checking'));
+  await refreshState(true);
+  checkingManual = false;
+  document.querySelectorAll('[data-recheck][aria-busy="true"]').forEach(b => {
+    b.removeAttribute('aria-disabled');
+    b.removeAttribute('aria-busy');
+    swapIcon(b.querySelector('[data-ic]'), 'rotate-270');
+    const l = b.querySelector('.btn-label');
+    if (l) l.textContent = P(b.getAttribute('data-label') || 'checkAgain');
+  });
+  announce(state && !loadError ? P('checked', { n: readyCount(), m: REQUIRED_STEPS.length }) : P('lost'));
+}
+
+async function runAction(name, stepId) {
+  if (FILE_MODE || running) return;
+  if (!state || state.busy) { announce(P('busy')); return; }
+  running = { name: name, step: stepId, started: Date.now() };
+  if (stepId) delete lastRun[stepId];
+  clearTimeout(busyTimer);
+  renderAll();
+  clearInterval(elapsedTimer);
+  elapsedTimer = setInterval(tickElapsed, 1000);
+  announce(has('run.' + name) ? P('run.' + name) : P('working'));
+  const r = { action: name, ok: false, kind: 'fail', message: '', output: '', code: 0 };
+  let gotState = false;
+  try {
+    const res = await post('api/action', { action: name });
+    r.code = res.status;
+    let data = null;
+    try { data = await res.json(); } catch (e) { data = null; }
+    if (data && typeof data.message === 'string') r.message = data.message;
+    if (data && data.output != null) r.output = typeof data.output === 'string' ? data.output : JSON.stringify(data.output, null, 2);
+    if (res.status === 409) {
+      r.kind = 'busy';
+      if (data && typeof data.busy === 'string' && !r.message) r.message = data.busy;
+    } else if (res.status === 400) r.kind = 'unknown';
+    else if (!res.ok || !data) r.kind = 'http';
+    else { r.ok = !!data.ok; r.kind = r.ok ? 'ok' : 'fail'; }
+    if (data && data.state && typeof data.state === 'object') {
+      state = data.state;
+      loadError = false;
+      connLost = false;
+      gotState = true;
+    }
+  } catch (e) {
+    r.kind = 'lost';
+  }
+  clearInterval(elapsedTimer);
+  running = null;
+  if (stepId) {
+    lastRun[stepId] = r;
+    logOpen[stepId] = !r.ok && !!r.output;
+  }
+  renderAll();
+  const msg = resultMessage(r);
+  if (stepId) announce(r.ok ? msg : P('failed') + ' ' + msg);
+  else toast(msg, r.ok);
+  if (!gotState) refreshState();
+  if (name === 'start-bridge' && r.ok) {
+    setTimeout(() => refreshState(), 1500);
+    setTimeout(() => refreshState(), 4000);
+  }
+  scheduleBusyPoll();
+}
+
+function heartbeat() {
+  post('api/ping', {})
+    .then(res => res.ok, () => false)
+    .then(ok => {
+      if (ok) {
+        pingFails = 0;
+        if (connLost) { connLost = false; refreshState(); }
+      } else if (++pingFails >= 2 && !connLost) {
+        connLost = true;
+        renderAll();
+      }
+    });
+}
+function sayBye() {
+  try { post('api/bye', {}, { keepalive: true }).catch(() => {}); } catch (e) { /* page is going away */ }
+}
+function tickElapsed() {
+  if (!running) return;
+  const s = Math.max(0, Math.floor((Date.now() - running.started) / 1000));
+  const txt = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  document.querySelectorAll('[data-elapsed]').forEach(el => { el.textContent = txt; });
+}
+
+/* ------------------------------------------------------------------ feedback */
+function announce(msg) {
+  const el = $('#sr');
+  el.textContent = '';
+  setTimeout(() => { el.textContent = msg; }, 40);
+}
+function toast(msg, ok) {
+  const el = $('#toast');
+  el.className = 'toast st-' + (ok ? 'ok' : 'missing');
+  el.innerHTML = ic(ok ? 'confirm-circle' : 'alert-circle') + '<span>' + esc(msg) + '</span>';
+  hydrate(el);
+  void el.offsetWidth;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3600);
+}
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) { /* fall back below */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+async function doCopy(btn, text) {
+  const ok = await copyText(text);
+  const icon = btn.querySelector('[data-ic]');
+  const lbl = btn.querySelector('.copy-label');
+  swapIcon(icon, ok ? 'clipboard-check' : 'clipboard-arrow');
+  if (lbl) lbl.textContent = P(ok ? 'copied' : lbl.getAttribute('data-label') || 'copy');
+  announce(P(ok ? 'copied' : 'copyFailed'));
+  clearTimeout(btn._copyTimer);
+  btn._copyTimer = setTimeout(() => {
+    if (!btn.isConnected) return;
+    swapIcon(icon, 'clipboard-arrow');
+    if (lbl) lbl.textContent = P(lbl.getAttribute('data-label') || 'copy');
+  }, 2200);
+}
+
+/* ------------------------------------------------------------------ theme (dark by default) and language */
+function effectiveTheme() { return root.getAttribute('data-theme') === 'light' ? 'light' : 'dark'; }
+function applyThemeAttr(t) {
+  if (t === 'light' || t === 'dark') root.setAttribute('data-theme', t);
+  else root.removeAttribute('data-theme');
+}
+function updateThemeLabel() {
+  const btn = $('#themeBtn');
+  const label = P(effectiveTheme() === 'dark' ? 'theme.toLight' : 'theme.toDark');
+  btn.setAttribute('aria-label', label);
+  btn.title = label;
+}
+function updateThemeIcon(animate) {
+  const btn = $('#themeBtn');
+  // The icon shows the current theme: a moon in dark, a sun in light.
+  btn.innerHTML = ic(effectiveTheme() === 'dark' ? 'sunny-to-moon' : 'moon-to-sunny');
+  hydrate(btn);
+  const svg = btn.querySelector('svg');
+  if (svg && !animate) settle(svg, false);
+  updateThemeLabel();
+}
+function toggleTheme() {
+  const next = effectiveTheme() === 'dark' ? 'light' : 'dark';
+  save('ppab.theme', next);
+  applyThemeAttr(next);
+  updateThemeIcon(true);
+}
+function pickLang() {
+  const saved = load('ppab.lang');
+  if (saved === 'en' || saved === 'zh') return saved;
+  const nav = (navigator.languages && navigator.languages[0]) || navigator.language || 'en';
+  return /^zh/i.test(nav) ? 'zh' : 'en';
+}
+function applyLang() {
+  root.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  document.title = P('docTitle');
+  document.querySelectorAll('[data-t]').forEach(el => { el.innerHTML = T(el.getAttribute('data-t')); });
+  document.querySelectorAll('[data-t-label]').forEach(el => { el.setAttribute('aria-label', P(el.getAttribute('data-t-label'))); });
+  document.querySelectorAll('[data-lang]').forEach(b => { b.setAttribute('aria-pressed', String(b.getAttribute('data-lang') === lang)); });
+  $('#demoBadge').title = P('demoTitle');
+  updateThemeLabel();
+}
+function setLang(next) {
+  if ((next !== 'en' && next !== 'zh') || next === lang) return;
+  lang = next;
+  save('ppab.lang', next);
+  applyLang();
+  buildRail(false);
+  renderAll();
+}
+
+/* ------------------------------------------------------------------ events */
+function onClick(e) {
+  const el = e.target.closest('button, a');
+  if (!el) return;
+  if (el.getAttribute('aria-disabled') === 'true') { e.preventDefault(); return; }
+  const d = el.dataset;
+  if (d.action) runAction(d.action, d.step || '');
+  else if (d.rail) select(d.rail, false);
+  else if (d.nav) go(Number(d.nav));
+  else if ('recheck' in d) manualRecheck();
+  else if ('copy' in d) doCopy(el, d.copy);
+  else if (d.copyLog) { const r = lastRun[d.copyLog]; if (r && r.output) doCopy(el, r.output); }
+  else if (d.goto) select(d.goto, true);
+  else if (d.lang) setLang(d.lang);
+  else if (el.id === 'themeBtn') toggleTheme();
+}
+function onRailKey(e) {
+  const btns = Array.from(document.querySelectorAll('.rail-item'));
+  const i = btns.indexOf(document.activeElement);
+  if (i < 0) return;
+  const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
+  let j;
+  if (hasOwn(step, e.key)) j = Math.max(0, Math.min(btns.length - 1, i + step[e.key]));
+  else if (e.key === 'Home') j = 0;
+  else if (e.key === 'End') j = btns.length - 1;
+  else return;
+  e.preventDefault();
+  btns[j].focus();
+}
+function bind() {
+  document.addEventListener('click', onClick);
+  document.addEventListener('toggle', e => {
+    const d = e.target;
+    if (d && d.matches && d.matches('details[data-log]')) logOpen[d.getAttribute('data-log')] = d.open;
+  }, true);
+  $('#steps').addEventListener('keydown', onRailKey);
+  if (!FILE_MODE) {
+    // Coming back from Creative Cloud or UXP Developer Tool: check again.
+    window.addEventListener('focus', scheduleRecheck);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleRecheck(); });
+    window.addEventListener('pagehide', sayBye);
+    setInterval(heartbeat, 15000);
+  }
+}
+
+/* ------------------------------------------------------------------ start */
+function init() {
+  lang = pickLang();
+  applyThemeAttr(load('ppab.theme'));
+  applyLang();
+  updateThemeIcon(false);
+  hydrate($('.foot'));
+  if (FILE_MODE) {
+    selected = 'python';
+    root.classList.add('is-file');
+  }
+  buildRail(true);
+  renderAll();
+  bind();
+  if (!FILE_MODE) refreshState().then(heartbeat);
+}
+init();
+})();
+</script>
+</body>
+</html>
