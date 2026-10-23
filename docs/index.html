@@ -38,11 +38,10 @@
 :root {
   color-scheme: dark;
   --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
   --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
   --ease: cubic-bezier(0.23, 1, 0.32, 1);
   --page: #000000;
-  --plate: rgba(8, 8, 8, 0.6);
-  --glass-border: rgba(255, 255, 255, 0.08);
   --el: #0d0d0d;
   --well: #030303;
   --sh-d: rgba(0, 0, 0, 0.95);
@@ -56,14 +55,12 @@
   --accent-hover: #e4e4e4;
   --accent-text: #e5e5e5;
   --ok: #ffffff;
-  --blob-1: #2e2e2e;
-  --blob-2: #1a1a1a;
-  --blob-3: #202020;
-  --blob-4: #161616;
-  --raise: 9px 9px 20px var(--sh-d), -9px -9px 20px var(--sh-l);
-  --raise-sm: 5px 5px 12px var(--sh-d), -5px -5px 12px var(--sh-l);
-  --inset: inset 5px 5px 11px var(--sh-d), inset -5px -5px 11px var(--sh-l);
-  --inset-sm: inset 3px 3px 7px var(--sh-d), inset -3px -3px 7px var(--sh-l);
+  /* on pure black the light half of a soft shadow turns into a grey smear around every card, so surfaces
+     get only a hairline of light along the top edge (raised) or a tight dark inner shadow (sunken) */
+  --raise: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --raise-sm: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --inset: inset 0 1px 3px rgba(0, 0, 0, 0.9);
+  --inset-sm: inset 0 1px 2px rgba(0, 0, 0, 0.9);
 }
 *, *::before, *::after { box-sizing: border-box; }
 html { background: var(--page); scroll-behavior: smooth; }
@@ -78,20 +75,7 @@ a { color: inherit; }
 .ic { display: inline-flex; width: 1.15em; height: 1.15em; flex: none; }
 .ic svg { width: 100%; height: 100%; display: block; }
 
-/* background: soft colour blobs behind frosted glass */
-.backdrop { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
-.blob { position: absolute; border-radius: 50%; filter: blur(110px); opacity: 0.18; }
-.b1 { width: 60vmax; height: 60vmax; background: var(--blob-1); top: -24vmax; left: -16vmax; }
-.b2 { width: 54vmax; height: 54vmax; background: var(--blob-2); bottom: -26vmax; left: 20vw; }
-.b3 { width: 46vmax; height: 46vmax; background: var(--blob-3); top: 30vh; right: -20vmax; }
-.b4 { width: 40vmax; height: 40vmax; background: var(--blob-4); top: -12vmax; right: 10vw; opacity: 0.4; }
-
 .wrap { position: relative; z-index: 1; width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
-.glass {
-  background: var(--plate); border: 1px solid var(--glass-border); border-radius: 28px;
-  -webkit-backdrop-filter: blur(28px) saturate(150%); backdrop-filter: blur(28px) saturate(150%);
-  box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.5);
-}
 
 /* top bar */
 .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 0; }
@@ -108,39 +92,44 @@ a { color: inherit; }
 }
 .links a.gh { display: inline-flex; align-items: center; gap: 8px; color: var(--text); background: var(--el); box-shadow: var(--raise-sm); border: 1px solid var(--edge); }
 
-/* buttons */
+/* buttons: four light layers - top light and bottom shade inside, a tight contact shadow and a faint glow outside */
 .btn {
-  display: inline-flex; align-items: center; gap: 10px; padding: 14px 22px; border-radius: 16px;
-  font-weight: 650; font-size: 17px; text-decoration: none; color: var(--text);
-  background: var(--el); box-shadow: var(--raise-sm); border: 1px solid var(--edge);
-  transition: transform 160ms var(--ease), box-shadow 160ms var(--ease), background-color 160ms var(--ease);
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 56px; padding: 10px 26px;
+  border-radius: 28px; font-weight: 650; font-size: 17px; text-decoration: none; color: var(--text);
+  border: 1px solid var(--edge); background-color: var(--el);
+  background-image: linear-gradient(180deg, #1b1b1b, #0c0c0c);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 0 rgba(0, 0, 0, 0.7),
+    0 1px 2px rgba(0, 0, 0, 0.9), 0 8px 22px -6px rgba(255, 255, 255, 0.06);
+  transition: transform 160ms var(--ease), box-shadow 160ms var(--ease), border-color 160ms var(--ease);
 }
-.btn:active { transform: scale(0.97); box-shadow: var(--inset-sm); }
-.btn.primary { background: var(--accent-btn); color: #000; border-color: transparent; }
+.btn:active {
+  transform: scale(0.97);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.75), inset 0 -1px 0 rgba(255, 255, 255, 0.06), 0 0 0 rgba(0, 0, 0, 0);
+}
+.btn.primary {
+  color: #000; border-color: transparent; background-color: var(--accent-btn);
+  background-image: linear-gradient(180deg, #ffffff, #e6e6e6);
+  box-shadow: inset 0 1px 0 #ffffff, inset 0 -2px 0 rgba(0, 0, 0, 0.14),
+    0 1px 2px rgba(0, 0, 0, 0.8), 0 10px 26px -8px rgba(255, 255, 255, 0.18);
+}
+.btn.primary:active {
+  background-image: linear-gradient(180deg, #e2e2e2, #f2f2f2);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.22), 0 0 0 rgba(0, 0, 0, 0);
+}
 @media (hover: hover) and (pointer: fine) {
   .links a:hover { color: var(--text); }
-  .btn.primary:hover { background: var(--accent-hover); }
-  .btn:not(.primary):hover { border-color: rgba(255, 255, 255, 0.16); }
+  .btn.primary:hover { background-image: linear-gradient(180deg, #ffffff, #dedede); }
+  .btn:not(.primary):hover { border-color: rgba(255, 255, 255, 0.16); background-image: linear-gradient(180deg, #212121, #101010); }
 }
-
-/* hero */
-.hero { padding: 64px 56px 56px; text-align: center; }
-.eyebrow {
-  display: inline-block; padding: 6px 14px; border-radius: 999px; font-size: 14px; font-weight: 600;
-  color: var(--accent-text); background: var(--well); box-shadow: var(--inset-sm); margin-bottom: 22px;
-}
-h1 { font-size: clamp(36px, 6vw, 64px); line-height: 1.08; letter-spacing: -0.02em; font-weight: 700; max-width: 14em; margin: 0 auto; }
-.lead { color: var(--muted); font-size: clamp(18px, 2.2vw, 22px); max-width: 32em; margin: 22px auto 0; }
-.cta { display: flex; gap: 8px; justify-content: center; max-width: 680px; margin: 34px auto 0; }
 /* a button group: the pressed button grows and its corners tighten */
+.cta { display: flex; gap: 8px; justify-content: center; max-width: 680px; margin: 34px auto 0; }
 .cta .btn {
-  flex: 1; min-height: 56px; padding: 10px 22px; border-radius: 28px; justify-content: center; white-space: nowrap;
-  transition: flex-grow 350ms var(--ease), border-radius 350ms var(--ease), box-shadow 160ms var(--ease),
-    background-color 160ms var(--ease), border-color 160ms var(--ease);
+  flex: 1; white-space: nowrap;
+  transition: flex-grow 350ms var(--ease), border-radius 350ms var(--ease), box-shadow 160ms var(--ease), border-color 160ms var(--ease);
 }
 .cta .btn:active { flex-grow: 1.5; border-radius: 12px; transform: none; }
 
-/* floating stars: a few spans drift up from the GitHub button, each with its own x, tilt and duration */
+/* floating stars: a few spans drift up from a GitHub star button or link, each with its own x, tilt and duration */
 .gh-star { position: relative; }
 .float-note {
   position: absolute; left: 50%; top: 50%; margin: -0.5em 0 0 -0.5em; pointer-events: none;
@@ -152,90 +141,53 @@ h1 { font-size: clamp(36px, 6vw, 64px); line-height: 1.08; letter-spacing: -0.02
   15% { opacity: 1; }
   100% { opacity: 0; transform: translate(var(--x), -150px) rotate(var(--r)); }
 }
-.works { margin-top: 18px; font-size: 15px; color: var(--muted); }
 
+/* the living mark: the bridge in the middle of quiet rings, two small dots going round */
+.orbit { position: relative; width: 168px; height: 168px; margin: 0 auto; }
+.ring { position: absolute; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.08); }
+.ring.r1 { inset: 0; }
+.ring.r2 { inset: 26px; border-color: rgba(255, 255, 255, 0.11); }
+.spin { position: absolute; border-radius: 50%; animation: orbit 22s linear infinite; }
+.spin.s1 { inset: 0; }
+.spin.s2 { inset: 26px; animation-duration: 14s; animation-direction: reverse; }
+.sat { position: absolute; top: -4px; left: 50%; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; background: #fff; }
+.s2 .sat { top: -3px; width: 6px; height: 6px; margin-left: -3px; background: rgba(255, 255, 255, 0.55); }
+.core {
+  position: absolute; inset: 52px; display: grid; place-items: center; border-radius: 50%; color: #fff;
+  background: var(--el); border: 1px solid var(--edge); box-shadow: var(--raise-sm);
+}
+.core svg { width: 32px; height: 32px; }
+@keyframes orbit { to { transform: rotate(360deg); } }
 
-/* buttons: four light layers - top light and bottom shade inside, a tight contact shadow and a faint glow outside */
-.btn {
-  background-image: linear-gradient(180deg, #1b1b1b, #0c0c0c);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 0 rgba(0, 0, 0, 0.7),
-    0 1px 2px rgba(0, 0, 0, 0.9), 0 8px 22px -6px rgba(255, 255, 255, 0.06);
-}
-.btn.primary {
-  background-image: linear-gradient(180deg, #ffffff, #e6e6e6);
-  box-shadow: inset 0 1px 0 #ffffff, inset 0 -2px 0 rgba(0, 0, 0, 0.14),
-    0 1px 2px rgba(0, 0, 0, 0.8), 0 10px 26px -8px rgba(255, 255, 255, 0.18);
-}
-.btn:active {
-  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.75), inset 0 -1px 0 rgba(255, 255, 255, 0.06), 0 0 0 rgba(0, 0, 0, 0);
-}
-.btn.primary:active {
-  background-image: linear-gradient(180deg, #e2e2e2, #f2f2f2);
-  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.22), 0 0 0 rgba(0, 0, 0, 0);
-}
-@media (hover: hover) and (pointer: fine) {
-  .btn.primary:hover { background-image: linear-gradient(180deg, #ffffff, #dedede); }
-  .btn:not(.primary):hover { background-image: linear-gradient(180deg, #212121, #101010); }
+/* hero: one serif sentence, one line, one button */
+.hero { padding: 40px 0 8px; text-align: center; }
+h1, h2 { font-family: var(--serif); font-weight: 400; }
+h1 { font-size: clamp(40px, 6.4vw, 72px); line-height: 1.05; letter-spacing: -0.015em; max-width: 13em; margin: 28px auto 0; }
+.lead { color: var(--muted); font-size: clamp(18px, 2.1vw, 21px); max-width: 30em; margin: 20px auto 0; }
+.hero .btn { margin-top: 34px; }
+.hero-meta { margin-top: 16px; font-size: 15px; color: var(--muted); }
+.star-link { text-decoration: none; color: var(--text); border-bottom: 1px solid rgba(255, 255, 255, 0.3); white-space: nowrap; }
+.works-with { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; margin-top: 30px; }
+.works-with .label { color: var(--muted); font-size: 14px; margin-right: 4px; }
+.pill {
+  padding: 6px 13px; border-radius: 999px; font-size: 14px; color: var(--accent-text);
+  background: var(--well); border: 1px solid var(--edge); box-shadow: var(--inset-sm);
 }
 
 /* sections */
-section { margin-top: 96px; }
-h2 { font-size: clamp(28px, 4vw, 40px); line-height: 1.15; letter-spacing: -0.01em; text-align: center; }
-.sub { text-align: center; color: var(--muted); margin: 12px auto 0; max-width: 34em; }
+section { margin-top: 110px; }
+h2 { font-size: clamp(32px, 4.4vw, 48px); line-height: 1.12; letter-spacing: -0.01em; text-align: center; }
+.sub { text-align: center; color: var(--muted); margin: 14px auto 0; max-width: 34em; }
 
-.card { background: var(--el); border-radius: 22px; padding: 26px 24px; box-shadow: var(--raise); border: 1px solid var(--edge); }
-.card .ic-well {
-  display: grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; margin-bottom: 16px;
-  background: var(--well); box-shadow: var(--inset-sm); color: var(--accent);
-}
-.card .ic-well .ic { width: 26px; height: 26px; }
-.card h3 { font-size: 19px; line-height: 1.3; }
-.card p { color: var(--muted); margin-top: 8px; font-size: 16.5px; }
-
-/* what it can do: a phone with a snap-scrolling feed, one feature per screen, like scrolling Shorts */
-.feed-wrap { display: grid; grid-template-columns: auto 1fr; gap: 56px; align-items: center; max-width: 900px; margin: 44px auto 0; }
-.phone { width: 300px; padding: 12px; border-radius: 48px; background: var(--el); box-shadow: var(--raise); border: 1px solid var(--edge); }
-.phone-screen { position: relative; height: 600px; border-radius: 38px; overflow: hidden; background: #000; box-shadow: var(--inset); }
-.phone-screen::before {
-  content: ""; position: absolute; z-index: 2; top: 12px; left: 50%; width: 86px; height: 24px; margin-left: -43px;
-  border-radius: 12px; background: #0d0d0d; border: 1px solid var(--edge);
-}
-.bars { position: absolute; z-index: 2; top: 48px; left: 22px; right: 22px; display: flex; gap: 4px; pointer-events: none; }
-.bars i { flex: 1; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.18); transition: background-color 200ms var(--ease); }
-.bars i.on { background: #fff; }
-.feed { height: 100%; overflow-y: auto; scroll-snap-type: y mandatory; scrollbar-width: none; border-radius: 38px; }
-.feed::-webkit-scrollbar { display: none; }
-.feed:focus-visible { outline: 2px solid #fff; outline-offset: -6px; }
-.short {
-  height: 100%; scroll-snap-align: start; scroll-snap-stop: always;
-  display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 14px; padding: 80px 28px 60px;
-}
-.short-ic {
-  display: grid; place-items: center; width: 64px; height: 64px; border-radius: 20px; margin-bottom: 6px;
-  background: var(--el); box-shadow: var(--raise-sm); border: 1px solid var(--edge); color: #fff;
-}
-.short-ic .ic { width: 32px; height: 32px; }
-.short h3 { font-size: 26px; line-height: 1.2; letter-spacing: -0.01em; }
-.short p { color: var(--muted); font-size: 17px; }
-.short-n { font-family: var(--mono); font-size: 13px; color: var(--muted); }
-.swipe {
-  position: absolute; z-index: 2; left: 0; right: 0; bottom: 18px; display: flex; justify-content: center; align-items: center; gap: 6px;
-  font-size: 13px; color: var(--muted); pointer-events: none; transition: opacity 200ms var(--ease);
-}
-.swipe.gone { opacity: 0; }
-.feed-index { list-style: none; padding: 0; display: grid; gap: 10px; }
-.feed-index button {
-  width: 100%; display: flex; align-items: center; gap: 14px; padding: 12px 16px; text-align: left; cursor: pointer;
-  font: inherit; font-size: 17px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 16px;
-  transition: color 160ms var(--ease), background-color 160ms var(--ease), box-shadow 160ms var(--ease), transform 160ms var(--ease);
-}
-.feed-index button:active { transform: scale(0.97); }
-.feed-index .n {
-  flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; font-size: 14px; font-weight: 700;
-  background: var(--well); box-shadow: var(--inset-sm); color: var(--muted);
-}
-.feed-index button[aria-current="true"] { color: var(--text); background: var(--el); box-shadow: var(--raise-sm); border-color: var(--edge); }
-.feed-index button[aria-current="true"] .n { color: #000; background: #fff; box-shadow: none; }
+/* why: the maker's note and three reasons */
+.why { text-align: center; }
+.note { font-family: var(--serif); font-size: clamp(21px, 2.5vw, 27px); line-height: 1.5; max-width: 31em; margin: 36px auto 0; }
+.note .m { color: var(--muted); }
+.reasons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; max-width: 1000px; margin: 48px auto 0; text-align: left; }
+.reason { padding: 24px 22px; border-radius: 22px; background: var(--el); border: 1px solid var(--edge); box-shadow: var(--raise); }
+.reason .k { display: block; margin-bottom: 14px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; color: var(--muted); }
+.reason h3 { font-family: var(--serif); font-weight: 400; font-size: 25px; line-height: 1.2; }
+.reason p { color: var(--muted); font-size: 16px; margin-top: 10px; }
 
 /* how it works: four steps in a row and a loop back underneath (the AI checks its own work).
    A white dot runs along each arrow in turn, then the check box lights up: one 7 s cycle. */
@@ -285,15 +237,83 @@ h2 { font-size: clamp(28px, 4vw, 40px); line-height: 1.15; letter-spacing: -0.01
 .vup .track { animation: gup 7s linear infinite; }
 @keyframes gdown { 0%, 45% { transform: translateY(-100%); opacity: 0; } 46% { opacity: 1; } 52% { transform: translateY(0); opacity: 1; } 53%, 100% { transform: translateY(0); opacity: 0; } }
 @keyframes gup { 0%, 70% { transform: translateY(100%); opacity: 0; } 71% { opacity: 1; } 78% { transform: translateY(0); opacity: 1; } 79%, 100% { transform: translateY(0); opacity: 0; } }
-@keyframes checking { 0%, 52% { border-color: var(--edge); } 56%, 66% { border-color: rgba(255, 255, 255, 0.5); } 70%, 100% { border-color: var(--edge); } }
+@keyframes checking {
+  0%, 52% { box-shadow: var(--raise-sm), 0 0 0 1px rgba(255, 255, 255, 0); }
+  56%, 66% { box-shadow: var(--raise-sm), 0 0 0 1px rgba(255, 255, 255, 0.45); }
+  70%, 100% { box-shadow: var(--raise-sm), 0 0 0 1px rgba(255, 255, 255, 0); }
+}
 @keyframes turn { 0%, 53% { transform: rotate(0deg); } 68%, 100% { transform: rotate(-360deg); } }
 /* stacked on narrow screens: the same timing, down instead of across */
 @keyframes v1 { 0% { transform: translateY(-100%); opacity: 0; } 1% { opacity: 1; } 12% { transform: translateY(0); opacity: 1; } 13%, 100% { transform: translateY(0); opacity: 0; } }
 @keyframes v2 { 0%, 15% { transform: translateY(-100%); opacity: 0; } 16% { opacity: 1; } 27% { transform: translateY(0); opacity: 1; } 28%, 100% { transform: translateY(0); opacity: 0; } }
 @keyframes v3 { 0%, 30% { transform: translateY(-100%); opacity: 0; } 31% { opacity: 1; } 42% { transform: translateY(0); opacity: 1; } 43%, 100% { transform: translateY(0); opacity: 0; } }
 
+/* what it can do: a phone with a snap-scrolling feed of example chats, one feature per screen, like scrolling Shorts */
+.feed-wrap { display: grid; grid-template-columns: auto 1fr; gap: 56px; align-items: center; max-width: 900px; margin: 44px auto 0; }
+.phone { width: 300px; padding: 12px; border-radius: 48px; background: var(--el); box-shadow: var(--raise); border: 1px solid var(--edge); }
+.phone-screen { position: relative; height: 600px; border-radius: 38px; overflow: hidden; background: #000; box-shadow: var(--inset); }
+.phone-screen::before {
+  content: ""; position: absolute; z-index: 2; top: 12px; left: 50%; width: 86px; height: 24px; margin-left: -43px;
+  border-radius: 12px; background: #0d0d0d; border: 1px solid var(--edge);
+}
+.bars { position: absolute; z-index: 2; top: 48px; left: 22px; right: 22px; display: flex; gap: 4px; pointer-events: none; }
+.bars i { flex: 1; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.18); transition: background-color 200ms var(--ease); }
+.bars i.on { background: #fff; }
+.feed { height: 100%; overflow-y: auto; scroll-snap-type: y mandatory; scrollbar-width: none; border-radius: 38px; }
+.feed::-webkit-scrollbar { display: none; }
+.feed:focus-visible { outline: 2px solid #fff; outline-offset: -6px; }
+.short {
+  height: 100%; scroll-snap-align: start; scroll-snap-stop: always;
+  display: flex; flex-direction: column; justify-content: center; gap: 18px; padding: 72px 16px 56px;
+}
+.short-title { display: flex; align-items: center; gap: 10px; padding: 0 4px; font-family: var(--serif); font-weight: 400; font-size: 23px; line-height: 1.2; }
+.short-title .ic { width: 22px; height: 22px; }
+.chat { position: relative; display: grid; gap: 12px; }
+.msg { max-width: 88%; padding: 11px 14px; border-radius: 18px; font-size: 15px; line-height: 1.45; }
+.msg .who { display: block; margin-bottom: 3px; font-size: 12px; font-weight: 650; opacity: 0.6; }
+.msg.me { justify-self: end; color: #000; background: #fff; border-bottom-right-radius: 6px; }
+.msg.ai { justify-self: start; color: var(--text); background: var(--el); border: 1px solid var(--edge); border-bottom-left-radius: 6px; box-shadow: var(--raise-sm); }
+.typing {
+  position: absolute; left: 0; bottom: 0; display: none; gap: 5px; padding: 15px 16px; pointer-events: none;
+  border-radius: 18px; border-bottom-left-radius: 6px; background: var(--el); border: 1px solid var(--edge);
+}
+.typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1s ease-in-out infinite; }
+.typing i:nth-child(2) { animation-delay: 150ms; }
+.typing i:nth-child(3) { animation-delay: 300ms; }
+@keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+/* when a short comes up: your message, then "typing", then the reply */
+.short.play .msg.me { animation: pop 300ms var(--ease) both; }
+.short.play .typing { display: flex; animation: typing-life 1200ms linear both; }
+.short.play .msg.ai { animation: pop 300ms var(--ease) 1150ms both; }
+@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes typing-life { 0%, 28% { opacity: 0; } 34%, 92% { opacity: 1; } 100% { opacity: 0; } }
+.short-n { padding: 0 4px; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.swipe {
+  position: absolute; z-index: 2; left: 0; right: 0; bottom: 18px; display: flex; justify-content: center; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--muted); pointer-events: none; transition: opacity 200ms var(--ease);
+}
+.swipe.gone { opacity: 0; }
+.feed-index { list-style: none; padding: 0; display: grid; gap: 10px; }
+.feed-index button {
+  width: 100%; display: flex; align-items: center; gap: 14px; padding: 12px 16px; text-align: left; cursor: pointer;
+  font: inherit; font-size: 17px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 16px;
+  transition: color 160ms var(--ease), background-color 160ms var(--ease), box-shadow 160ms var(--ease), transform 160ms var(--ease);
+}
+.feed-index button:active { transform: scale(0.97); }
+.feed-index .n {
+  flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; font-size: 14px; font-weight: 700;
+  background: var(--well); box-shadow: var(--inset-sm); color: var(--muted);
+}
+.feed-index button[aria-current="true"] { color: var(--text); background: var(--el); box-shadow: var(--raise-sm); border-color: var(--edge); }
+.feed-index button[aria-current="true"] .n { color: #000; background: #fff; box-shadow: none; }
+
+/* open source: the GitHub mark in still rings */
+.open { text-align: center; }
+.open .orbit { margin-bottom: 30px; }
+.open .core .ic { width: 36px; height: 36px; }
+
 /* get started */
-.steps { list-style: none; padding: 0; display: grid; gap: 18px; margin: 40px auto 0; max-width: 760px; counter-reset: s; }
+.steps { list-style: none; padding: 0; display: grid; gap: 18px; margin: 40px auto 0; max-width: 760px; }
 .steps li { display: flex; gap: 20px; align-items: flex-start; background: var(--el); border-radius: 22px; padding: 22px 24px; box-shadow: var(--raise); border: 1px solid var(--edge); }
 .num {
   flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%;
@@ -317,21 +337,35 @@ code {
 .need span.m { color: var(--muted); }
 
 /* questions */
-.faq { max-width: 760px; margin: 40px auto 0; display: grid; gap: 14px; }
-details { background: var(--el); border-radius: 18px; box-shadow: var(--raise-sm); border: 1px solid var(--edge); }
+.faq { max-width: 760px; margin: 40px auto 0; border-top: 1px solid var(--hairline); }
+details { border-bottom: 1px solid var(--hairline); }
 summary {
-  list-style: none; cursor: pointer; padding: 18px 22px; font-weight: 650; display: flex; justify-content: space-between; gap: 16px; align-items: center;
+  list-style: none; cursor: pointer; padding: 22px 4px; font-weight: 600; display: flex; justify-content: space-between; gap: 16px; align-items: center;
 }
+summary:focus-visible { outline-offset: -2px; }
 summary::-webkit-details-marker { display: none; }
 summary .plus { color: var(--muted); transition: transform 200ms var(--ease); font-weight: 400; font-size: 22px; line-height: 1; }
 details[open] summary .plus { transform: rotate(45deg); }
-details p { padding: 0 22px 20px; color: var(--muted); font-size: 16.5px; }
+details p { padding: 0 4px 24px; max-width: 38em; color: var(--muted); font-size: 16.5px; }
+
+/* glass rim: a thin edge of light, brightest at the top-left corner and fading round the sides, like the edge of a
+   pane of glass - the fill stays black and nothing glows outside */
+.reason, .node, .back, .steps li, .need li, .phone, .core, .mark, .links a.gh {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--el), var(--el)) padding-box,
+    linear-gradient(155deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.09) 26%, rgba(255, 255, 255, 0.03) 60%, rgba(255, 255, 255, 0.15)) border-box;
+}
+
+/* the last call: download once more before the footer */
+.final { text-align: center; margin-top: 130px; }
 
 /* footer */
 footer { margin: 110px 0 0; padding: 30px 0 40px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 14px; display: grid; gap: 6px; text-align: center; }
 footer a { color: var(--text); }
 
 @media (max-width: 860px) {
+  .reasons { grid-template-columns: 1fr; max-width: 520px; }
   .feed-wrap { grid-template-columns: 1fr; justify-items: center; gap: 24px; }
   .feed-index { display: none; }
   .cta { flex-direction: column; max-width: 420px; }
@@ -352,10 +386,14 @@ footer a { color: var(--text); }
   body { font-size: 17px; }
   .top { padding: 16px 0; }
   .links a:not(.gh) { display: none; }
-  .hero { padding: 40px 20px 34px; border-radius: 22px; }
+  .hero { padding-top: 24px; }
+  .orbit { width: 140px; height: 140px; }
+  .ring.r2, .spin.s2 { inset: 22px; }
+  .core { inset: 44px; }
+  .hero .btn { width: 100%; max-width: 420px; padding: 10px 16px; font-size: 16px; }
   .cta .btn { padding: 10px 16px; font-size: 16px; white-space: normal; text-align: center; }
   .back { align-items: flex-start; padding: 16px 18px; }
-  section { margin-top: 72px; }
+  section { margin-top: 84px; }
   .need { grid-template-columns: 1fr; }
   .phone { width: min(300px, 86vw); }
   .phone-screen { height: min(600px, 74vh); }
@@ -366,13 +404,13 @@ footer a { color: var(--text); }
   .btn, .cta .btn, summary .plus, .feed-index button, .bars i, .swipe { transition: none; }
   .float-note { display: none; }
   .track { display: none; }
-  .back, .back .ic-well .ic { animation: none; }
+  .back, .back .ic-well .ic, .spin, .typing i { animation: none; }
+  .short.play .msg.me, .short.play .msg.ai { animation: none; }
+  .short.play .typing { display: none; }
 }
 </style>
 </head>
 <body>
-<div class="backdrop" aria-hidden="true"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span><span class="blob b4"></span></div>
-
 <div class="wrap">
   <header class="top">
     <a class="brand" href="./">
@@ -389,20 +427,35 @@ footer a { color: var(--text); }
   </header>
 
   <main>
-    <div class="hero glass">
-      <p class="eyebrow">Free &middot; Open source &middot; For Windows</p>
-      <h1>Let AI edit your videos in Premiere Pro.</h1>
-      <p class="lead">You tell an AI helper what you want. It does the editing in Premiere Pro for you. You stay in charge.</p>
-      <div class="cta">
-        <a class="btn primary" href="https://github.com/ZeusSheen/ppro-agent-bridge/releases/download/v0.5.0/ppro-agent-bridge-v0.5.0.zip"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path fill="currentColor" fill-opacity="0" stroke-dasharray="20" d="M12 4h2v6h2.5l-4.5 4.5M12 4h-2v6h-2.5l4.5 4.5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.5s" values="20;0"/><animate fill="freeze" attributeName="fill-opacity" begin="0.7s" dur="0.4s" to="1"/></path><path fill="none" stroke-dasharray="14" stroke-dashoffset="14" d="M6 19h12"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.5s" dur="0.2s" to="0"/></path></g></svg></span>Download and use it for free</a>
-        <a class="btn gh-star" href="https://github.com/ZeusSheen/ppro-agent-bridge" target="_blank" rel="noopener"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="32" d="M12 4c1.67 0 2.61 0.4 3 0.5c0.53 -0.43 1.94 -1.5 3.5 -1.5c0.34 1 0.29 2.22 0 3c0.75 1 1 2 1 3.5c0 2.19 -0.48 3.58 -1.5 4.5c-1.02 0.92 -2.11 1.37 -3.5 1.5c0.65 0.54 0.5 1.87 0.5 2.5c0 0.73 0 3 0 3M12 4c-1.67 0 -2.61 0.4 -3 0.5c-0.53 -0.43 -1.94 -1.5 -3.5 -1.5c-0.34 1 -0.29 2.22 0 3c-0.75 1 -1 2 -1 3.5c0 2.19 0.48 3.58 1.5 4.5c1.02 0.92 2.11 1.37 3.5 1.5c-0.65 0.54 -0.5 1.87 -0.5 2.5c0 0.73 0 3 0 3"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="32;0"/></path><path stroke-dasharray="10" stroke-dashoffset="10" d="M9 19c-1.41 0 -2.84 -0.56 -3.69 -1.19c-0.84 -0.63 -1.09 -1.66 -2.31 -2.31"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg></span>Give it a star on GitHub</a>
+    <div class="hero">
+      <div class="orbit" aria-hidden="true">
+        <span class="ring r1"></span><span class="ring r2"></span>
+        <span class="spin s1"><span class="sat"></span></span><span class="spin s2"><span class="sat"></span></span>
+        <span class="core"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 17h20"/><path d="M4 17c1.5-5 4.5-8 8-8s6.5 3 8 8"/><path d="M8 17v-6.3M12 17V9M16 17v-6.3"/></svg></span>
       </div>
-      <p class="works">One small zip file (0.5 MB) for Windows. Works with Claude Code and Codex.</p>
+      <h1>Let AI edit your videos in Premiere Pro.</h1>
+      <p class="lead">You tell an AI helper what you want. It does the editing for you. You stay in charge.</p>
+      <a class="btn primary" href="https://github.com/ZeusSheen/ppro-agent-bridge/releases/download/v0.5.0/ppro-agent-bridge-v0.5.0.zip"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path fill="currentColor" fill-opacity="0" stroke-dasharray="20" d="M12 4h2v6h2.5l-4.5 4.5M12 4h-2v6h-2.5l4.5 4.5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.5s" values="20;0"/><animate fill="freeze" attributeName="fill-opacity" begin="0.7s" dur="0.4s" to="1"/></path><path fill="none" stroke-dasharray="14" stroke-dashoffset="14" d="M6 19h12"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.5s" dur="0.2s" to="0"/></path></g></svg></span>Download and use it for free</a>
+      <p class="hero-meta">Free &middot; Open source &middot; Windows &middot; 0.5 MB &nbsp;&middot;&nbsp; <a class="star-link gh-star" href="https://github.com/ZeusSheen/ppro-agent-bridge" target="_blank" rel="noopener">&#9733; Give it a star on GitHub</a></p>
+      <div class="works-with" aria-label="Works with">
+        <span class="label">Works with</span>
+        <span class="pill">Claude Code</span><span class="pill">Codex</span><span class="pill">Premiere Pro 26.3+</span><span class="pill">Whisper</span>
+      </div>
     </div>
+
+    <section id="why" class="why" aria-labelledby="why-h">
+      <h2 id="why-h">Why I built this</h2>
+      <p class="note">I spend a lot of my week editing video. Most of those hours go into cutting flubbed takes, tightening pauses and dropping B-roll in the right spot. <span class="m">None of that is an editorial decision. It just takes time. So I built a bridge that hands that part to AI.</span></p>
+      <div class="reasons">
+        <div class="reason"><span class="k">01</span><h3>Precise</h3><p>It cuts from what was said, then listens back to every cut and checks a few frames. A clipped word or a cut that is too tight gets fixed before it moves on.</p></div>
+        <div class="reason"><span class="k">02</span><h3>Knows the story</h3><p>It reads what was said, how your timeline is laid out and what is on screen. So it cuts where the story needs it, not just where the silences are.</p></div>
+        <div class="reason"><span class="k">03</span><h3>B-roll in the same pass</h3><p>It puts clips and graphics on the timeline itself, as part of the same edit, not as a separate job at the end.</p></div>
+      </div>
+    </section>
 
     <section id="how" aria-labelledby="how-h">
       <h2 id="how-h">How it works</h2>
-      <p class="sub">The AI never edits blind. After every change, it checks the result.</p>
+      <p class="sub">An AI that edits without checking just gives you a new pile of mistakes. This one checks after every change.</p>
       <div class="loop">
         <div class="node"><span class="ic-well"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="54" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16.82c-2.41 -1.25 -4 -3.39 -4 -5.82c0 -3.87 4.03 -7 9 -7c4.97 0 9 3.13 9 7c0 3.87 -4.03 7 -9 7c-1.85 0 -3.57 -0.43 -5 -1.18Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="54;0"/></path><path fill="currentColor" d="M5 15.5c1 1 2.5 2 4 2.5c-2 2 -5 3 -7 3c2 -2 3 -3.5 3 -5.5Z" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.7s" to="1"/><animate fill="freeze" attributeName="d" begin="0.7s" dur="0.2s" values="M5 15.5c1 1 2.5 2 4 2.5c-0.71 -0.24 -1.43 -0.59 -2.09 -1c-0.72 -0.45 -1.39 -0.98 -1.91 -1.5Z;M5 15.5c1 1 2.5 2 4 2.5c-2 2 -5 3 -7 3c2 -2 3 -3.5 3 -5.5Z"/></path></svg></span></span><h3>You</h3><p>Say what you want, like &ldquo;cut the bad takes&rdquo;.</p></div>
         <span class="link l1" aria-hidden="true"><span class="track"><span class="dot"></span></span></span>
@@ -422,31 +475,89 @@ footer a { color: var(--text); }
 
     <section id="what" aria-labelledby="what-h">
       <h2 id="what-h">What it can do</h2>
-      <p class="sub">The AI does the boring parts. You make the choices. Scroll inside the phone to see them one by one.</p>
+      <p class="sub">Example chats. Scroll inside the phone to see the next one.</p>
       <div class="feed-wrap">
         <div class="phone">
           <div class="phone-screen">
             <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="feed" tabindex="0" role="region" aria-label="What it can do: scroll for the next one">
-            <article class="short" aria-label="1 of 6"><span class="short-ic"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="66" d="M20 5v14c0 0.55 -0.45 1 -1 1h-14c-0.55 0 -1 -0.45 -1 -1v-14c0 -0.55 0.45 -1 1 -1h14c0.55 0 1 0.45 1 1Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="66;0"/></path><g stroke-dasharray="10" stroke-dashoffset="10"><path d="M8 8h8"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path><path d="M8 12h8"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.9s" dur="0.2s" to="0"/></path></g><path stroke-dasharray="8" stroke-dashoffset="8" d="M8 16h5"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1.1s" dur="0.2s" to="0"/></path></g></svg></span></span><h3>Cuts by what people say</h3><p>It reads what was said. It keeps the good takes and cuts the mistakes.</p><span class="short-n">1 / 6</span></article>
-            <article class="short" aria-label="2 of 6"><span class="short-ic"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path stroke-dasharray="66" stroke-width="2" d="M3 14v-9h18v14h-18v-5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="66;0"/></path><path stroke-dasharray="26" stroke-dashoffset="26" d="M3 16l4 -3l3 2l6 -5l5 4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.6s" dur="0.4s" to="0"/></path></g><circle cx="7.5" cy="9.5" r="1.5" fill="currentColor" opacity="0"><animate fill="freeze" attributeName="opacity" begin="1s" dur="0.2s" to="1"/></circle></svg></span></span><h3>Adds B-roll and graphics</h3><p>It puts your clips and graphics in the right spot on the timeline.</p><span class="short-n">2 / 6</span></article>
-            <article class="short" aria-label="3 of 6"><span class="short-ic"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="34" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 10h3.5l3.5 -3.5v10.5l-3.5 -3.5h-3.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.4s" values="34;0"/></path><g fill="currentColor"><path d="M14 12c0 0 0 0 0 0c0 0 0 0 0 0Z"><animate fill="freeze" attributeName="d" begin="0.4s" dur="0.2s" to="M14 16c1.5 -0.71 2.5 -2.24 2.5 -4c0 -1.77 -1 -3.26 -2.5 -4Z"/></path><path d="M14 12c0 0 0 0 0 0c0 0 0 0 0 0v0c0 0 0 0 0 0c0 0 0 0 0 0Z"><animate fill="freeze" attributeName="d" begin="0.4s" dur="0.4s" to="M14 3.23c4 0.91 7 4.49 7 8.77c0 4.28 -3 7.86 -7 8.77v-2.07c2.89 -0.86 5 -3.53 5 -6.7c0 -3.17 -2.11 -5.85 -5 -6.71Z"/></path></g></svg></span></span><h3>Checks every cut by ear</h3><p>It listens for cut-off words, clicks and cuts that are too tight.</p><span class="short-n">3 / 6</span></article>
-            <article class="short" aria-label="4 of 6"><span class="short-ic"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="48" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.25 14c0.89 3.45 4.02 6 7.75 6c4.42 0 8 -3.58 8 -8c0 -4.42 -3.58 -8 -8 -8c-2.39 0 -4.53 1.05 -6 2.71l-2 2.29"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="48;0"/></path><g fill="currentColor"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" d="M5.63 7.38l-2.13 -2.13l0 4.25l4.25 0Z" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.6s" to="1"/><animate fill="freeze" attributeName="d" begin="0.6s" dur="0.2s" values="M4 9l0 0l0 0l0 0Z;M5.63 7.38l-2.13 -2.13l0 4.25l4.25 0Z"/></path><circle cx="12" cy="12"><animate fill="freeze" attributeName="r" begin="0.8s" dur="0.2s" to="2"/></circle></g></svg></span></span><h3>Keeps your work</h3><p>It can swap a clip without losing your effects, volume or size.</p><span class="short-n">4 / 6</span></article>
-            <article class="short" aria-label="5 of 6"><span class="short-ic"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><g stroke-dasharray="24"><path d="M11.5 5c0 -0.83 0.67 -1.5 1.5 -1.5h6c0.83 0 1.5 0.67 1.5 1.5c0 0.83 -0.67 1.5 -1.5 1.5h-6c-0.83 0 -1.5 -0.67 -1.5 -1.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.3s" values="24;0"/></path><path stroke-dashoffset="24" d="M11.5 12c0 -0.83 0.67 -1.5 1.5 -1.5h6c0.83 0 1.5 0.67 1.5 1.5c0 0.83 -0.67 1.5 -1.5 1.5h-6c-0.83 0 -1.5 -0.67 -1.5 -1.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.4s" dur="0.3s" to="0"/></path><path stroke-dashoffset="24" d="M11.5 19c0 -0.83 0.67 -1.5 1.5 -1.5h6c0.83 0 1.5 0.67 1.5 1.5c0 0.83 -0.67 1.5 -1.5 1.5h-6c-0.83 0 -1.5 -0.67 -1.5 -1.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.8s" dur="0.3s" to="0"/></path></g><g stroke-dasharray="12" stroke-dashoffset="12" stroke-width="2"><path d="M3 5l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.2s" dur="0.2s" to="0"/></path><path d="M3 12l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.6s" dur="0.2s" to="0"/></path><path d="M3 19l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1s" dur="0.2s" to="0"/></path></g></g></svg></span></span><h3>Plans before it edits</h3><p>It can show you what it will do first. Every change can be undone with Ctrl+Z.</p><span class="short-n">5 / 6</span></article>
-            <article class="short" aria-label="6 of 6"><span class="short-ic"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="60" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2l-8 3.5v6.5c0 3.5 3.5 8 8 10c4.5 -1 8 -6.5 8 -10v-6.5l-8 -3.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="60;0"/></path></svg></span></span><h3>Your files stay with you</h3><p>Your video files stay on your PC. The AI only sees what it needs, like the words and a few still frames.</p><span class="short-n">6 / 6</span></article>
+            <div class="feed" tabindex="0" role="region" aria-label="Example chats: scroll for the next one">
+              <article class="short" aria-label="1 of 6">
+                <h3 class="short-title"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="66" d="M20 5v14c0 0.55 -0.45 1 -1 1h-14c-0.55 0 -1 -0.45 -1 -1v-14c0 -0.55 0.45 -1 1 -1h14c0.55 0 1 0.45 1 1Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="66;0"/></path><g stroke-dasharray="10" stroke-dashoffset="10"><path d="M8 8h8"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path><path d="M8 12h8"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.9s" dur="0.2s" to="0"/></path></g><path stroke-dasharray="8" stroke-dashoffset="8" d="M8 16h5"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1.1s" dur="0.2s" to="0"/></path></g></svg></span>Cuts by what people say</h3>
+                <div class="chat">
+                  <p class="msg me"><span class="who">You</span>Cut this interview to 60 seconds. Keep the best takes.</p>
+                  <p class="msg ai"><span class="who">AI helper</span>I read 214 sentences and kept 9. I dropped 3 retakes and 2 &ldquo;um&rdquo;s, then placed 6 cuts. It runs 58 seconds.</p>
+                  <p class="typing" aria-hidden="true"><i></i><i></i><i></i></p>
+                </div>
+                <span class="short-n">1 / 6</span>
+              </article>
+              <article class="short" aria-label="2 of 6">
+                <h3 class="short-title"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path stroke-dasharray="66" stroke-width="2" d="M3 14v-9h18v14h-18v-5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="66;0"/></path><path stroke-dasharray="26" stroke-dashoffset="26" d="M3 16l4 -3l3 2l6 -5l5 4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.6s" dur="0.4s" to="0"/></path></g><circle cx="7.5" cy="9.5" r="1.5" fill="currentColor" opacity="0"><animate fill="freeze" attributeName="opacity" begin="1s" dur="0.2s" to="1"/></circle></svg></span>Adds B-roll and graphics</h3>
+                <div class="chat">
+                  <p class="msg me"><span class="who">You</span>Put the city shots over the part about rent, and the chart at 0:42.</p>
+                  <p class="msg ai"><span class="who">AI helper</span>Done: 4 city shots and the chart, each filled to the frame. Nothing under them got covered.</p>
+                  <p class="typing" aria-hidden="true"><i></i><i></i><i></i></p>
+                </div>
+                <span class="short-n">2 / 6</span>
+              </article>
+              <article class="short" aria-label="3 of 6">
+                <h3 class="short-title"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="34" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 10h3.5l3.5 -3.5v10.5l-3.5 -3.5h-3.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.4s" values="34;0"/></path><g fill="currentColor"><path d="M14 12c0 0 0 0 0 0c0 0 0 0 0 0Z"><animate fill="freeze" attributeName="d" begin="0.4s" dur="0.2s" to="M14 16c1.5 -0.71 2.5 -2.24 2.5 -4c0 -1.77 -1 -3.26 -2.5 -4Z"/></path><path d="M14 12c0 0 0 0 0 0c0 0 0 0 0 0v0c0 0 0 0 0 0c0 0 0 0 0 0Z"><animate fill="freeze" attributeName="d" begin="0.4s" dur="0.4s" to="M14 3.23c4 0.91 7 4.49 7 8.77c0 4.28 -3 7.86 -7 8.77v-2.07c2.89 -0.86 5 -3.53 5 -6.7c0 -3.17 -2.11 -5.85 -5 -6.71Z"/></path></g></svg></span>Checks every cut by ear</h3>
+                <div class="chat">
+                  <p class="msg me"><span class="who">You</span>Do the cuts sound right?</p>
+                  <p class="msg ai"><span class="who">AI helper</span>I listened to all 12. One cut clipped the word &ldquo;because&rdquo;, so I gave it a little more room. The other 11 are clean.</p>
+                  <p class="typing" aria-hidden="true"><i></i><i></i><i></i></p>
+                </div>
+                <span class="short-n">3 / 6</span>
+              </article>
+              <article class="short" aria-label="4 of 6">
+                <h3 class="short-title"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="48" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.25 14c0.89 3.45 4.02 6 7.75 6c4.42 0 8 -3.58 8 -8c0 -4.42 -3.58 -8 -8 -8c-2.39 0 -4.53 1.05 -6 2.71l-2 2.29"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="48;0"/></path><g fill="currentColor"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" d="M5.63 7.38l-2.13 -2.13l0 4.25l4.25 0Z" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.6s" to="1"/><animate fill="freeze" attributeName="d" begin="0.6s" dur="0.2s" values="M4 9l0 0l0 0l0 0Z;M5.63 7.38l-2.13 -2.13l0 4.25l4.25 0Z"/></path><circle cx="12" cy="12"><animate fill="freeze" attributeName="r" begin="0.8s" dur="0.2s" to="2"/></circle></g></svg></span>Keeps your work</h3>
+                <div class="chat">
+                  <p class="msg me"><span class="who">You</span>Swap in the Chinese titles.</p>
+                  <p class="msg ai"><span class="who">AI helper</span>Swapped 11 clips. Your fades, sizes and effects came along. I checked each one.</p>
+                  <p class="typing" aria-hidden="true"><i></i><i></i><i></i></p>
+                </div>
+                <span class="short-n">4 / 6</span>
+              </article>
+              <article class="short" aria-label="5 of 6">
+                <h3 class="short-title"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><g stroke-dasharray="24"><path d="M11.5 5c0 -0.83 0.67 -1.5 1.5 -1.5h6c0.83 0 1.5 0.67 1.5 1.5c0 0.83 -0.67 1.5 -1.5 1.5h-6c-0.83 0 -1.5 -0.67 -1.5 -1.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.3s" values="24;0"/></path><path stroke-dashoffset="24" d="M11.5 12c0 -0.83 0.67 -1.5 1.5 -1.5h6c0.83 0 1.5 0.67 1.5 1.5c0 0.83 -0.67 1.5 -1.5 1.5h-6c-0.83 0 -1.5 -0.67 -1.5 -1.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.4s" dur="0.3s" to="0"/></path><path stroke-dashoffset="24" d="M11.5 19c0 -0.83 0.67 -1.5 1.5 -1.5h6c0.83 0 1.5 0.67 1.5 1.5c0 0.83 -0.67 1.5 -1.5 1.5h-6c-0.83 0 -1.5 -0.67 -1.5 -1.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.8s" dur="0.3s" to="0"/></path></g><g stroke-dasharray="12" stroke-dashoffset="12" stroke-width="2"><path d="M3 5l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.2s" dur="0.2s" to="0"/></path><path d="M3 12l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.6s" dur="0.2s" to="0"/></path><path d="M3 19l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1s" dur="0.2s" to="0"/></path></g></g></svg></span>Plans before it edits</h3>
+                <div class="chat">
+                  <p class="msg me"><span class="who">You</span>What will you change?</p>
+                  <p class="msg ai"><span class="who">AI helper</span>6 cuts, 2 clips moved, 1 marker. Say go and I&rsquo;ll do it. You can undo any of it with Ctrl+Z.</p>
+                  <p class="typing" aria-hidden="true"><i></i><i></i><i></i></p>
+                </div>
+                <span class="short-n">5 / 6</span>
+              </article>
+              <article class="short" aria-label="6 of 6">
+                <h3 class="short-title"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="60" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2l-8 3.5v6.5c0 3.5 3.5 8 8 10c4.5 -1 8 -6.5 8 -10v-6.5l-8 -3.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="60;0"/></path></svg></span>Your files stay with you</h3>
+                <div class="chat">
+                  <p class="msg me"><span class="who">You</span>Do my videos get uploaded?</p>
+                  <p class="msg ai"><span class="who">AI helper</span>No. Your video files stay on your PC. I only see the words people said and a few still frames.</p>
+                  <p class="typing" aria-hidden="true"><i></i><i></i><i></i></p>
+                </div>
+                <span class="short-n">6 / 6</span>
+              </article>
             </div>
             <p class="swipe" aria-hidden="true"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="12" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 16l-7 -7M12 16l7 -7"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.4s" values="12;0"/></path></svg></span>Scroll</p>
           </div>
         </div>
         <ol class="feed-index" aria-label="Jump to">
-        <li><button type="button" data-i="0" aria-current="true"><span class="n">1</span>Cuts by what people say</button></li>
-        <li><button type="button" data-i="1" aria-current="false"><span class="n">2</span>Adds B-roll and graphics</button></li>
-        <li><button type="button" data-i="2" aria-current="false"><span class="n">3</span>Checks every cut by ear</button></li>
-        <li><button type="button" data-i="3" aria-current="false"><span class="n">4</span>Keeps your work</button></li>
-        <li><button type="button" data-i="4" aria-current="false"><span class="n">5</span>Plans before it edits</button></li>
-        <li><button type="button" data-i="5" aria-current="false"><span class="n">6</span>Your files stay with you</button></li>
+          <li><button type="button" data-i="0" aria-current="true"><span class="n">1</span>Cuts by what people say</button></li>
+          <li><button type="button" data-i="1" aria-current="false"><span class="n">2</span>Adds B-roll and graphics</button></li>
+          <li><button type="button" data-i="2" aria-current="false"><span class="n">3</span>Checks every cut by ear</button></li>
+          <li><button type="button" data-i="3" aria-current="false"><span class="n">4</span>Keeps your work</button></li>
+          <li><button type="button" data-i="4" aria-current="false"><span class="n">5</span>Plans before it edits</button></li>
+          <li><button type="button" data-i="5" aria-current="false"><span class="n">6</span>Your files stay with you</button></li>
         </ol>
       </div>
+    </section>
+
+    <section id="open" class="open" aria-labelledby="open-h">
+      <div class="orbit" aria-hidden="true">
+        <span class="ring r1"></span><span class="ring r2"></span>
+        <span class="core"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="32" d="M12 4c1.67 0 2.61 0.4 3 0.5c0.53 -0.43 1.94 -1.5 3.5 -1.5c0.34 1 0.29 2.22 0 3c0.75 1 1 2 1 3.5c0 2.19 -0.48 3.58 -1.5 4.5c-1.02 0.92 -2.11 1.37 -3.5 1.5c0.65 0.54 0.5 1.87 0.5 2.5c0 0.73 0 3 0 3M12 4c-1.67 0 -2.61 0.4 -3 0.5c-0.53 -0.43 -1.94 -1.5 -3.5 -1.5c-0.34 1 -0.29 2.22 0 3c-0.75 1 -1 2 -1 3.5c0 2.19 0.48 3.58 1.5 4.5c1.02 0.92 2.11 1.37 3.5 1.5c-0.65 0.54 -0.5 1.87 -0.5 2.5c0 0.73 0 3 0 3"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="32;0"/></path><path stroke-dasharray="10" stroke-dashoffset="10" d="M9 19c-1.41 0 -2.84 -0.56 -3.69 -1.19c-0.84 -0.63 -1.09 -1.66 -2.31 -2.31"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg></span></span>
+      </div>
+      <h2 id="open-h">Free and open source.<br>Yours to build on.</h2>
+      <p class="sub">Every line of code is on GitHub under the MIT license. Read it, change it, share it.</p>
+      <p class="after"><a class="btn gh-star" href="https://github.com/ZeusSheen/ppro-agent-bridge" target="_blank" rel="noopener"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="32" d="M12 4c1.67 0 2.61 0.4 3 0.5c0.53 -0.43 1.94 -1.5 3.5 -1.5c0.34 1 0.29 2.22 0 3c0.75 1 1 2 1 3.5c0 2.19 -0.48 3.58 -1.5 4.5c-1.02 0.92 -2.11 1.37 -3.5 1.5c0.65 0.54 0.5 1.87 0.5 2.5c0 0.73 0 3 0 3M12 4c-1.67 0 -2.61 0.4 -3 0.5c-0.53 -0.43 -1.94 -1.5 -3.5 -1.5c-0.34 1 -0.29 2.22 0 3c-0.75 1 -1 2 -1 3.5c0 2.19 0.48 3.58 1.5 4.5c1.02 0.92 2.11 1.37 3.5 1.5c-0.65 0.54 -0.5 1.87 -0.5 2.5c0 0.73 0 3 0 3"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="32;0"/></path><path stroke-dasharray="10" stroke-dashoffset="10" d="M9 19c-1.41 0 -2.84 -0.56 -3.69 -1.19c-0.84 -0.63 -1.09 -1.66 -2.31 -2.31"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg></span>Give it a star on GitHub</a></p>
     </section>
 
     <section id="start" aria-labelledby="start-h">
@@ -476,9 +587,21 @@ footer a { color: var(--text); }
         <details><summary>Is it free?<span class="plus" aria-hidden="true">+</span></summary><p>Yes. It is open source under the MIT license. You can use it, change it and share it.</p></details>
         <details><summary>Is it made by Adobe?<span class="plus" aria-hidden="true">+</span></summary><p>No. It is an independent project. It uses Adobe&rsquo;s official way of adding plugins to Premiere Pro.</p></details>
         <details><summary>Will it mess up my project?<span class="plus" aria-hidden="true">+</span></summary><p>It checks before it changes anything, and every change can be undone with Ctrl+Z. Still, try it on a copy of your project first.</p></details>
+        <details><summary>How does the AI know what to cut?<span class="plus" aria-hidden="true">+</span></summary><p>It looks at three things: the words people said, how your timeline is laid out, and how the edit really sounds and looks. It listens to the audio and checks a few still frames.</p></details>
+        <details><summary>Will it stop working when Premiere updates?<span class="plus" aria-hidden="true">+</span></summary><p>It is built on UXP, Adobe&rsquo;s current way of adding plugins to Premiere Pro, not on the older CEP system that Adobe plans to retire. When a new Premiere version changes something, the setup window and the bridge tell you.</p></details>
         <details><summary>Does it work on a Mac?<span class="plus" aria-hidden="true">+</span></summary><p>Not yet. Right now it only works on Windows.</p></details>
         <details><summary>Which AI helpers can use it?<span class="plus" aria-hidden="true">+</span></summary><p>Claude Code and Codex. Any AI helper that can run commands on your PC can use it too.</p></details>
       </div>
+    </section>
+
+    <section class="final" aria-labelledby="final-h">
+      <h2 id="final-h">Ready? Download it and start editing.</h2>
+      <p class="sub">Free for good. Version 0.5.0 for Windows, one 0.5 MB zip file.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/ZeusSheen/ppro-agent-bridge/releases/download/v0.5.0/ppro-agent-bridge-v0.5.0.zip"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path fill="currentColor" fill-opacity="0" stroke-dasharray="20" d="M12 4h2v6h2.5l-4.5 4.5M12 4h-2v6h-2.5l4.5 4.5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.5s" values="20;0"/><animate fill="freeze" attributeName="fill-opacity" begin="0.7s" dur="0.4s" to="1"/></path><path fill="none" stroke-dasharray="14" stroke-dashoffset="14" d="M6 19h12"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.5s" dur="0.2s" to="0"/></path></g></svg></span>Download and use it for free</a>
+        <a class="btn gh-star" href="https://github.com/ZeusSheen/ppro-agent-bridge" target="_blank" rel="noopener"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="32" d="M12 4c1.67 0 2.61 0.4 3 0.5c0.53 -0.43 1.94 -1.5 3.5 -1.5c0.34 1 0.29 2.22 0 3c0.75 1 1 2 1 3.5c0 2.19 -0.48 3.58 -1.5 4.5c-1.02 0.92 -2.11 1.37 -3.5 1.5c0.65 0.54 0.5 1.87 0.5 2.5c0 0.73 0 3 0 3M12 4c-1.67 0 -2.61 0.4 -3 0.5c-0.53 -0.43 -1.94 -1.5 -3.5 -1.5c-0.34 1 -0.29 2.22 0 3c-0.75 1 -1 2 -1 3.5c0 2.19 0.48 3.58 1.5 4.5c1.02 0.92 2.11 1.37 3.5 1.5c-0.65 0.54 -0.5 1.87 -0.5 2.5c0 0.73 0 3 0 3"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="32;0"/></path><path stroke-dasharray="10" stroke-dashoffset="10" d="M9 19c-1.41 0 -2.84 -0.56 -3.69 -1.19c-0.84 -0.63 -1.09 -1.66 -2.31 -2.31"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg></span>Give it a star on GitHub</a>
+      </div>
+      <p class="after-note">Try it on a copy of a project, and <a href="https://github.com/ZeusSheen/ppro-agent-bridge/issues">tell me where it breaks</a>.</p>
     </section>
   </main>
 
@@ -490,11 +613,10 @@ footer a { color: var(--text); }
 </div>
 
 <script>
-/* The icons draw themselves in. Replay each one once, when it scrolls into view;
+/* The icons draw themselves in. Replay the How-it-works ones once, when they scroll into view;
    with reduced motion, show the finished drawing instead. */
 (function () {
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var svgs = document.querySelectorAll('.card .ic svg');
   if (reduce) {
     document.querySelectorAll('.ic svg').forEach(function (s) { try { s.pauseAnimations(); s.setCurrentTime(5); } catch (e) {} });
     return;
@@ -507,32 +629,34 @@ footer a { color: var(--text); }
       seen.unobserve(e.target);
     });
   }, { threshold: 0.6 });
-  svgs.forEach(function (s) { seen.observe(s); });
+  document.querySelectorAll('.node .ic svg, .open .core svg').forEach(function (s) { seen.observe(s); });
 })();
 
-/* Floating stars: each click on the GitHub button sends a few up (GitHub opens in a new tab, so they stay seen). */
+/* Floating stars: each click on a GitHub star button or link sends a few up (GitHub opens in a new tab, so they stay seen). */
 (function () {
-  var button = document.querySelector('.gh-star');
-  if (!button || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
+  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   function rand(min, max) { return min + Math.random() * (max - min); }
-  button.addEventListener('click', function () {
-    for (var i = 0; i < 7; i++) {
-      var note = document.createElement('span');
-      note.className = 'float-note';
-      note.textContent = '\u2605';
-      note.setAttribute('aria-hidden', 'true');
-      note.style.setProperty('--x', rand(-70, 70).toFixed(0) + 'px');
-      note.style.setProperty('--r', rand(-45, 45).toFixed(0) + 'deg');
-      note.style.setProperty('--d', rand(0.9, 1.6).toFixed(2) + 's');
-      note.style.setProperty('--s', rand(12, 22).toFixed(0) + 'px');
-      note.style.animationDelay = (i * 45) + 'ms';
-      note.addEventListener('animationend', function () { this.remove(); });
-      button.appendChild(note);
-    }
+  document.querySelectorAll('.gh-star').forEach(function (button) {
+    button.addEventListener('click', function () {
+      for (var i = 0; i < 7; i++) {
+        var note = document.createElement('span');
+        note.className = 'float-note';
+        note.textContent = '★';
+        note.setAttribute('aria-hidden', 'true');
+        note.style.setProperty('--x', rand(-70, 70).toFixed(0) + 'px');
+        note.style.setProperty('--r', rand(-45, 45).toFixed(0) + 'deg');
+        note.style.setProperty('--d', rand(0.9, 1.6).toFixed(2) + 's');
+        note.style.setProperty('--s', rand(12, 22).toFixed(0) + 'px');
+        note.style.animationDelay = (i * 45) + 'ms';
+        note.addEventListener('animationend', function () { this.remove(); });
+        button.appendChild(note);
+      }
+    });
   });
 })();
 
-/* The phone feed: one short per screen (scroll snap does the snapping); the bars, the list and the icon follow it. */
+/* The phone feed: one short per screen (scroll snap does the snapping); the bars, the list and the chat follow it.
+   A short's chat plays (your message, typing, the reply) when it comes up and the phone is on screen. */
 (function () {
   var feed = document.querySelector('.feed');
   if (!feed) return;
@@ -541,15 +665,22 @@ footer a { color: var(--text); }
   var items = document.querySelectorAll('.feed-index button');
   var swipe = document.querySelector('.swipe');
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var current = -1, ticking = false;
+  var current = -1, ticking = false, visible = false;
+  function play(i) {
+    if (reduce || !visible || !shorts[i]) return;
+    shorts.forEach(function (s) { s.classList.remove('play'); });
+    void shorts[i].offsetWidth;  // restart the animations
+    shorts[i].classList.add('play');
+    var svg = shorts[i].querySelector('svg');
+    if (svg) { try { svg.setCurrentTime(0); } catch (e) {} }
+  }
   function show(i) {
     if (i === current || i < 0 || i >= shorts.length) return;
     current = i;
     bars.forEach(function (b, k) { b.classList.toggle('on', k <= i); });
     items.forEach(function (b, k) { b.setAttribute('aria-current', k === i ? 'true' : 'false'); });
     if (i > 0 && swipe) swipe.classList.add('gone');
-    var svg = shorts[i].querySelector('svg');
-    if (svg && !reduce) { try { svg.setCurrentTime(0); } catch (e) {} }
+    play(i);
   }
   feed.addEventListener('scroll', function () {
     if (ticking) return;
@@ -562,6 +693,15 @@ footer a { color: var(--text); }
     });
   });
   show(0);
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        var was = visible;
+        visible = e.isIntersecting;
+        if (visible && !was) play(current);
+      });
+    }, { threshold: 0.5 }).observe(document.querySelector('.phone'));
+  }
 })();
 </script>
 </body>
