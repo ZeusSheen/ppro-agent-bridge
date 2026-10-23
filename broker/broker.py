@@ -66,7 +66,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(1, str(REPO))
 from ppro_bridge import audit, auth, devloader  # noqa: E402  (stdlib + websockets)
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 HOST = "127.0.0.1"   # localhost only — this is a security boundary
 PORT = int(os.environ.get("PPRO_BRIDGE_PORT", "8017"))  # override only for headless tests
 PANEL_TIMEOUT = float(os.environ.get("PPRO_PANEL_TIMEOUT", "30"))   # default per-request execution limit

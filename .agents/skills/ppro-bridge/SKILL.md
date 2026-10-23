@@ -3,7 +3,7 @@ name: ppro-bridge
 description: Drive Adobe Premiere Pro through the ppro-agent-bridge CLI for transcript-driven, closed-loop video editing. Use when asked to inspect a Premiere project or timeline, transcribe footage (local Whisper or Premiere Speech-to-Text), read or attach transcripts, export frames / contact sheets / OTIO, import media into bins, place clips or sentence-level cuts, execute a JSON edit plan (B-roll, graphics), scale clips to fit/fill, set effect params and keyframes, add transitions, swap clips while keeping their effects, interpret footage frame rates, add timeline markers, remove clips, or assemble a rough cut / best-take edit from talking-head footage. Requires the broker running and the Agent Bridge UXP panel loaded in Premiere.
 ---
 
-# Premiere Pro Agent Bridge (v0.5.0)
+# Premiere Pro Agent Bridge (v0.5.1)
 
 Control a live Premiere Pro session via CLI. Architecture: `python ppro.py <action>`
 → local broker (127.0.0.1:8017) → UXP panel inside Premiere. Every command prints

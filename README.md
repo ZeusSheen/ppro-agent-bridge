@@ -5,7 +5,7 @@ Adobe Premiere Pro session for **transcript-driven, closed-loop video editing** 
 built entirely on Premiere's official UXP APIs (GA since 25.6), with fully local
 Whisper transcription.
 
-> **Status: experimental (v0.5.0).** Tested on Premiere Pro 27.1 / Windows 11
+> **Status: experimental (v0.5.1).** Tested on Premiere Pro 27.1 / Windows 11
 > (earlier releases also ran on 26.x). macOS is not supported yet.
 > Twenty-one whitelisted panel operations, checked against one action spec, plus
 > a Python library and CLI on top (edit plans, contact sheets, effect-preserving
@@ -426,6 +426,11 @@ anything it could not under `leftovers`. It also times a video export and
 
 ## Changelog
 
+- **0.5.1** — The setup window (`setup_bridge.bat`) now matches the project page: pure
+  black, black and white, a thin glass rim of light on its panels, serif step titles and
+  white main buttons. The blurred background haze is gone (it banded on near-black), and
+  so are the grey halos around cards. Green, amber and red still mark ready, optional and
+  needs setup, always with an icon and a word. Nothing else changed.
 - **0.5.0** — Hardening, quick deploy and groundwork for a larger UXP port. Fixes
   from real jobs after 0.4.0: the shadow mix refuses clips without a media file (`NO_MEDIA`: Enhance Speech results and other
   generated items used to mix as silence). From a real language-version swap:

@@ -60,7 +60,7 @@ if str(REPO) not in sys.path:
 from ppro_bridge import spec  # noqa: E402  (stdlib only)
 
 BROKER_URL = os.environ.get("PPRO_BRIDGE_URL", "ws://127.0.0.1:8017")
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 FPS = 60000 / 1001
 TIMEBASE = "4237833600"  # ticks per frame at 59.94
 TICKS_PER_SECOND = 254016000000

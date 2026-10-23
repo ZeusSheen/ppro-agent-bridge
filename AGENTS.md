@@ -3,7 +3,7 @@
 This file follows the AGENTS.md convention (read by Codex and other coding agents).
 Claude Code users: the same content is packaged as a skill at `.claude/skills/ppro-bridge/SKILL.md` and is loaded automatically.
 
-# Premiere Pro Agent Bridge (v0.5.0)
+# Premiere Pro Agent Bridge (v0.5.1)
 
 Control a live Premiere Pro session via CLI. Architecture: `python ppro.py <action>`
 → local broker (127.0.0.1:8017) → UXP panel inside Premiere. Every command prints
