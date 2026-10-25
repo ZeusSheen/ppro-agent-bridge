@@ -1,0 +1,404 @@
+/* story.css: the 1776 story that floats over the page on a first visit (Adam Smith's boy who tied a string to
+   the valve of a fire-engine). Two parts: the grey paper sheet, its type and layout (was paper.css), then the
+   overlay around it (was overlay.css). Scripts: story/engine.js, clouds.js, overlay.js, story.js.
+   Static (no .live, reduced motion): a plain stacked article on one sheet, every beat visible.
+   .live (added by story.js): one sticky 100svh stage, the acts overlaid in one grid cell. */
+
+/* ---------- tokens: dark grey paper (default) ---------- */
+.story {
+  --paper: #2c2d30;            /* neutral charcoal sheet, a hair cool; never warm */
+  --ink: #ebecee;              /* off-white ink */
+  --ink-soft: #8a8c91;         /* brickwork, ground, hatching */
+  --ink-muted: #a9abb0;        /* secondary text (6:1 on the sheet) */
+  --mark: #f4f5f6;             /* highlighter bar: inverts the words it crosses */
+  --mark-blend: difference;
+  --mark-z: 1;                 /* bars above the text */
+  --mark-solid: #e9eaec;       /* static highlight (no animation) */
+  --mark-solid-ink: #121315;
+  /* private: paper texture strength */
+  --grain-opacity: 0.45;
+  /* private: layout */
+  --vh: 100vh;
+  --sheet-h: min(calc(var(--vh) - 48px), 760px);
+  --pad: clamp(18px, 4.4vw, 56px);
+  --layout: split;             /* "split" = captions left, figure right; "stacked" = figure on top (phones) */
+  color: var(--ink);
+}
+@supports (height: 100svh) {
+  .story { --vh: 100svh; }
+}
+
+/* ---------- tokens: light grey paper ---------- */
+html[data-paper="light"] .story {
+  --paper: #cbccce;
+  --ink: #141517;
+  --ink-soft: #6b6d72;
+  --ink-muted: #46484c;
+  --mark: #f6f6f6;             /* near-white bar behind dark words */
+  --mark-blend: normal;
+  --mark-z: -1;                /* bars behind the text */
+  --mark-solid: #f3f3f3;
+  --mark-solid-ink: #141517;
+  --grain-opacity: 0.42;
+}
+
+/* ---------- the sheet ---------- */
+.story .sheet {
+  position: relative;
+  isolation: isolate;
+  width: min(1120px, 100%);
+  max-width: calc(100vw - 32px);
+  margin: 0 auto;
+  padding: var(--pad);
+  background-color: var(--paper);
+  color: var(--ink);
+  overflow: hidden;            /* nowrap labels near an edge never widen the page */
+  overflow: clip;
+  /* a very slightly uneven, hand-cut edge: never more than 1.5px in */
+  clip-path: polygon(
+    0 0.6px, 6% 0, 13% 1px, 21% 0.2px, 29% 1.2px, 37% 0.3px, 46% 0.9px, 54% 0, 62% 1.1px, 71% 0.4px,
+    79% 1.3px, 87% 0.2px, 94% 0.9px, 100% 0.3px,
+    calc(100% - 1px) 7%, calc(100% - 0.2px) 15%, calc(100% - 1.2px) 24%, 100% 33%, calc(100% - 0.8px) 42%,
+    calc(100% - 0.1px) 51%, calc(100% - 1.3px) 60%, calc(100% - 0.4px) 69%, calc(100% - 1px) 78%,
+    100% 87%, calc(100% - 0.9px) 94%, calc(100% - 0.4px) 100%,
+    93% calc(100% - 1.1px), 85% 100%, 77% calc(100% - 0.8px), 68% calc(100% - 0.1px), 60% calc(100% - 1.3px),
+    51% calc(100% - 0.3px), 42% calc(100% - 1px), 33% 100%, 25% calc(100% - 1.2px), 16% calc(100% - 0.4px),
+    8% calc(100% - 1px), 0.3px 100%,
+    0.9px 92%, 0 84%, 1.2px 75%, 0.3px 66%, 1px 57%, 0 48%, 1.3px 39%, 0.4px 30%, 0.8px 21%, 0 12%, 1.1px 5%
+  );
+}
+
+/* paper texture, static: a fine tooth plus a few sparse fibres, laid over everything on the sheet.
+   Each layer is a tiny feTurbulence SVG (tiles of different sizes, so no repeat shows). The fibres are
+   transparent except for short strands; the grain is mid grey, which "overlay" leaves at the sheet's own
+   colour, so the texture adds tooth without shifting the paper or the ink. */
+.story .sheet::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+  opacity: var(--grain-opacity);
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='360' height='360'%3E%3Cfilter id='f' filterUnits='userSpaceOnUse' x='-360' y='-360' width='1080' height='1080' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.035 0.45' numOctaves='1' seed='3'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 1 0 0 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='discrete' tableValues='0 0 0 0 0 0 0 0 0 0 0 0 0 .4 .6 .6'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Cg transform='rotate(28 180 180)'%3E%3Crect x='-360' y='-360' width='1080' height='1080' filter='url(%23f)'/%3E%3C/g%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='410' height='410'%3E%3Cfilter id='f' filterUnits='userSpaceOnUse' x='-410' y='-410' width='1230' height='1230' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.035 0.45' numOctaves='1' seed='8'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 1 0 0 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='discrete' tableValues='0 0 0 0 0 0 0 0 0 0 0 0 0 .4 .6 .6'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Cg transform='rotate(-52 205 205)'%3E%3Crect x='-410' y='-410' width='1230' height='1230' filter='url(%23f)'/%3E%3C/g%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='380' height='380'%3E%3Cfilter id='f' filterUnits='userSpaceOnUse' x='-380' y='-380' width='1140' height='1140' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.035 0.45' numOctaves='1' seed='5'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1 0 0 0 1'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='discrete' tableValues='0 0 0 0 0 0 0 0 0 0 0 0 0 .4 .6 .6'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Cg transform='rotate(74 190 190)'%3E%3Crect x='-380' y='-380' width='1140' height='1140' filter='url(%23f)'/%3E%3C/g%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix values='.34 .33 .33 0 0 .34 .33 .33 0 0 .34 .33 .33 0 0 0 0 0 0 1'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='2.2' intercept='-.6'/%3E%3CfeFuncG type='linear' slope='2.2' intercept='-.6'/%3E%3CfeFuncB type='linear' slope='2.2' intercept='-.6'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 360px 360px, 410px 410px, 380px 380px, 220px 220px;
+}
+
+/* ---------- type ---------- */
+.story cite { font-style: italic; }
+
+.story .year {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: clamp(96px, 17vw, 196px);
+  line-height: 0.92;
+  letter-spacing: -0.02em;
+  font-variant-numeric: lining-nums;
+  color: var(--ink);
+}
+.story .fact {
+  font-family: var(--serif);
+  font-size: clamp(20px, 2.3vw, 27px);
+  line-height: 1.35;
+  color: var(--ink);
+  max-width: 24em;
+  margin-inline: auto;
+}
+.story .year + .fact { margin-top: 0.9em; }
+.story .fact + .fact { margin-top: 0.35em; }
+
+.story .kicker,
+.story .quote footer {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.story .kicker cite,
+.story .quote footer cite { font-style: normal; }
+
+.story .cap {
+  font-family: var(--serif);
+  font-size: clamp(19px, 2.05vw, 26px);
+  line-height: 1.42;
+  color: var(--ink);
+}
+
+.story .quote { margin: 0; }
+.story .quote p {
+  position: relative;
+  isolation: isolate;
+  font-family: var(--serif);
+  font-size: clamp(27px, 3.7vw, 46px);
+  line-height: 1.32;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+}
+/* the page styles every <footer> as its own footer (grid, centred, a rule on top); this one is a plain line */
+.story .quote footer { display: block; margin: 1.6em 0 0; padding: 0; border: 0; text-align: left; }
+
+/* ---------- highlighter ---------- */
+/* .hl-bars is itself a stacking context (z-index), so its bars can only blend with what is inside it.
+   Blending the whole group as well lets "difference" reach the words underneath. */
+.story .hl-bars {
+  position: absolute;
+  inset: 0;
+  z-index: var(--mark-z);
+  pointer-events: none;
+  mix-blend-mode: var(--mark-blend);
+}
+.story .hl-bar {
+  position: absolute;
+  display: block;
+  background: var(--mark);
+  mix-blend-mode: var(--mark-blend);
+  transform-origin: left center;
+}
+.story:not(.live) .hl {
+  background: var(--mark-solid);
+  color: var(--mark-solid-ink);
+  /* widen the bar past the first and last letter without moving the words */
+  box-shadow: -0.1em 0 0 var(--mark-solid), 0.05em 0 0 var(--mark-solid);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/* ---------- the drawing ---------- */
+.story .engine-figure {
+  position: relative;
+  isolation: isolate;
+  aspect-ratio: 600 / 420;
+  width: 100%;
+  margin: 0;
+}
+.story .engine-figure > svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.story .ink { stroke: var(--ink); fill: none; }
+.story .ink-soft { stroke: var(--ink-soft); fill: none; }
+.story .ink-fill { fill: var(--ink); stroke: none; }
+.story .paper-fill { fill: var(--paper); stroke: none; }
+
+.story .engine-note {
+  position: absolute;
+  z-index: 1;
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(0, -50%);
+}
+.story .engine-note[data-align="right"] { transform: translate(-100%, -50%); }
+.story .engine-note[data-align="center"] { transform: translate(-50%, -50%); }
+.story .engine-note > span { display: inline-block; }   /* story.js moves this span: inline boxes ignore transforms */
+.story .engine-note.is-state > span {
+  padding: 1px 5px 2px 6px;
+  border: 1px solid currentColor;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* ---------- static: a plain stacked article ---------- */
+.story:not(.live) .stamp,
+.story:not(.live) .scene,
+.story:not(.live) .quote {
+  max-width: 640px;
+  margin-inline: auto;
+}
+.story:not(.live) .stamp { text-align: center; padding: 8px 0 4px; }
+.story:not(.live) .scene { margin-top: clamp(56px, 9vw, 96px); }
+.story:not(.live) .cap-stack { margin-top: 14px; }
+.story:not(.live) .cap + .cap { margin-top: 0.75em; }
+.story:not(.live) .engine-figure { max-width: 640px; margin: clamp(28px, 5vw, 44px) auto 0; }
+.story:not(.live) .quote { margin-top: clamp(56px, 9vw, 96px); padding-bottom: 8px; }
+
+/* ---------- .live: one pinned stage, beats overlaid ---------- */
+.story.live .story-stage {
+  height: 100vh;
+  height: 100svh;
+  display: grid;
+  align-items: center;
+  justify-items: center;
+}
+.story.live .sheet {
+  height: var(--sheet-h);
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+}
+.story.live .stamp,
+.story.live .scene,
+.story.live .quote {
+  grid-area: 1 / 1;
+  min-width: 0;
+  min-height: 0;
+}
+.story.live .stamp {
+  align-self: center;
+  justify-self: center;
+  text-align: center;
+}
+.story.live .quote {
+  align-self: center;
+  justify-self: center;
+  width: min(100%, 880px);
+}
+.story .quote p { max-width: 19em; }
+
+/* split: captions left (~5fr), figure right (~7fr) */
+.story.live .scene {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  column-gap: clamp(28px, 4.2vw, 56px);
+  align-items: center;
+}
+.story.live .caps { min-width: 0; }
+.story.live .cap-stack { display: grid; margin-top: 16px; }
+.story.live .cap { grid-area: 1 / 1; }
+.story.live .engine-figure {
+  /* fit the column, and the sheet height: the drawing is 600 x 420 */
+  width: min(100%, calc((var(--sheet-h) - 2 * var(--pad)) * 600 / 420));
+  justify-self: center;
+}
+
+/* stacked: figure on top, captions under it, both inside the sheet.
+   Phones (<= 760px wide) and portrait tablets. A phone held sideways (<= 500px tall) keeps the split,
+   where the drawing comes out bigger. */
+@media (max-width: 1024px) and (orientation: portrait), (max-width: 760px) and (min-height: 501px) {
+  .story { --layout: stacked; }
+  .story.live .scene {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    grid-template-areas: "fig" "caps";
+    row-gap: 18px;
+    align-content: center;
+  }
+  .story.live .caps { grid-area: caps; width: 100%; max-width: 36em; justify-self: center; }
+  .story.live .engine-figure {
+    grid-area: fig;
+    /* bleed into the sheet margin (8px stays clear), and leave about 14rem under the drawing
+       for the kicker and the longest caption */
+    width: min(calc(100% + 2 * var(--pad) - 16px), calc((var(--sheet-h) - 2 * var(--pad) - 14rem) * 600 / 420));
+    margin-inline: calc(8px - var(--pad));
+    min-width: 0;
+  }
+  .story.live .cap-stack { margin-top: 10px; }
+}
+
+@media (max-width: 760px) {
+  .story { --pad: 18px; }
+  .story .engine-note { font-size: 13px; }
+  .story .cap { font-size: 19px; line-height: 1.4; }
+}
+@media (max-width: 480px) {
+  .story .engine-note { font-size: 12px; }
+  .story .kicker,
+  .story .quote footer { font-size: 12px; letter-spacing: 0.1em; }
+  .story .cap { font-size: 18px; }
+}
+
+/* overlay.css: the story floats over the page. A dark backdrop with the page faintly behind it, the grey sheet
+   in the middle with room around it, a Skip button above its top-right corner, a hairline along the top of
+   the sheet that shows how far along you are, and a "Scroll" hint until you start. Loaded after paper.css. */
+
+html.story-open, html.story-open body { overflow: hidden; }
+
+.story-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(0, 0, 0, 0.9);
+  opacity: 0; transition: opacity 240ms var(--ease);
+}
+.story-overlay[hidden] { display: none; }
+.story-overlay.shown { opacity: 1; }
+.story-scroller {
+  position: absolute; inset: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: none; outline: none;
+}
+.story-scroller::-webkit-scrollbar { display: none; }
+
+/* room around the sheet: the Skip button sits in the top margin */
+.story-overlay .story {
+  margin: 0;
+  --stage-top: 68px;
+  --stage-bottom: 40px;
+  --sheet-w: 1040px;
+  --sheet-h: min(calc(var(--vh) - var(--stage-top) - var(--stage-bottom)), 720px);
+}
+.story-overlay .story .sheet { width: min(var(--sheet-w), 100%); max-width: calc(100vw - 64px); }
+.story-overlay .story:not(.live) { padding: var(--stage-top) 0 var(--stage-bottom); }
+.story-overlay .story.live .story-track { height: 420vh; height: 420svh; }
+.story-overlay .story.live .story-stage {
+  position: sticky; top: 0;
+  padding: var(--stage-top) 0 var(--stage-bottom);
+}
+
+/* Skip: lined up with the sheet's right edge */
+.story-skip {
+  position: absolute; z-index: 2; top: 12px; right: max(32px, calc((100vw - var(--sheet-w, 1040px)) / 2));
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 16px 6px 18px;
+  font: inherit; font-size: 15px; color: var(--text); cursor: pointer;
+  background: var(--el); border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 999px;
+  transition: transform 160ms var(--ease), border-color 160ms var(--ease);
+}
+.story-skip span { font-size: 13px; color: var(--muted); }
+.story-skip:active { transform: scale(0.97); }
+.story-skip:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+@media (hover: hover) and (pointer: fine) {
+  .story-skip:hover { border-color: rgba(255, 255, 255, 0.34); }
+}
+
+/* how far along: a hairline of ink along the top of the sheet (above the clouds and the grain) */
+.story .story-progress { position: absolute; z-index: 4; top: 0; left: 0; right: 0; height: 3px; pointer-events: none; }
+.story .story-progress i { display: block; height: 100%; background: var(--ink); opacity: 0.75; transform: scaleX(0); transform-origin: left center; }
+.story:not(.live) .story-progress { display: none; }
+
+/* "Scroll", until you do */
+.story .story-hint {
+  position: absolute; z-index: 4; left: 50%; bottom: 14px; transform: translateX(-50%);
+  font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-muted);
+  pointer-events: none; transition: opacity 200ms var(--ease);
+}
+.story .story-hint::after { content: " \2193"; letter-spacing: 0; }
+.story.scrolled .story-hint, .story:not(.live) .story-hint { opacity: 0; }
+
+/* the last card: the string line, what the string is, and the page's own two buttons (download, back to the page) */
+.story .end { text-align: center; width: min(100%, 720px); }
+.story .end-line { font-family: var(--serif); font-size: clamp(28px, 4vw, 48px); line-height: 1.2; color: var(--ink); }
+.story .end-sub { max-width: 30em; margin: 16px auto 0; font-size: clamp(16px, 1.7vw, 19px); line-height: 1.55; color: var(--ink-muted); }
+.story .end-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 30px; }
+.story .end-actions .btn { font-family: inherit; cursor: pointer; }
+.story.live .end { grid-area: 1 / 1; align-self: center; justify-self: center; }
+.story:not(.live) .end { margin-top: clamp(56px, 9vw, 96px); padding-bottom: 8px; }
+
+/* the way back in, under "Why I built this" */
+.story-again { margin-top: 22px; }
+.story-again button {
+  padding: 6px 2px; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 16px; color: var(--muted); text-decoration: underline; text-underline-offset: 4px;
+  transition: color 160ms var(--ease);
+}
+@media (hover: hover) and (pointer: fine) { .story-again button:hover { color: var(--text); } }
+
+@media (max-width: 640px) {
+  .story-overlay .story { --stage-top: 64px; --stage-bottom: 12px; }
+  .story-overlay .story .sheet { max-width: calc(100vw - 24px); }
+  .story-skip { right: 12px; top: 10px; }
+  .story .end-actions { flex-direction: column; align-items: stretch; max-width: 360px; margin-inline: auto; }
+  .story .end-actions .btn { padding: 10px 16px; font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-overlay, .story-skip, .story .story-hint { transition: none; }
+}

@@ -188,6 +188,21 @@ h2 { font-size: clamp(32px, 4.4vw, 48px); line-height: 1.12; letter-spacing: -0.
 .reason .k { display: block; margin-bottom: 14px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; color: var(--muted); }
 .reason h3 { font-family: var(--serif); font-weight: 400; font-size: 25px; line-height: 1.2; }
 .reason p { color: var(--muted); font-size: 16px; margin-top: 10px; }
+/* hover to read, like the button group: with a mouse, the card (or step) under the pointer grows, its corners tighten
+   and its words get bigger, so the one you are reading is easier to read; the others make room. Every word glides to
+   its new line (laid out ahead by Pretext) instead of jumping there, and each group keeps the room its biggest state
+   needs, so nothing below it moves. The script adds .morph to a group only on wide screens with a mouse and motion
+   allowed; without it everything stays as laid out here. */
+.morph { --grow: 1.6; --zoom: 1.2; }
+.morph.still, .morph.still * { transition: none !important; }
+.flow { position: relative; transition: height 350ms var(--ease); }
+.flow .w { position: absolute; left: 0; top: 0; white-space: pre; user-select: none; transform-origin: 0 0; transition: transform 350ms var(--ease); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.reasons.morph { display: flex; }
+.reasons.morph .reason { flex: 1 1 0; min-width: 0; transition: flex-grow 350ms var(--ease), border-radius 350ms var(--ease); }
+.reasons.morph .reason.grown { flex-grow: var(--grow); border-radius: 12px; }
+.reasons.morph .k { transition: color 350ms var(--ease); }
+.reasons.morph .grown .k { color: var(--text); }
 
 /* how it works: four steps in a row and a loop back underneath (the AI checks its own work).
    A white dot runs along each arrow in turn, then the check box lights up: one 7 s cycle. */
@@ -247,6 +262,27 @@ h2 { font-size: clamp(32px, 4.4vw, 48px); line-height: 1.12; letter-spacing: -0.
 @keyframes v1 { 0% { transform: translateY(-100%); opacity: 0; } 1% { opacity: 1; } 12% { transform: translateY(0); opacity: 1; } 13%, 100% { transform: translateY(0); opacity: 0; } }
 @keyframes v2 { 0%, 15% { transform: translateY(-100%); opacity: 0; } 16% { opacity: 1; } 27% { transform: translateY(0); opacity: 1; } 28%, 100% { transform: translateY(0); opacity: 0; } }
 @keyframes v3 { 0%, 30% { transform: translateY(-100%); opacity: 0; } 31% { opacity: 1; } 42% { transform: translateY(0); opacity: 1; } 43%, 100% { transform: translateY(0); opacity: 0; } }
+/* hover to read (see .morph): the open step's column grows; the loop's two legs stay under their steps' centres */
+@property --g1 { syntax: "<number>"; inherits: true; initial-value: 1; }
+@property --g2 { syntax: "<number>"; inherits: true; initial-value: 1; }
+@property --g3 { syntax: "<number>"; inherits: true; initial-value: 1; }
+@property --g4 { syntax: "<number>"; inherits: true; initial-value: 1; }
+.loop.morph {
+  --sum: calc(var(--g1) + var(--g2) + var(--g3) + var(--g4));
+  grid-template-columns:
+    calc((100% - 144px) * var(--g1) / var(--sum)) 48px calc((100% - 144px) * var(--g2) / var(--sum)) 48px
+    calc((100% - 144px) * var(--g3) / var(--sum)) 48px calc((100% - 144px) * var(--g4) / var(--sum));
+  transition: --g1 350ms var(--ease), --g2 350ms var(--ease), --g3 350ms var(--ease), --g4 350ms var(--ease);
+}
+.loop.morph[data-open="0"] { --g1: var(--grow); }
+.loop.morph[data-open="1"] { --g2: var(--grow); }
+.loop.morph[data-open="2"] { --g3: var(--grow); }
+.loop.morph[data-open="3"] { --g4: var(--grow); }
+.loop.morph .vdown { right: calc((100% - 96px) * var(--g4) / (var(--g2) + var(--g3) + var(--g4)) / 2 - 1px); }
+.loop.morph .vup { left: calc((100% - 96px) * var(--g2) / (var(--g2) + var(--g3) + var(--g4)) / 2 - 1px); }
+.loop.morph .node, .loop.morph .back { transition: border-radius 350ms var(--ease); }
+.loop.morph .grown { border-radius: 12px; }
+.loop.morph .back p { flex: 1 1 0; min-width: 0; }
 
 /* what it can do: a phone with a snap-scrolling feed of example chats, one feature per screen, like scrolling Shorts */
 .feed-wrap { display: grid; grid-template-columns: auto 1fr; gap: 56px; align-items: center; max-width: 900px; margin: 44px auto 0; }
@@ -321,6 +357,14 @@ h2 { font-size: clamp(32px, 4.4vw, 48px); line-height: 1.12; letter-spacing: -0.
 }
 .steps h3 { font-size: 19px; }
 .steps p { color: var(--muted); margin-top: 4px; font-size: 16.5px; }
+/* hover to read (see .morph): the open step gets bigger words and a white number; the other steps get flatter to
+   make room for it, so the list keeps its height */
+.steps.morph { align-content: start; }
+.steps.morph li { transition: border-radius 350ms var(--ease), padding 350ms var(--ease); }
+.steps.morph li.grown { border-radius: 12px; }
+.steps.morph li > div { flex: 1 1 0; min-width: 0; }
+.steps.morph .num { transition: background-color 350ms var(--ease), color 350ms var(--ease), box-shadow 350ms var(--ease); }
+.steps.morph .grown .num { background: #fff; color: #000; box-shadow: none; }
 code {
   font-family: var(--mono); font-size: 0.92em; color: var(--text); padding: 2px 8px; border-radius: 8px;
   background: var(--well); box-shadow: var(--inset-sm); white-space: nowrap;
@@ -330,11 +374,26 @@ code {
 .after-note a { color: var(--text); }
 
 /* what you need */
-.need { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin: 40px auto 0; max-width: 860px; }
+.need { --gap: 16px; list-style: none; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--gap); margin: 40px auto 0; max-width: 860px; }
 .need li { display: flex; gap: 14px; align-items: flex-start; background: var(--el); border-radius: 18px; padding: 18px 20px; box-shadow: var(--raise-sm); border: 1px solid var(--edge); font-size: 16.5px; }
 .need li .ic { color: var(--ok); margin-top: 3px; }
 .need b { font-weight: 650; }
 .need span.m { color: var(--muted); }
+/* hover to read (see .morph), in both directions: the grid keeps its size and its middle lines move, so the open
+   item's corner gets big, the item beside it tall and narrow, the one above or below it wide and flat, the far one
+   small. The script sets where the lines go (--c1, --r1: the first column's and row's share) and the grid's height,
+   and sizes every item's words to its cell */
+@property --c1 { syntax: "<number>"; inherits: false; initial-value: 0.5; }
+@property --r1 { syntax: "<number>"; inherits: false; initial-value: 0.5; }
+.need.morph {
+  grid-template-columns: calc((100% - var(--gap)) * var(--c1)) 1fr;
+  grid-template-rows: calc((100% - var(--gap)) * var(--r1)) 1fr;
+  transition: --c1 350ms var(--ease), --r1 350ms var(--ease);
+}
+.need.morph li { transition: border-radius 350ms var(--ease); }
+.need.morph li > .ic { transform-origin: 100% 0; transition: transform 350ms var(--ease); }  /* sized with its words, keeping its gap to them */
+.need.morph li.grown { border-radius: 10px; }
+.need.morph li > span:not(.ic) { flex: 1 1 0; min-width: 0; }
 
 /* questions */
 .faq { max-width: 760px; margin: 40px auto 0; border-top: 1px solid var(--hairline); }
@@ -409,6 +468,7 @@ footer a { color: var(--text); }
   .short.play .typing { display: none; }
 }
 </style>
+<link rel="stylesheet" href="story/story.css">
 </head>
 <body>
 <div class="wrap">
@@ -445,7 +505,8 @@ footer a { color: var(--text); }
 
     <section id="why" class="why" aria-labelledby="why-h">
       <h2 id="why-h">Why I built this</h2>
-      <p class="note">I spend a lot of my week editing video. Most of those hours go into cutting flubbed takes, tightening pauses and dropping B-roll in the right spot. <span class="m">None of that is an editorial decision. It just takes time. So I built a bridge that hands that part to AI.</span></p>
+      <p class="note">Do you spend a lot of your days editing video? Most of those hours go into cutting flubbed takes, tightening pauses and dropping B-roll in the right spot. <span class="m">None of that is an editorial decision. It just takes time. So I built a bridge that hands that part to AI.</span></p>
+      <p class="story-again"><button type="button" data-story-open>Where the idea comes from: a story from 1776</button></p>
       <div class="reasons">
         <div class="reason"><span class="k">01</span><h3>Precise</h3><p>It cuts from what was said, then listens back to every cut and checks a few frames. A clipped word or a cut that is too tight gets fixed before it moves on.</p></div>
         <div class="reason"><span class="k">02</span><h3>Knows the story</h3><p>It reads what was said, how your timeline is laid out and what is on screen. So it cuts where the story needs it, not just where the silences are.</p></div>
@@ -608,8 +669,58 @@ footer a { color: var(--text); }
   <footer>
     <p>Premiere Pro Agent Bridge is free and open source (MIT). <a href="https://github.com/ZeusSheen/ppro-agent-bridge">Source code on GitHub</a>.</p>
     <p>Not made by or endorsed by Adobe, Anthropic or OpenAI. Premiere Pro is a trademark of Adobe.</p>
-    <p>Icons: Material Line Icons by Vjacheslav Trushkin (MIT).</p>
+    <p>Icons: Material Line Icons by Vjacheslav Trushkin (MIT). Text layout: <a href="https://github.com/chenglou/pretext">Pretext</a> by Cheng Lou (MIT).</p>
+    <p>Animation: <a href="https://gsap.com">GSAP</a> (free under the GreenSock standard license).</p>
   </footer>
+</div>
+
+<!-- The 1776 story floats over the page on a first visit (story/overlay.js); Skip, Esc or a click outside the sheet
+     closes it, it stays closed for that visitor, and the button under "Why I built this" opens it again. Scrolling
+     inside it moves beat by beat (story/story.js); every caption is Adam Smith's own words (The Wealth of Nations,
+     Book I, Chapter 1). Without JS it never opens; with reduced motion it is a plain article. -->
+<div class="story-overlay" id="story-overlay" role="dialog" aria-modal="true" aria-labelledby="story-title" hidden>
+  <div class="story-scroller">
+    <section class="story" id="story">
+      <h2 class="sr" id="story-title">A story from 1776</h2>
+      <div class="story-track">
+        <div class="story-stage">
+          <div class="sheet">
+            <div class="story-progress" aria-hidden="true"><i></i></div>
+            <div class="stamp">
+              <p class="year">1776</p>
+              <p class="fact" data-fact="1">Adam Smith publishes <cite>The Wealth of Nations</cite>.</p>
+              <p class="fact" data-fact="2">James Watt&rsquo;s new steam engine goes to work.</p>
+            </div>
+            <div class="scene">
+              <div class="caps">
+                <p class="kicker">Adam Smith &middot; <cite>The Wealth of Nations</cite> &middot; 1776</p>
+                <div class="cap-stack">
+                  <p class="cap" data-cap="2">&ldquo;In the first fire-engines, a boy was constantly employed to open and shut alternately the communication between the boiler and the cylinder, according as the piston either ascended or descended.&rdquo;</p>
+                  <p class="cap" data-cap="3">&ldquo;One of those boys, who loved to play with his companions, observed that, by tying a string from the handle of the valve which opened this communication to another part of the machine,&hellip;&rdquo;</p>
+                  <p class="cap" data-cap="4">&ldquo;&hellip;the valve would open and shut without his assistance, and leave him at liberty to divert himself with his playfellows.&rdquo;</p>
+                </div>
+              </div>
+              <figure class="engine-figure" aria-hidden="true"></figure>
+            </div>
+            <blockquote class="quote">
+              <p>&ldquo;One of the greatest improvements that has been made upon this machine, since it was first invented, was in this manner the discovery of <span class="hl">a boy who wanted to save his own labour</span>.&rdquo;</p>
+              <footer>Adam Smith, <cite>The Wealth of Nations</cite>, Book I, Chapter 1, 1776</footer>
+            </blockquote>
+            <div class="end">
+              <p class="end-line">So I built my own piece of string.</p>
+              <p class="end-sub">It hands the repetitive part of editing to AI: flubbed takes, long pauses, B-roll in the right spot. You keep the decisions.</p>
+              <div class="end-actions">
+                <a class="btn primary" href="https://github.com/ZeusSheen/ppro-agent-bridge/releases/download/v0.5.1/ppro-agent-bridge-v0.5.1.zip"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path fill="currentColor" fill-opacity="0" stroke-dasharray="20" d="M12 4h2v6h2.5l-4.5 4.5M12 4h-2v6h-2.5l4.5 4.5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.5s" values="20;0"/><animate fill="freeze" attributeName="fill-opacity" begin="0.7s" dur="0.4s" to="1"/></path><path fill="none" stroke-dasharray="14" stroke-dashoffset="14" d="M6 19h12"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.5s" dur="0.2s" to="0"/></path></g></svg></span>Download and use it for free</a>
+                <button type="button" class="btn" data-story-close>Continue to the page</button>
+              </div>
+            </div>
+            <p class="story-hint" aria-hidden="true">Scroll</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <button type="button" class="story-skip" data-story-close aria-label="Skip the story">Skip <span aria-hidden="true">&#x2715;</span></button>
 </div>
 
 <script>
@@ -704,5 +815,326 @@ footer a { color: var(--text); }
   }
 })();
 </script>
+<script type="module">
+/* Hover to read. With a mouse, the card (or step) under the pointer grows and its words get bigger; the rest make
+   room. CSS decides how big each card gets; Pretext lays out each text block for the width and size it is heading to
+   before the browser gets there, so every word (kept together with whatever touches it: punctuation, a <code> chip)
+   glides from where it is to where it will be, in step with its card. Words only move and scale by transform, so
+   nothing reflows per frame. Screen readers get the original text; the moving copies are hidden from them. */
+const GROUPS = [
+  { root: '.reasons', items: ':scope > .reason', blocks: ':scope > h3, :scope > p' },
+  { root: '.loop', items: ':scope > .node, :scope > .back', blocks: ':scope > h3, :scope > p' },
+  { root: '.steps', items: ':scope > li', blocks: 'h3, p', stack: true },
+  { root: '.need', items: ':scope > li', blocks: ':scope > span:not(.ic)', grid: true },
+];
+const wide = matchMedia('(hover: hover) and (pointer: fine) and (min-width: 861px) and (prefers-reduced-motion: no-preference)');
+let pretext = null;  // loaded the first time the effect runs, so phones never download it
+let groups = [], on = false;
+const FLAT = 0.45;  // in a stack, the other cards keep this share of their top and bottom padding while one is open
+// A 2x2 grid keeps its size. For each open item its column and row take as big a share as they can (from 0.7 down to
+// 0.5) while every other item still fits its cell with words at least minZoom of their size; each item's words then
+// get the biggest size that fits its cell, up to maxZoom for the open one and never above normal for the rest.
+const GRID = { share: [0.7, 0.5], step: 0.02, minZoom: 0.72, maxZoom: 1.4 };
+
+function px(v) { return parseFloat(v) || 0; }
+function fontOf(cs) { return `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`; }
+function widthOf(text, cs) {
+  return pretext.measureNaturalWidth(pretext.prepareWithSegments(text, fontOf(cs), { letterSpacing: px(cs.letterSpacing) }));
+}
+
+// One text block as Pretext rich-inline items: each word is an unbreakable item in its own font (with a chip's
+// padding, and anything touching it measured onto it), and each space is its own item, measured in its own font.
+function build(el) {
+  const items = [], words = [];
+  let word = null;
+  (function walk(node, chain) {
+    for (const child of node.childNodes) {
+      if (child.nodeType === 1) { walk(child, [...chain, child]); continue; }
+      if (child.nodeType !== 3) continue;
+      const host = chain.at(-1) || el, cs = getComputedStyle(host);
+      for (const [token] of child.data.matchAll(/\s+|\S+/g)) {
+        if (/^\s/.test(token)) {
+          if (word) items.push({ text: ' ', font: fontOf(cs) });
+          word = null;
+          continue;
+        }
+        const chip = host !== el && host.textContent.trim() === token
+          ? px(cs.paddingLeft) + px(cs.paddingRight) + px(cs.borderLeftWidth) + px(cs.borderRightWidth) : 0;
+        let piece = document.createTextNode(token);
+        for (const parent of [...chain].reverse()) { const copy = parent.cloneNode(false); copy.append(piece); piece = copy; }
+        if (word) {
+          items[word.item].extraWidth += widthOf(token, cs) + chip;
+        } else {
+          word = { span: document.createElement('span'), item: items.length };
+          word.span.className = 'w';
+          items.push({ text: token, font: fontOf(cs), letterSpacing: px(cs.letterSpacing), break: 'never', extraWidth: chip });
+          words.push(word);
+        }
+        word.span.append(piece);
+      }
+    }
+  })(el, []);
+  const cs = getComputedStyle(el);
+  const plain = document.createElement('span'), shown = document.createElement('span');
+  plain.className = 'sr';
+  plain.append(...el.childNodes);
+  shown.setAttribute('aria-hidden', 'true');
+  shown.append(...words.map(w => w.span));
+  el.append(plain, shown);
+  el.classList.add('flow');
+  return {
+    el, plain, words,
+    prepared: pretext.prepareRichInline(items),
+    lineHeight: cs.lineHeight === 'normal' ? px(cs.fontSize) * 1.2 : px(cs.lineHeight),
+    align: cs.textAlign,
+  };
+}
+
+// Where each word of a block goes at this width and zoom, how tall the block is and how wide its widest line (wider
+// than `width` only when one word is). Text `zoom` times bigger breaks like normal text in a box `zoom` times narrower.
+function place(block, width, zoom) {
+  const { prepared, lineHeight, align, words } = block;
+  const room = width / zoom, at = new Map();
+  let lines = 0, widest = 0;
+  pretext.walkRichInlineLineRanges(prepared, room, line => {
+    let x = align === 'center' ? (room - line.width) / 2 : align === 'right' || align === 'end' ? room - line.width : 0;
+    for (const f of line.fragments) {
+      x += f.gapBefore;
+      at.set(f.itemIndex, [x * zoom, lines * lineHeight * zoom]);
+      x += f.occupiedWidth;
+    }
+    widest = Math.max(widest, line.width);
+    lines++;
+  });
+  return { height: lines * lineHeight * zoom, widest: widest * zoom, pos: words.map(w => at.get(w.item) || [0, 0]) };
+}
+
+function paint(block, width, zoom) {
+  const { height, pos } = place(block, width, zoom);
+  block.el.style.height = height + 'px';
+  block.words.forEach((w, n) => { w.span.style.transform = `translate(${pos[n][0]}px, ${pos[n][1]}px) scale(${zoom})`; });
+}
+
+// The room for grid item i's words when item `which` is open and its column and row take `share` of the grid.
+function cell(g, i, which, share) {
+  const across = which < 0 ? 0.5 : i % 2 === which % 2 ? share : 1 - share;
+  const down = which < 0 ? 0.5 : (i >> 1) === (which >> 1) ? share : 1 - share;
+  return [g.size[0] * across - g.cards[i].chrome[0], g.size[1] * down - g.cards[i].chrome[1]];
+}
+
+// The biggest zoom, up to `most`, at which a card's words fit this room; 0 if they do not fit even at a third.
+function fitZoom(card, [width, height], most) {
+  const fits = zoom => {
+    let used = 0;
+    for (const b of card.blocks) {
+      const p = place(b, width, zoom);
+      if (p.widest > width + 0.5) return false;
+      used += p.height;
+    }
+    return used <= height + 0.5;
+  };
+  if (fits(most)) return most;
+  let lo = 1 / 3, hi = most;
+  if (!fits(lo)) return 0;
+  for (let n = 0; n < 12; n++) {
+    const mid = (lo + hi) / 2;
+    if (fits(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function setState(g, which) {
+  g.open = which;
+  g.cards.forEach((c, i) => c.el.classList.toggle('grown', i === which));
+  if (which < 0) delete g.root.dataset.open;
+  else g.root.dataset.open = which;
+}
+
+function draw(g) {
+  if (g.grid) {
+    const plan = g.plans[g.open + 1];
+    g.root.style.setProperty('--c1', plan.c1);
+    g.root.style.setProperty('--r1', plan.r1);
+    g.cards.forEach((c, i) => {
+      c.blocks.forEach(b => paint(b, plan.widths[i], plan.zooms[i]));
+      const icon = c.el.querySelector(':scope > .ic');
+      if (icon) icon.style.transform = `scale(${plan.zooms[i]})`;
+    });
+    return;
+  }
+  const widths = g.widths[g.open + 1];
+  g.cards.forEach((c, i) => {
+    const zoom = i === g.open ? g.zoom : 1;
+    if (g.stack) {  // the other cards of a stack get flatter; the open one takes the room their padding gave up
+      const scale = g.open < 0 ? 1 : i === g.open ? 1 : FLAT, extra = i === g.open ? g.extra[i] : 0;
+      c.el.style.paddingTop = c.pad[0] * scale + extra + 'px';
+      c.el.style.paddingBottom = c.pad[1] * scale + extra + 'px';
+    }
+    c.blocks.forEach((b, k) => paint(b, widths[i][k], zoom));
+  });
+}
+
+function render(g, which) {
+  setState(g, which);
+  draw(g);
+}
+
+// With transitions off, try every state once: how wide each block is then (that is up to CSS). In a stack, the
+// padding the other cards give up goes to the open card: first to its bigger words, the rest around them, so the
+// stack keeps its height. Whatever room is still needed (a row's tallest state, words that outgrow the padding) is
+// kept as min-height, on each card in a row and on the whole stack, so nothing below the group moves.
+function measure(g) {
+  if (g.grid) return measureGrid(g);
+  const was = g.open;
+  g.root.classList.add('still');
+  g.root.style.minHeight = '';
+  g.cards.forEach(c => { c.el.style.minHeight = c.el.style.paddingTop = c.el.style.paddingBottom = ''; });
+  const tallest = g.cards.map(() => 0);
+  let total = 0;
+  g.widths = [];
+  for (let which = -1; which < g.cards.length; which++) {
+    setState(g, which);
+    g.widths[which + 1] = g.cards.map(c => c.blocks.map(b => b.el.getBoundingClientRect().width));
+  }
+  if (g.stack) {
+    g.cards.forEach(c => { const cs = getComputedStyle(c.el); c.pad = [px(cs.paddingTop), px(cs.paddingBottom)]; });
+    g.extra = g.cards.map((c, i) => {
+      const words = c.blocks.reduce((grow, b, k) =>
+        grow + place(b, g.widths[i + 1][i][k], g.zoom).height - place(b, g.widths[0][i][k], 1).height, 0);
+      const given = g.cards.reduce((sum, o) => (o === c ? sum : sum + (o.pad[0] + o.pad[1]) * (1 - FLAT)), 0);
+      return Math.max(0, given - words) / 2;
+    });
+  }
+  for (let which = -1; which < g.cards.length; which++) {
+    setState(g, which);
+    draw(g);
+    if (g.stack) total = Math.max(total, g.root.getBoundingClientRect().height);
+    else g.cards.forEach((c, i) => { tallest[i] = Math.max(tallest[i], c.el.getBoundingClientRect().height); });
+  }
+  if (g.stack) g.root.style.minHeight = total + 'px';
+  else g.cards.forEach((c, i) => { c.el.style.minHeight = tallest[i] + 'px'; });
+  render(g, was);
+  void g.root.offsetWidth;
+  g.root.classList.remove('still');
+  g.lastWidth = g.root.clientWidth;
+}
+
+// A 2x2 grid gets equal rows as tall as its tallest item needs, and a plan for each state: where the middle lines go
+// and how big each item's words are (see GRID).
+function measureGrid(g) {
+  const was = g.open;
+  g.root.classList.add('still');
+  g.root.style.height = '';
+  setState(g, -1);
+  g.root.style.setProperty('--c1', 0.5);
+  g.root.style.setProperty('--r1', 0.5);
+  g.cards.forEach(c => {
+    const cs = getComputedStyle(c.el);
+    c.chrome = [
+      c.el.getBoundingClientRect().width - c.blocks[0].el.getBoundingClientRect().width,
+      px(cs.paddingTop) + px(cs.paddingBottom) + px(cs.borderTopWidth) + px(cs.borderBottomWidth) + c.blocks.reduce((sum, b) => {
+        const bs = getComputedStyle(b.el);
+        return sum + px(bs.marginTop) + px(bs.marginBottom);
+      }, 0),
+    ];
+  });
+  const style = getComputedStyle(g.root), across = g.root.clientWidth - px(style.columnGap);
+  const tallest = Math.max(...g.cards.map(c =>
+    c.chrome[1] + c.blocks.reduce((sum, b) => sum + place(b, across / 2 - c.chrome[0], 1).height, 0)));
+  g.size = [across, 2 * tallest];
+  g.root.style.height = 2 * tallest + px(style.rowGap) + 'px';
+  g.plans = [];
+  for (let which = -1; which < g.cards.length; which++) {
+    let share = which < 0 ? 0.5 : GRID.share[0], zooms;
+    for (;;) {
+      zooms = g.cards.map((c, i) => fitZoom(c, cell(g, i, which, share), i === which ? GRID.maxZoom : 1));
+      if (share <= GRID.share[1] || zooms.every((z, i) => z >= (i === which ? 1 : GRID.minZoom))) break;
+      share = Math.max(GRID.share[1], share - GRID.step);
+    }
+    g.plans[which + 1] = {
+      c1: which < 0 ? 0.5 : which % 2 === 0 ? share : 1 - share,
+      r1: which < 0 ? 0.5 : (which >> 1) === 0 ? share : 1 - share,
+      widths: g.cards.map((c, i) => cell(g, i, which, share)[0]),
+      zooms,
+    };
+  }
+  render(g, was);
+  void g.root.offsetWidth;
+  g.root.classList.remove('still');
+  g.lastWidth = g.root.clientWidth;
+}
+
+const resized = new ResizeObserver(entries => entries.forEach(e => {
+  const g = groups.find(g => g.root === e.target);
+  if (g && g.root.clientWidth !== g.lastWidth) measure(g);
+}));
+
+async function start() {
+  if (on) return;
+  pretext ??= await Promise.all([import('./vendor/pretext/layout.js'), import('./vendor/pretext/rich-inline.js')])
+    .then(([layout, rich]) => ({ ...layout, ...rich }));
+  if (on || !wide.matches) return;
+  on = true;
+  groups = GROUPS.map(({ root, items, blocks, stack, grid }) => {
+    const el = document.querySelector(root);
+    if (!el) return null;
+    el.classList.add('morph', 'still');
+    const g = {
+      root: el, stack, grid, open: -1, zoom: px(getComputedStyle(el).getPropertyValue('--zoom')),
+      cards: [...el.querySelectorAll(items)].map(card => ({ el: card, blocks: [...card.querySelectorAll(blocks)].map(build) })),
+    };
+    measure(g);
+    resized.observe(el);
+    return g;
+  }).filter(Boolean);
+}
+
+function stop() {
+  if (!on) return;
+  on = false;
+  resized.disconnect();
+  groups.forEach(g => {
+    g.root.classList.remove('morph', 'still');
+    delete g.root.dataset.open;
+    g.root.style.minHeight = g.root.style.height = '';
+    g.root.style.removeProperty('--c1');
+    g.root.style.removeProperty('--r1');
+    g.cards.forEach(c => {
+      c.el.classList.remove('grown');
+      c.el.style.minHeight = c.el.style.paddingTop = c.el.style.paddingBottom = '';
+      const icon = c.el.querySelector(':scope > .ic');
+      if (icon) icon.style.transform = '';
+      c.blocks.forEach(b => { b.el.replaceChildren(...b.plain.childNodes); b.el.classList.remove('flow'); b.el.style.height = ''; });
+    });
+  });
+  groups = [];
+}
+
+// The card under the pointer opens; the gaps inside a group keep its open card open; anywhere else closes it.
+document.addEventListener('pointerover', e => {
+  groups.forEach(g => {
+    const i = g.cards.findIndex(c => c.el.contains(e.target));
+    if (i >= 0 ? i !== g.open : g.open >= 0 && !g.root.contains(e.target)) render(g, i);
+  });
+});
+document.documentElement.addEventListener('pointerleave', () => groups.forEach(g => { if (g.open >= 0) render(g, -1); }));
+wide.addEventListener('change', () => (wide.matches ? start() : stop()));
+// A window moved to a screen of another density draws borders thinner or thicker without changing any width, so
+// measure again then.
+(function watchDensity() {
+  matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => {
+    groups.forEach(measure);
+    watchDensity();
+  }, { once: true });
+})();
+document.fonts.ready.then(() => { if (wide.matches) start(); });
+</script>
+<script src="vendor/gsap/gsap.min.js"></script>
+<script src="vendor/gsap/ScrollTrigger.min.js"></script>
+<script src="story/engine.js"></script>
+<script src="story/clouds.js"></script>
+<script src="story/overlay.js"></script>
+<script src="story/story.js"></script>
 </body>
 </html>
