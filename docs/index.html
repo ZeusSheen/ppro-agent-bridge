@@ -855,12 +855,32 @@ function widthOf(text, cs) {
 
 // One text block as Pretext rich-inline items: each word is an unbreakable item in its own font (with a chip's
 // padding, and anything touching it measured onto it), and each space is its own item, measured in its own font.
+// An element that doesn't wrap (a <code> chip, white-space: nowrap) is one word however many spaces it holds, as the
+// browser keeps it on one line, with its padding and border once at each end.
 function build(el) {
   const items = [], words = [];
   let word = null;
+  const edges = cs => px(cs.paddingLeft) + px(cs.paddingRight) + px(cs.borderLeftWidth) + px(cs.borderRightWidth);
+  function add(token, cs, piece, chip) {
+    for (const parent of [...piece.chain].reverse()) { const copy = parent.cloneNode(false); copy.append(piece.node); piece.node = copy; }
+    if (word) {
+      items[word.item].extraWidth += widthOf(token, cs) + chip;
+    } else {
+      word = { span: document.createElement('span'), item: items.length };
+      word.span.className = 'w';
+      items.push({ text: token, font: fontOf(cs), letterSpacing: px(cs.letterSpacing), break: 'never', extraWidth: chip });
+      words.push(word);
+    }
+    word.span.append(piece.node);
+  }
   (function walk(node, chain) {
     for (const child of node.childNodes) {
-      if (child.nodeType === 1) { walk(child, [...chain, child]); continue; }
+      if (child.nodeType === 1) {
+        const cs = getComputedStyle(child), text = child.textContent.trim().replace(/\s+/g, ' ');
+        if (cs.whiteSpace === 'nowrap' && text) add(text, cs, { node: child.cloneNode(true), chain }, edges(cs));
+        else walk(child, [...chain, child]);
+        continue;
+      }
       if (child.nodeType !== 3) continue;
       const host = chain.at(-1) || el, cs = getComputedStyle(host);
       for (const [token] of child.data.matchAll(/\s+|\S+/g)) {
@@ -869,19 +889,8 @@ function build(el) {
           word = null;
           continue;
         }
-        const chip = host !== el && host.textContent.trim() === token
-          ? px(cs.paddingLeft) + px(cs.paddingRight) + px(cs.borderLeftWidth) + px(cs.borderRightWidth) : 0;
-        let piece = document.createTextNode(token);
-        for (const parent of [...chain].reverse()) { const copy = parent.cloneNode(false); copy.append(piece); piece = copy; }
-        if (word) {
-          items[word.item].extraWidth += widthOf(token, cs) + chip;
-        } else {
-          word = { span: document.createElement('span'), item: items.length };
-          word.span.className = 'w';
-          items.push({ text: token, font: fontOf(cs), letterSpacing: px(cs.letterSpacing), break: 'never', extraWidth: chip });
-          words.push(word);
-        }
-        word.span.append(piece);
+        const chip = host !== el && host.textContent.trim() === token ? edges(cs) : 0;
+        add(token, cs, { node: document.createTextNode(token), chain }, chip);
       }
     }
   })(el, []);
