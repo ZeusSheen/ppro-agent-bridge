@@ -34,11 +34,15 @@ class ApiSmokeAgainstFake(unittest.TestCase):
             b.stop()
         self._tmp.cleanup()
 
-    def bridge(self, project="PAB_TEST_fake"):
-        b = Bridge(panel_env={"PPRO_FAKE_PROJECT_NAME": project, "PPRO_FAKE_MEDIA_SECONDS": "6"})
+    def bridge(self, project="PAB_TEST_fake", **panel_env):
+        b = Bridge(panel_env={"PPRO_FAKE_PROJECT_NAME": project, "PPRO_FAKE_MEDIA_SECONDS": "6", **panel_env})
         self.bridges.append(b)
         self.assertNotIn(":8017", b.url)
         return b
+
+    def project_items(self, bridge):
+        from ppro_bridge import transport
+        return transport.make_rpc(url=bridge.url)("list_project_items")["items"]
 
     def run_it(self, bridge, *args):
         out = self.root / f"out_{len(list(self.root.glob('out_*')))}"
@@ -68,12 +72,17 @@ class ApiSmokeAgainstFake(unittest.TestCase):
         self.assertIn("| markers |", (out / "api_smoke.md").read_text(encoding="utf-8"))
         self.assertEqual(report["leftBehind"]["clips"], [])
         self.assertEqual(report["guard"]["projectPrefix"], "PAB_TEST")
+        self.assertEqual(st["cleanup: remove test bins"], "PASS", proc.stdout)  # remove_project_items, dry run first
+        self.assertEqual(report["leftBehind"]["projectItems"], [])
+        self.assertFalse([i for i in self.project_items(b) if i["bin"].startswith("PAB_API_")])
 
     def test_one_case_only(self):
         b = self.bridge()
         proc, report, _ = self.run_it(b, "--case", "keyframes")
         self.assertIsNotNone(report, proc.stdout + proc.stderr)
-        self.assertEqual(list(report["cases"]), ["keyframes", "cleanup_bin"])  # the runner's bin goes last
+        self.assertEqual(list(report["cases"]), ["keyframes"])
+        st = {r["name"]: r["status"] for r in report["results"]}
+        self.assertEqual(st["cleanup: remove test bins"], "PASS", proc.stdout)  # the runner's bin goes last
 
     def test_a_named_project_runs_and_its_bin_is_removed(self):
         b = self.bridge(project="Real Job 2026.prproj")
@@ -85,9 +94,19 @@ class ApiSmokeAgainstFake(unittest.TestCase):
         self.assertEqual(st["check: sampled sequence frames"], "PASS", proc.stdout)
         self.assertNotIn("projectPrefix", report["guard"])
         self.assertIn("projectGuid", report["guard"])
-        self.assertIn("cleanup_bin", report["cases"])
+        self.assertEqual(st["cleanup: remove test bins"], "PASS", proc.stdout)
+        self.assertFalse([i for i in self.project_items(b) if i["bin"].startswith("PAB_API_")])
         proc, report, _ = self.run_it(b, "--allow-project", "Some Other.prproj")
         self.assertEqual(proc.returncode, 2, proc.stdout)
+
+    def test_keep_leaves_the_clips_and_the_bin(self):
+        b = self.bridge()
+        proc, report, _ = self.run_it(b, "--case", "markers", "--keep")
+        self.assertIsNotNone(report, proc.stdout + proc.stderr)
+        st = {r["name"]: r["status"] for r in report["results"]}
+        self.assertEqual(st["cleanup: remove test bins"], "SKIP", proc.stdout)
+        self.assertTrue(any(x.startswith("bin PAB_API_") for x in report["leftBehind"]["projectItems"]))
+        self.assertTrue([i for i in self.project_items(b) if i["bin"].startswith("PAB_API_")])
 
     def test_other_projects_are_refused(self):
         b = self.bridge(project="Real Job 2026.prproj")
@@ -95,6 +114,21 @@ class ApiSmokeAgainstFake(unittest.TestCase):
         self.assertEqual(proc.returncode, 2, proc.stdout)
         self.assertEqual({r["name"]: r["status"] for r in report["results"]}["bootstrap"], "FAIL")
         self.assertNotIn("cases", {k for k, v in report.items() if v})
+
+    def test_a_release_panel_is_named_before_anything_runs(self):
+        """A release build (ping build.dev false) has no api_smoke: the runner says so, in any project, and stops."""
+        for project in ("PAB_TEST_fake", "Real Job 2026.prproj"):
+            with self.subTest(project=project):
+                b = self.bridge(project=project, PPRO_FAKE_RELEASE="1")
+                before = self.project_items(b)
+                proc, report, _ = self.run_it(b)
+                self.assertEqual(proc.returncode, 2, proc.stdout)
+                boot = next(r for r in report["results"] if r["name"] == "bootstrap: dev build")
+                self.assertEqual(boot["status"], "FAIL")
+                self.assertIn("release build", boot["detail"])
+                self.assertIn("dev checkout", boot["detail"])
+                self.assertEqual(report["cases"], {})
+                self.assertEqual(self.project_items(b), before)
 
 
 if __name__ == "__main__":

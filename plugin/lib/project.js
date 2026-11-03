@@ -33,6 +33,26 @@ module.exports = function (deps) {
     return found;
   }
 
+  /* The whole project panel tree, bins included: {item, folder (the bin holding it), binPath (of that bin),
+   * path (its own: binPath/name), kind ("bin" | "clip"), clip (the cast, clips only)}, parents before children. */
+  async function walkTree(project) {
+    const root = await project.getRootItem();
+    const queue = (await root.getItems()).map((item) => ({ item, folder: root, binPath: "" }));
+    const found = [];
+    for (let i = 0; i < queue.length; i++) {
+      const e = queue[i];
+      const clip = ppro.ClipProjectItem.cast(e.item);
+      const bin = clip ? null : ppro.FolderItem.cast(e.item);
+      if (!clip && !bin) continue;
+      const name = clip ? clip.name : bin.name;
+      const entry = Object.assign(e, { kind: clip ? "clip" : "bin", clip, name,
+        path: e.binPath ? `${e.binPath}/${name}` : name });
+      found.push(entry);
+      if (bin) for (const sub of await bin.getItems()) queue.push({ item: sub, folder: bin, binPath: entry.path });
+    }
+    return found;
+  }
+
   /* Project items called `name`, narrowed to one bin when binPath is given ("" = root). */
   function matchClips(entries, name, binPath) {
     return entries.filter((e) => e.clip.name === name && (typeof binPath !== "string" || e.binPath === binPath));
@@ -112,5 +132,5 @@ module.exports = function (deps) {
     };
   }
 
-  return { walkProject, matchClips, itemRef, resolveClip, resolveBin, clipKey, jobs: createJobTable() };
+  return { walkProject, walkTree, matchClips, itemRef, resolveClip, resolveBin, clipKey, jobs: createJobTable() };
 };

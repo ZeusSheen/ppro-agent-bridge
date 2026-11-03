@@ -12,7 +12,12 @@ module.exports = function (deps) {
   const BridgeError = core.BridgeError;
   const tryGet = core.tryGet;
   const tryGetSync = core.tryGetSync;
-  const MAX_CREATED = 16; // effect instances one set_params request may append (guards a typo in occurrence)
+  const MAX_CREATED = 16; // effect instances one set_params request may add (guards a typo in occurrence)
+  // A graphic gets its layer components about a second after it is placed (Basic Title on 27.1: 0.9 s). An effect
+  // added before then ends up after them once they arrive, where it does nothing: set_params waits for them, this long
+  // at most (then it appends and says so: a graphic may have no layers at all).
+  const GRAPHIC_LAYERS_WAIT_MS = 2000;
+  const GRAPHIC_LAYERS_POLL_MS = 100;
 
   return {
     /*
@@ -31,7 +36,7 @@ module.exports = function (deps) {
       const track = await timeline.getTrack(sequence, "video", params.videoTrack);
 
       const targets = [];
-      for (const it of await timeline.clipItems(track)) {
+      for (const it of await timeline.clipItems(track, `V${params.videoTrack + 1}`)) {
         const d = timeline.requireSpan(await timeline.describeItem(it), `V${params.videoTrack + 1}`);
         if (!timeline.overlaps(d, params.fromSeconds, to)) continue;
         const scale = await effects.findMotionScale(it);
@@ -58,11 +63,18 @@ module.exports = function (deps) {
     /*
      * Write effect params on the one clip under atSeconds (video track).
      * params: { videoTrack, atSeconds, undoLabel?, dryRun?,
-     *           components: [{ matchName, occurrence = 1, params: [{ index, value?, timeBase?, keyframes?: [{ t, value }] }] }] }
-     * `occurrence` is the n-th instance of matchName in chain order; missing instances are appended
-     * (occurrence 2 on a clip without the effect creates two). A param with keyframes needs a
-     * timeBase (media | clip | sequence) and becomes time-varying with exactly those keyframes; the
-     * keyframes win over value. The WHOLE request is validated before the first transaction.
+     *           components: [{ matchName, occurrence = 1, params: [{ index, value?, timeBase?, keyframes?: [{ t, value }],
+     *                                                                interpolation? }] }] }
+     * `occurrence` is the n-th instance of matchName in chain order; missing instances are added in request
+     * order (occurrence 2 on a clip without the effect creates two): appended, or on a graphic right before its first
+     * layer component (effects.insertionIndex; a graphic just placed gets up to GRAPHIC_LAYERS_WAIT_MS for its layers:
+     * layerWait, and warning when none came), and listed with their chain index in createdComponents (read back;
+     * dryRun: planned). Audio effects are never added here. A param with keyframes
+     * needs a timeBase (media | clip | sequence) and becomes time-varying with exactly those keyframes; the
+     * keyframes win over value. `interpolation` (effects.interpolationMode) is the temporal interpolation
+     * of the keyframes given (one more undo step, "[interpolation]"), or alone, of every keyframe the param
+     * already has; the reply samples the curve it gives (effects.curveSamples).
+     * The WHOLE request is validated before the first transaction.
      * dryRun: validate the same way (missing effects become factory components, which commit nothing)
      * and return before the first transaction; replace_clip asks this before it removes a clip.
      */
@@ -81,7 +93,7 @@ module.exports = function (deps) {
 
       let chain = await tryGet(() => it.getComponentChain());
       if (!chain) throw new BridgeError("NOT_FOUND", `${tl} @${params.atSeconds}s has no component chain.`);
-      const present = await effects.chainMatchNames(chain);
+      let present = await effects.chainMatchNames(chain);
 
       const reqs = params.components.map((c) => ({
         matchName: c.matchName,
@@ -89,25 +101,79 @@ module.exports = function (deps) {
         params: Array.isArray(c.params) ? c.params : [],
       }));
 
-      // Instances to append: per match name, the highest occurrence asked for minus what the chain has.
-      const need = {};
-      const order = [];
-      for (const r of reqs) {
-        if (!core.hasOwn(need, r.matchName)) { need[r.matchName] = 0; order.push(r.matchName); }
-        need[r.matchName] = Math.max(need[r.matchName], r.occurrence);
-      }
-      const toCreate = [];
-      for (const m of order) {
-        for (let i = effects.indexesOf(present, m).length; i < need[m]; i++) toCreate.push(m);
-      }
+      // Instances to add, in request order: each component up to its occurrence, counting what the chain and the
+      // components before it in the request have of that match name ([A 1, B 1, A 2] adds A, B, A).
+      const planCreate = () => {
+        const out = [];
+        const have = {};
+        for (const r of reqs) {
+          if (!core.hasOwn(have, r.matchName)) have[r.matchName] = effects.indexesOf(present, r.matchName).length;
+          for (; have[r.matchName] < r.occurrence; have[r.matchName]++) out.push(r.matchName);
+        }
+        return out;
+      };
+      let toCreate = planCreate();
       if (toCreate.length && kind === "audio") {
-        throw new BridgeError("UNSUPPORTED", `Adding audio effects is not supported yet (${toCreate.join(", ")} is not on the clip); ` +
-          "write params of components the audio clip already has (e.g. its Volume).");
+        throw new BridgeError("UNSUPPORTED", `set_params does not add audio effects (${toCreate.join(", ")} is not on the clip): ` +
+          "add it with add_audio_effect (by display name) first, then write its params.");
       }
       if (toCreate.length > MAX_CREATED) {
         throw new BridgeError("BAD_PARAMS", `The request would add ${toCreate.length} effect instances (limit ${MAX_CREATED}); check occurrence.`);
       }
-      // Factory components are plain objects until appended (no Action, nothing committed yet);
+      // On a graphic, new effects go right before its first layer component (effects.insertionIndex), which needs the
+      // factory list to tell layers from effects, and the layers themselves: on a graphic just placed, wait for them.
+      let place = { index: present.length, tail: [], graphic: false, layers: 0 };
+      let layerWait = null;
+      if (toCreate.length) {
+        const listed = await tryGet(() => ppro.VideoFilterFactory.getMatchNames(), null);
+        const addable = Array.isArray(listed) ? listed.map(String) : null;
+        const locate = () => effects.insertionIndex(present, addable ? addable.concat(toCreate) : null);
+        place = locate();
+        if (place.graphic && !addable) {
+          throw new BridgeError("UNSUPPORTED", `${tl} @${params.atSeconds}s is a graphic, and VideoFilterFactory.getMatchNames ` +
+            "could not be read to tell its layer components from its effects: a new effect could land after the layers, " +
+            "where it does nothing. Nothing was changed.");
+        }
+        if (place.graphic && !place.layers) {
+          const t0 = Date.now();
+          while (!place.layers && Date.now() - t0 < GRAPHIC_LAYERS_WAIT_MS) {
+            await core.sleep(GRAPHIC_LAYERS_POLL_MS);
+            chain = (await tryGet(() => it.getComponentChain())) || chain;
+            present = await effects.chainMatchNames(chain);
+            place = locate();
+          }
+          layerWait = { seconds: Math.round((Date.now() - t0) / 100) / 10, layers: place.layers };
+          toCreate = planCreate();
+          place = locate();
+        }
+        // An instance must follow the ones of its match name (occurrence order): with one already after the layers, a
+        // new one would go there too, where it does nothing.
+        const behind = toCreate.filter((m, i) => toCreate.indexOf(m) === i &&
+          effects.indexesOf(present, m).some((k) => k >= place.index && place.tail.length));
+        if (behind.length) {
+          throw new BridgeError("UNSUPPORTED", `${tl} @${params.atSeconds}s has ${behind.join(", ")} after the graphic's layer ` +
+            `components (chain ${present.join(", ")}), where it does nothing, and a new instance would have to follow it. ` +
+            "Remove it (remove_effect), then add the effects again. Nothing was changed.", { data: { chain: present } });
+        }
+        if (place.tail.length && !core.isFn(chain, "createInsertComponentAction")) {
+          throw new BridgeError("UNSUPPORTED", `${tl} @${params.atSeconds}s ends in ${place.tail.join(", ")} (a graphic's ` +
+            "layers), and this Premiere build cannot insert an effect before them (no createInsertComponentAction): " +
+            "appended after them it would not act on the graphic. Nothing was changed.");
+        }
+      }
+      // A graphic still without layers after the wait gets the effects appended (a graphic may have none); the reply
+      // says so, since layers Premiere adds later would go before them.
+      const withLayerWait = (reply) => {
+        if (!layerWait) return reply;
+        reply.layerWait = layerWait;
+        if (!layerWait.layers) {
+          reply.warning = `${tl} @${params.atSeconds}s is a graphic without layer components after ${layerWait.seconds} s: ` +
+            "the effects were appended. Layers Premiere adds later go before them, and then the effects do nothing: " +
+            "check the chain with inspect_items.";
+        }
+        return reply;
+      };
+      // Factory components are plain objects until added (no Action, nothing committed yet);
       // their param lists validate the request for effects the clip does not have yet.
       const created = [];
       for (const m of toCreate) {
@@ -116,6 +182,13 @@ module.exports = function (deps) {
         if (!comp) throw new BridgeError("NOT_FOUND", `Cannot add effect ${m} (unknown match name, or not an addable filter).`);
         created.push({ matchName: m, comp });
       }
+      // At consecutive indexes in one transaction: its actions run in order (27.1: [blur 2, tint] landed at 4, 5).
+      const seenCreated = {};
+      const plannedComponents = created.map((c, k) => {
+        seenCreated[c.matchName] = (seenCreated[c.matchName] || 0) + 1;
+        return { matchName: c.matchName, occurrence: effects.indexesOf(present, c.matchName).length + seenCreated[c.matchName],
+                 index: place.index + k };
+      });
       const instance = (m, occ) => {
         const idxs = effects.indexesOf(present, m);
         if (occ <= idxs.length) return { existing: true, comp: chain.getComponentAtIndex(idxs[occ - 1]) };
@@ -137,10 +210,23 @@ module.exports = function (deps) {
           seen[where] = true;
           const param = deferIndex ? null : (p.index < count ? tryGetSync(() => inst.comp.getParam(p.index)) : null);
           if (!param && !deferIndex) throw new BridgeError("NOT_FOUND", `${r.matchName} has no param #${p.index} (it has ${count}).`);
-          const keyed = inst.existing && !!tryGetSync(() => param.isTimeVarying(), false);
+          // Premiere arms some params with animation on and no keyframes (every param of an added audio effect such as
+          // 降噪, live 27.1): nothing would hide a value there, so they are not KEYFRAMED, and a static value switches
+          // their animation off first. A key list that cannot be read counts as keyed: never write over keys unseen.
+          const varying = inst.existing && !!tryGetSync(() => param.isTimeVarying(), false);
+          const keyList = varying ? tryGetSync(() => param.getKeyframeListAsTickTimes(), null) : [];
+          const keyed = varying && !(Array.isArray(keyList) && keyList.length === 0);
+          const armed = varying && !keyed;
           const job = { matchName: r.matchName, occurrence: r.occurrence, index: p.index, where,
                         name: param ? param.displayName : null };
-          if (Array.isArray(p.keyframes) && p.keyframes.length) {
+          const interp = p.interpolation === undefined || p.interpolation === null ? null
+            : effects.interpolationMode(p.interpolation, where);
+          if (interp && !(Array.isArray(p.keyframes) && p.keyframes.length) && (p.value === undefined || p.value === null)) {
+            // interpolation only: the keyframes the param already has
+            if (!keyed) throw new BridgeError("BAD_PARAMS", `${where} is not keyframed; interpolation applies to keyframes.`);
+            job.interpolation = interp;
+            job.interpolationOnly = true;
+          } else if (Array.isArray(p.keyframes) && p.keyframes.length) {
             if (typeof p.timeBase !== "string") {
               throw new BridgeError("BAD_PARAMS", `${where}: keyframes need a timeBase (media, clip or sequence).`);
             }
@@ -156,12 +242,15 @@ module.exports = function (deps) {
               });
               return { ticks: conv.mediaTicks, mediaSeconds: conv.mediaSeconds, value: effects.normalizeValue(k.value, `${where} keyframe ${i}`) };
             });
+            job.interpolation = interp;
           } else {
             if (p.value === undefined || p.value === null) {
-              throw new BridgeError("BAD_PARAMS", `${where}: needs a value or keyframes.`);
+              throw new BridgeError("BAD_PARAMS", `${where}: needs a value, keyframes or an interpolation.`);
             }
+            if (interp) throw new BridgeError("BAD_PARAMS", `${where}: interpolation applies to keyframes, not to a static value.`);
             if (keyed) throw new BridgeError("KEYFRAMED", `${where} is keyframed; a static value would be hidden by its keyframes.`);
             job.value = effects.normalizeValue(p.value, where);
+            job.disarm = armed;
           }
           jobs.push(job);
         }
@@ -171,17 +260,33 @@ module.exports = function (deps) {
         matchName: j.matchName, occurrence: j.occurrence, index: j.index, timeBase: j.timeBase,
         mediaSeconds: j.keyframes.map((k) => k.mediaSeconds),
       }));
+      const interpJobs = jobs.filter((j) => j.interpolation);
+      const interpReport = () => interpJobs.map((j) => {
+        const out = { matchName: j.matchName, occurrence: j.occurrence, index: j.index,
+                      mode: j.interpolation.mode, name: j.interpolation.name };
+        if (j.samples) { out.keyframeCount = j.keyframeCount; out.samples = j.samples; }
+        return out;
+      });
+      const withInterp = (reply) => (interpJobs.length ? Object.assign(reply, { interpolation: interpReport() }) : reply);
       if (params.dryRun) {
-        return { dryRun: true, set: jobs.map((j) => (j.name ? `${j.where} ${j.name}` : j.where)),
-                 createdEffects: toCreate, keyframes: keyframeReport(), undoLabel: label };
+        return withLayerWait(withInterp({ dryRun: true, set: jobs.map((j) => (j.name ? `${j.where} ${j.name}` : j.where)),
+                                          createdEffects: toCreate, createdComponents: plannedComponents,
+                                          keyframes: keyframeReport(), undoLabel: label }));
       }
 
-      // Commit: append missing instances (one undo step), then every param write (one undo step).
+      // Commit: add missing instances (one undo step), then every param write (one undo step).
       if (created.length) {
-        core.runTransaction(project, label + " [add effects]", () => created.map((c) => chain.createAppendComponentAction(c.comp)), ctx);
+        core.runTransaction(project, label + " [add effects]", () => created.map((c, k) => (place.tail.length
+          ? chain.createInsertComponentAction(c.comp, place.index + k) : chain.createAppendComponentAction(c.comp))), ctx);
         chain = await it.getComponentChain();
       }
       const live = await effects.chainMatchNames(chain);
+      // Where the new instances are now (read back); plannedIndex only where Premiere put one elsewhere.
+      const createdComponents = plannedComponents.map((c) => {
+        const at = effects.indexesOf(live, c.matchName)[c.occurrence - 1];
+        const got = typeof at === "number" ? at : null;
+        return got === c.index ? c : Object.assign({}, c, { index: got, plannedIndex: c.index });
+      });
       // After an append, a failure here leaves the effects added but no param written: say so.
       const afterAppend = created.length ? { outcome: "partial" } : undefined;
       for (const job of jobs) {
@@ -199,32 +304,50 @@ module.exports = function (deps) {
         if (job.keyframes && core.isFn(job.param, "areKeyframesSupported") && tryGetSync(() => job.param.areKeyframesSupported()) === false) {
           throw new BridgeError("UNSUPPORTED", `${job.where} does not support keyframes (the effects were added; no param was written).`, afterAppend);
         }
+        if (job.interpolationOnly) job.times = tryGetSync(() => job.param.getKeyframeListAsTickTimes(), []) || [];
       }
       if (jobs.length) {
         core.runTransaction(project, label, () => {
           const actions = [];
           for (const job of jobs) {
             const param = job.param;
-            if (job.keyframes) {
+            if (job.interpolationOnly) {
+              for (const t of job.times) actions.push(param.createSetInterpolationAtKeyframeAction(t, job.interpolation.mode, false));
+            } else if (job.keyframes) {
               actions.push(param.createSetTimeVaryingAction(true));
               for (const k of job.keyframes) {
                 const kf = param.createKeyframe(effects.toParamValue(k.value));
                 kf.position = effects.tickTimeFromTicks(k.ticks);
+                if (job.interpolation && core.isFn(kf, "setTemporalInterpolationMode")) kf.setTemporalInterpolationMode(job.interpolation.mode);
                 actions.push(param.createAddKeyframeAction(kf));
               }
             } else {
+              if (job.disarm) actions.push(param.createSetTimeVaryingAction(false));
               actions.push(param.createSetValueAction(param.createKeyframe(effects.toParamValue(job.value)), true));
             }
           }
           return actions;
         }, ctx);
       }
-      return {
+      // Interpolation of keyframes added above: set on the keys once they exist (one more undo step), the call
+      // api_smoke verified on 27.1; whether a mode given to the Keyframe before adding it sticks is unmeasured.
+      const onNew = interpJobs.filter((j) => j.keyframes);
+      if (onNew.length) {
+        const keys = onNew.map((j) => ({ job: j, times: tryGetSync(() => j.param.getKeyframeListAsTickTimes(), []) || [] }));
+        core.runTransaction(project, label + " [interpolation]", () => keys.reduce((acc, k) => acc.concat(k.times.map((t) =>
+          k.job.param.createSetInterpolationAtKeyframeAction(t, k.job.interpolation.mode, false))), []), ctx);
+      }
+      for (const j of interpJobs) {
+        j.keyframeCount = (tryGetSync(() => j.param.getKeyframeListAsTickTimes(), []) || []).length;
+        j.samples = await effects.curveSamples(j.param);
+      }
+      return withLayerWait(withInterp({
         set: jobs.map((j) => `${j.where} ${j.param.displayName}`),
         createdEffects: toCreate,
+        createdComponents,
         keyframes: keyframeReport(),
         undoLabel: label,
-      };
+      }));
     },
 
     /*
@@ -249,9 +372,10 @@ module.exports = function (deps) {
       if (typeof params.alignment === "number") opts = opts.setTransitionAlignment(params.alignment) || opts;
       const label = params.undoLabel ||
         `Agent: ${params.matchName} at ${params.applyToStart ? "start" : "end"} of V${params.videoTrack + 1} @${params.atSeconds}s`;
-      const before = (await timeline.transitionItems(track)).length;
+      const tl = `V${params.videoTrack + 1}`;
+      const before = (await timeline.transitionItems(track, tl)).length;  // strict: a failed read must not count as 0
       core.runTransaction(project, label, () => it.createAddVideoTransitionAction(transition, opts), ctx);
-      const after = (await timeline.transitionItems(track)).length;
+      const after = (await timeline.transitionItems(track, tl)).length;
       return { added: after > before, matchName: params.matchName, applyToStart: !!params.applyToStart,
                durationSeconds: params.durationSeconds, transitionCount: { before, after }, undoLabel: label };
     },

@@ -2,63 +2,123 @@
 <html>
 <head>
   <style>
+    /* The website's look: pure black, hairline rules, white type, the icon's lavender for commands. */
+    html { height: 100%; }
     body {
+      height: 100%;
+      box-sizing: border-box;
+      overflow-y: auto; /* a short panel scrolls to the first-run steps and the log */
       margin: 0;
-      padding: 10px;
-      background: #1d1d1d;
-      color: #c8c8c8;
-      font-family: -apple-system, "Segoe UI", sans-serif;
-      font-size: 12px;
+      padding: 12px;
+      background: #000;
+      color: #a1a1a1;
+      font-family: "Segoe UI", "Microsoft YaHei UI", -apple-system, sans-serif;
+      font-size: 13px;
     }
+    /* UXP ignores flex gap: spacing is margins. */
+    #brand {
+      display: flex;
+      align-items: center;
+      padding-bottom: 12px;
+      margin-bottom: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    /* The icon is the running light: full colour while the broker is connected, faded otherwise. */
+    #logo { width: 36px; height: 36px; flex: 0 0 auto; margin-right: 10px; opacity: 0.3; }
+    #brand.connecting #logo { opacity: 0.6; }
+    #brand.connected #logo { opacity: 1; }
+    #titles { flex: 1 1 auto; }
+    #title { color: #ededed; font-size: 15px; font-weight: 600; }
     #statusRow {
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin-bottom: 8px;
+      margin-top: 2px;
     }
     #dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: #d64541; /* red = disconnected */
-      flex: 0 0 auto;
-    }
-    #dot.connected { background: #3fa45b; }
-    #dot.connecting { background: #d9a441; }
-    #statusText { flex: 1 1 auto; }
-    button {
-      background: #333;
-      color: #ddd;
-      border: 1px solid #555;
+      width: 6px;
+      height: 6px;
       border-radius: 3px;
-      padding: 3px 10px;
-      font-size: 11px;
+      background: #e5484d; /* red = disconnected */
+      flex: 0 0 auto;
+      margin-right: 6px;
+    }
+    #dot.connected { background: #3fb950; }
+    #dot.connecting { background: #d29922; }
+    #statusText { flex: 1 1 auto; }
+    #buttons { display: flex; margin-top: 8px; } /* under the status, so a narrow panel keeps them in view */
+    /* Buttons are divs: UXP draws a <button> in its own light style and ignores its background. */
+    .btn {
+      display: inline-block;
+      margin-right: 6px;
+      background: #0a0a0a;
+      color: #ededed;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 8px;
+      padding: 5px 12px;
+      font-size: 12px;
       cursor: pointer;
     }
-    button:hover { background: #444; }
+    .btn:hover { background: #1a1a1a; }
+    #startBtn { display: none; background: #fff; color: #000; border-color: #fff; } /* main.js shows it while the panel has no broker */
+    #startBtn:hover { background: #d9d9d9; }
+    #hint { color: #ededed; font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
+    #hint:empty { display: none; }
+    #guide { display: none; margin: -4px 0 12px 0; }
+    .step { color: #ededed; font-size: 13px; line-height: 1.5; margin-top: 8px; }
+    .note { color: #a1a1a1; font-size: 12px; line-height: 1.5; margin-top: 4px; }
+    #prompt {
+      display: block; /* inline, UXP leaves a tall gap above it */
+      width: 100%;
+      height: 120px; /* the sentence wraps to five or six lines in a narrow panel */
+      margin: 4px 0 0 0;
+      background: #0a0a0a;
+      color: #ededed;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 12px;
+    }
     #log {
-      background: #141414;
-      border: 1px solid #333;
-      border-radius: 3px;
-      padding: 6px;
+      background: #0a0a0a;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 8px;
       height: 260px;
       overflow-y: auto;
       font-family: Menlo, Consolas, monospace;
-      font-size: 11px;
+      font-size: 12px;
       line-height: 1.5;
       white-space: pre-wrap;
       word-break: break-all;
     }
-    .ok  { color: #7cbf8a; }
-    .err { color: #e08a86; }
-    .cmd { color: #8ab4d8; }
+    .ok  { color: #8fd19e; }
+    .err { color: #ff8c82; }
+    .cmd { color: #9999ff; }
   </style>
 </head>
 <body>
-  <div id="statusRow">
-    <div id="dot"></div>
-    <div id="statusText">Not connected</div>
-    <button id="reconnectBtn">Reconnect</button>
+  <div id="brand">
+    <img id="logo" src="icon.png" alt="">
+    <div id="titles">
+      <div id="title">Premiere Agent Bridge</div>
+      <div id="statusRow">
+        <div id="dot"></div>
+        <div id="statusText">Not connected</div>
+      </div>
+      <div id="buttons">
+        <div id="startBtn" class="btn" role="button" title="Open start_bridge.bat: the broker's console window">Start bridge</div>
+        <div id="reconnectBtn" class="btn" role="button">Reconnect</div>
+      </div>
+    </div>
+  </div>
+  <div id="hint"></div>
+  <div id="guide">
+    <!-- the words come from main.js (UI), in Premiere's UI language -->
+    <div id="step1" class="step"></div>
+    <div id="note1" class="note"></div>
+    <div id="step2" class="step"></div>
+    <textarea id="prompt" readonly></textarea>
+    <div id="note2" class="note"></div>
   </div>
   <div id="log"></div>
   <script src="main.js"></script>

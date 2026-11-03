@@ -19,8 +19,9 @@ Safety rules (they are the point of this file):
   CN title); markers are named "PAB_SMOKE <run id> ...".
 - Cleanup removes clips only when a remove_items dry run lists exactly the clips this run placed; never ripple.
   (Placements are read back from the scratch region: don't edit past the sequence end while it runs.)
-  The bridge cannot remove project items or markers: those stay and are listed in the report. --keep leaves the
-  clips too.
+  Then the run's own bins (with the media imported into them) go in one remove_project_items step, after a dry run
+  that finds nothing outside them and no use in any sequence; a bin still in use stays, with a note. Markers stay
+  (the bridge has no command to remove them) and are listed in the report. --keep leaves the clips and the bins.
 - A write whose outcome is unknown or partial stops all further writes (cleanup still runs, guarded as above).
 
 Every check prints one line: PASS, FAIL, SKIP or KNOWN_ISSUE. The JSON report goes to --out (default: a
@@ -231,8 +232,12 @@ class Smoke:
                           and ping.get("protocol") == spec.protocol() and not ping.get("denied"))
         self.check("read: ping compatible", bool(compatible), ping.get("warning", ""))
         self.check("read: panel not stuck", not ping.get("stuck"), json.dumps(ping.get("stuck")))
-        missing = [a for a in spec.action_names() if a not in (ping.get("actions") or [])]
+        build = ping.get("build") if isinstance(ping.get("build"), dict) else {}
+        dev = build.get("dev") is not False  # a release build registers no devOnly action (api_smoke)
+        missing = [a for a in spec.panel_action_names(dev=dev) if a not in (ping.get("actions") or [])]
         self.check("read: panel has every spec action", not missing, ", ".join(missing))
+        self.record("PASS" if "dev" in build else "SKIP", "read: build flavour",
+                    ("dev" if dev else "release") + " build" if "dev" in build else "the panel reports no build")
         host = ping.get("hostInfo") or {}
         self.record("PASS" if ping.get("modules") in ("commonjs", "bundle", "fake") else "FAIL", "read: modules",
                     f"{ping.get('modules')} on {ping.get('host')} (build {host.get('buildNumber', '?')})")
@@ -421,10 +426,13 @@ class Smoke:
                 self.speech_to_text()
                 self.insert_mode_insert()
                 self.interpret_native_rate()
+                self.subclip_placed_whole()
+                self.relink_round_trip()
         except Exception as e:  # noqa: BLE001 - a harness bug must not skip cleanup
             self.error("write: unexpected", e, write=True)
         finally:
             self.cleanup()
+            self.remove_bins([self.bin, self.bin_cn])
             self.compare_after()
             self.writes_allowed = False
 
@@ -855,6 +863,54 @@ class Smoke:
         self.left.setdefault("interpreted", []).append({"item": ref, "fps": round(fps, 3)})
         self.check(name, bool(got.get("items")), f"{ref} at {round(fps, 3)} fps")
 
+    def subclip_placed_whole(self):
+        """subclip of the smoke B-roll into the smoke bin (read back by the command), then placed whole at the end of
+        the scratch region: the clip must show the subclip's own range (not live-verified before this check)."""
+        name = "write: subclip (read back)"
+        if not self.can_write(name):
+            return
+        mfps = self.media.probe_media(str(self.files["broll"])).get("fps") or self.fps
+        in_s, out_s = round(1.0 * mfps) / mfps, round(3.0 * mfps) / mfps
+        try:
+            got = self.ops.subclip(self.rpc, item=self.ref("broll"), in_s=in_s, out_s=out_s, name=f"{self.label} subclip",
+                                   bin=self.bin, label=f"{self.label}: subclip")
+        except Exception as e:  # noqa: BLE001
+            return self.error(name, e, write=True)
+        self.check(name, bool(got.get("verified")), f"{got.get('item')}: readBack {got.get('readBack')}, steps "
+                   f"{got.get('undoSteps')}, new items {got.get('newItems')}")
+        self.items["subclip"] = {"name": got["name"], "bin": got.get("binPath") or "",
+                                 "mediaPath": self.items["broll"].get("mediaPath")}
+        self.capture()
+        at = self.snap(max([c["end"] for c in self.placements] + [self.region_start]) + 2.0)
+        clip = self.insert("write: insert subclip whole", "subclip", at)
+        if clip:
+            ok = (clip.get("inPoint") is not None and abs(clip["inPoint"] - got["inSeconds"]) <= 0.5 / mfps + 1e-6
+                  and abs((clip["end"] - clip["start"]) - (got["outSeconds"] - got["inSeconds"])) <= self.frame + 1e-6)
+            self.check("write: subclip placed whole keeps its range", ok,
+                       f"in {clip.get('inPoint')}, {clip['end'] - clip['start']:.4f}s long; the subclip is "
+                       f"{got['inSeconds']:.4f}-{got['outSeconds']:.4f}")
+
+    def relink_round_trip(self):
+        """relink the smoke B-roll item to a copy of its file and back, each read back; the reply says which uses and
+        which other items on the file (the subclip) follow."""
+        name = "write: relink to a copy and back"
+        if not self.can_write(name):
+            return
+        copy_path = self.out / f"broll_copy_{self.run_id}{self.files['broll'].suffix}"
+        try:
+            shutil.copy2(self.files["broll"], copy_path)
+        except OSError as e:
+            return self.record("FAIL", name, f"could not copy the B-roll: {e}")
+        force = not self.media.probe_media(str(copy_path))  # placeholder media (rehearsal) cannot be compared
+        try:
+            there = self.ops.relink(self.rpc, item=self.ref("broll"), to=str(copy_path), force=force)
+            back = self.ops.relink(self.rpc, item=self.ref("broll"), to=str(self.files["broll"]), force=force)
+        except Exception as e:  # noqa: BLE001
+            return self.error(name, e, write=True)
+        self.check(name, bool(there.get("verified")) and bool(back.get("verified")),
+                   f"to {there.get('mediaPath')} and back to {back.get('mediaPath')}; uses {there.get('uses')}; other "
+                   f"items on the file {there.get('sameMedia')}" + ("; not compared (--force)" if force else ""))
+
     # ------------------------------------------------------------------ cleanup and diff
 
     def cleanup(self):
@@ -884,6 +940,57 @@ class Smoke:
         self.left["clips"] = [{k: c[k] for k in ("track", "name", "start", "end")} for c in left]
         self.check(name, not left, f"removed {len(want)} clip(s) on {', '.join(tracks)}"
                    + (f"; still there: {len(left)}" if left else ""))
+
+    def remove_bins(self, bins, name="cleanup: remove test bins"):
+        """This run's own bins and the media imported into them, in one remove_project_items step. Each bin is dry-run
+        first: it must not have held items before the run, the dry run must list nothing outside it, and no sequence
+        may use what is inside (the panel scans every sequence and refuses otherwise). A bin that is not there is
+        skipped; one still in use stays, with a note."""
+        if self.args.keep:
+            return self.record("SKIP", name, f"--keep: {', '.join(bins)} left in the project")
+        if self.left.get("clips"):
+            return self.record("SKIP", name, "clips this run placed are still on the timeline: the bins stay")
+        def inside(x, b):  # a bin path / left-behind entry belongs to bin b
+            return x in (b, f"bin {b}") or x.startswith((b + "/", f"bin {b} "))
+
+        older = {i.get("bin") or "" for i in getattr(self, "before_items", None) or []}
+        free, kept = [], []
+        for b in bins:
+            if any(inside(x, b) for x in older):
+                kept.append((b, "held items before this run"))
+                continue
+            try:
+                dry = self.ops.remove_project_items(self.rpc, bin=[b], dry_run=True)
+            except self.BridgeError as e:
+                if e.code == "NOT_FOUND":
+                    continue
+                return self.error(name, e)
+            outside = [i.get("ref") for i in dry.get("items") or []
+                       if not (i.get("ref") == b or str(i.get("ref")).startswith(b + "/"))]
+            if outside:
+                return self.record("FAIL", name, f"the dry run for {b} lists items outside it: not removing", items=outside)
+            if dry.get("wouldRefuse"):
+                uses = "; ".join(f"{u['item']} on {u['sequence']} {u['track']}" for u in (dry.get("inUse") or [])[:3])
+                kept.append((b, f"{dry['wouldRefuse']}: {uses or 'a sequence would go with it'}"))
+            else:
+                free.append(b)
+        removed = []
+        if free:
+            try:
+                got = self.ops.remove_project_items(self.rpc, bin=free, label=f"{self.label}: remove test bins")
+            except Exception as e:  # noqa: BLE001
+                return self.error(name, e)
+            removed = got.get("removed") or []
+            self.left["projectItems"] = [x for x in self.left["projectItems"] if not any(inside(x, b) for b in free)]
+        detail = ((f"removed {', '.join(free)} ({len(removed)} item(s))" if free else "nothing removed")
+                  + (f"; kept: {'; '.join(f'{b} ({why})' for b, why in kept)}" if kept else ""))
+        if kept:
+            self.left["projectItems"].extend(f"bin {b} ({why})" for b, why in kept
+                                             if not any(inside(x, b) for x in self.left["projectItems"]))
+            return self.record("SKIP", name, detail)
+        if not free:
+            return self.record("SKIP", name, "no bin of this run is in the project")
+        return self.record("PASS", name, detail)
 
     def compare_after(self):
         def clip_key(c):

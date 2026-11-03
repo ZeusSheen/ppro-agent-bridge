@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <title>Premiere Agent Bridge Setup</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23000000'/%3E%3Cg transform='translate(4 3)' fill='none' stroke='%23FFFFFF' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 17h20'/%3E%3Cpath d='M4 17c1.5-5 4.5-8 8-8s6.5 3 8 8'/%3E%3Cpath d='M8 17v-6.3M12 17V9M16 17v-6.3'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' width='256' height='256'%3E%3Cdefs%3E%3ClinearGradient id='rim' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='#fff' stop-opacity='0.55'/%3E%3Cstop offset='0.5' stop-color='#fff' stop-opacity='0.12'/%3E%3Cstop offset='1' stop-color='#fff' stop-opacity='0.26'/%3E%3C/linearGradient%3E%3CclipPath id='tile'%3E%3Crect width='256' height='256' rx='56'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect width='256' height='256' rx='56' fill='#14143F'/%3E%3Cg clip-path='url(#tile)'%3E%3Cpath d='M0 96L64 96L64 160L176 160L176 208L0 208Z' fill='#9999FF'/%3E%3Cpath d='M80 96L256 96L256 208L192 208L192 144L80 144Z' fill='#C2C2FF'/%3E%3C/g%3E%3Cpath d='M96 32H160V64L136 88V224H120V88L96 64Z' fill='#FF7A1A'/%3E%3Crect width='256' height='256' rx='56' fill='none' stroke='url(#rim)' stroke-width='2' vector-effect='non-scaling-stroke' clip-path='url(#tile)'/%3E%3C/svg%3E">
 <style>
 :root {
   --font: "Segoe UI Variable Text", "Segoe UI", system-ui, "Microsoft YaHei UI", sans-serif;
@@ -159,7 +159,7 @@ b, strong { font-weight: 650; }
   display: grid; place-items: center;
   box-shadow: var(--raise-sm); color: var(--text);
 }
-.mark svg { width: 24px; height: 24px; display: block; }
+.mark svg { width: 40px; height: 40px; display: block; }
 .brand-text { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
 .brand-name { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; line-height: 1.3; }
 .brand-sub { font-size: 15px; font-weight: 500; color: var(--muted); }
@@ -441,6 +441,7 @@ b, strong { font-weight: 650; }
     var(--rim) border-box;
 }
 .app { --fill: var(--plate); }
+.mark { --fill: #14143F; }  /* the icon's tile (ppro_bridge/bridge.svg) under the window's own glass rim */
 .rail-item[aria-current="step"], .seg button[aria-pressed="true"] { --fill: var(--el-sel); --rim: var(--rim-strong); }
 .seg button[aria-pressed="true"] { color: var(--text); }
 
@@ -534,7 +535,7 @@ b, strong { font-weight: 650; }
 <div class="app" id="app">
   <header class="topbar">
     <div class="brand">
-      <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 17h20"/><path d="M4 17c1.5-5 4.5-8 8-8s6.5 3 8 8"/><path d="M8 17v-6.3M12 17V9M16 17v-6.3"/></svg></span>
+      <span class="mark" aria-hidden="true"><svg viewBox="0 0 256 256"><defs><clipPath id="mark-tile"><rect width="256" height="256" rx="83"/></clipPath></defs><g clip-path="url(#mark-tile)"><path d="M0 96H64V160H176V208H0Z" fill="#9999FF"/><path d="M80 96H256V208H192V144H80Z" fill="#C2C2FF"/></g><path d="M96 32H160V64L136 88V224H120V88L96 64Z" fill="#FF7A1A"/></svg></span>
       <div class="brand-text">
         <h1 class="brand-name" data-t="product">Premiere Agent Bridge</h1>
         <span class="brand-sub" data-t="setup">Setup</span>
@@ -703,7 +704,7 @@ const STRINGS = {
     'run.install-deps': 'Installing packages…',
     'run.install-pillow': 'Installing Pillow…',
     'run.install-whisper': 'Installing faster-whisper. This can take a few minutes…',
-    'run.shortcut-desktop': 'Adding the desktop shortcut…',
+    'run.shortcut-desktop': 'Adding the shortcuts…',
     'run.autostart-on': 'Turning on start with Windows…',
     'run.autostart-off': 'Turning off start with Windows…',
     'run.open-udt': 'Opening UXP Developer Tool…',
@@ -714,7 +715,7 @@ const STRINGS = {
     'ok.install-deps': 'Packages installed.',
     'ok.install-pillow': 'Pillow installed.',
     'ok.install-whisper': 'faster-whisper installed.',
-    'ok.shortcut-desktop': 'Shortcut added to your desktop.',
+    'ok.shortcut-desktop': 'Shortcut added to your desktop and the Start menu.',
     'ok.autostart-on': 'The bridge will start with Windows.',
     'ok.autostart-off': 'The bridge won’t start with Windows any more.',
     'ok.open-udt': 'UXP Developer Tool is opening.',
@@ -874,7 +875,7 @@ const STRINGS = {
     'run.install-deps': '正在安装组件…',
     'run.install-pillow': '正在安装 Pillow…',
     'run.install-whisper': '正在安装 faster-whisper，可能需要几分钟…',
-    'run.shortcut-desktop': '正在创建桌面快捷方式…',
+    'run.shortcut-desktop': '正在创建快捷方式…',
     'run.autostart-on': '正在开启开机自动启动…',
     'run.autostart-off': '正在关闭开机自动启动…',
     'run.open-udt': '正在打开 UXP Developer Tool…',
@@ -885,7 +886,7 @@ const STRINGS = {
     'ok.install-deps': '组件已装好。',
     'ok.install-pillow': 'Pillow 已装好。',
     'ok.install-whisper': 'faster-whisper 已装好。',
-    'ok.shortcut-desktop': '桌面快捷方式已创建。',
+    'ok.shortcut-desktop': '桌面和开始菜单的快捷方式已创建。',
     'ok.autostart-on': '以后开机会自动启动桥接。',
     'ok.autostart-off': '已关闭开机自动启动。',
     'ok.open-udt': 'UXP Developer Tool 正在打开。',

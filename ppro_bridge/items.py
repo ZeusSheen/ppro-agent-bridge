@@ -1,5 +1,7 @@
 """Project items, tracks and the panel handshake: what every command resolves before it writes."""
 
+import hashlib
+import json
 import os
 
 from . import spec
@@ -53,6 +55,69 @@ def check_expect_seq(rpc, expected: str | None) -> dict | None:
         raise BridgeError(f'The active sequence is "{seq.get("name")}", not "{expected}"; nothing was changed.',
                           code="SEQUENCE_MISMATCH", outcome="not_committed")
     return seq
+
+
+FINGERPRINT_FIELDS = ("name", "start", "end", "inPoint", "outPoint", "speed", "disabled", "mediaPath")
+
+
+def fixed6(v) -> str:
+    """A number in the fingerprint: six decimals (JSON gives 0 for 0.0, and float noise below a microsecond is no
+    edit), "-0.000000" as "0.000000" (JSON drops the sign of -0). The panel's core.fixed6 prints the same."""
+    s = f"{v:.6f}"
+    return "0.000000" if s == "-0.000000" else s
+
+
+def fingerprint(timeline: dict, seq: dict | None = None) -> str:
+    """A short hash of the timeline's structure: the sequence guid, then every track's clips (name, position, source
+    range, speed, disabled, media path; times to the microsecond) from list_items with both kinds. Effect params are
+    not in it. Two reads of an unchanged timeline give the same value; any placement, trim, move or removal changes
+    it. The panel computes the same value for the guard key `fingerprint` (plugin/lib/timeline.js fingerprint, with
+    core.fixed6 and core.sha256Hex); keep both in step — tests/test_panel.py compares them."""
+    def norm(v):
+        return fixed6(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+
+    tracks = [[kind, t.get("index"), [[norm(it.get(k)) for k in FINGERPRINT_FIELDS] for it in t.get("items") or []]]
+              for kind in ("video", "audio") for t in sorted(timeline.get(kind) or [], key=lambda t: t.get("index"))]
+    doc = [(seq or {}).get("guid"), tracks]
+    text = json.dumps(doc, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def read_fingerprint(rpc) -> str:
+    return fingerprint(rpc("list_items", {"kinds": ["video", "audio"]}), rpc("get_sequence"))
+
+
+def fingerprint_guard(rpc, expected: str):
+    """`rpc`, wrapped: right before the first write that is not a dry run, the timeline must still have the
+    `expected` fingerprint (from get_sequence), else PRECONDITION_FAILED and nothing is sent. Checked once — later
+    writes are the command's own. `.verify()` checks a command that never wrote (a dry run planned the right
+    timeline)."""
+    state = {"checked": False}
+
+    def verify():
+        if state["checked"]:
+            return
+        state["checked"] = True
+        actual = read_fingerprint(rpc)
+        if actual != expected:
+            raise BridgeError(f"The timeline changed since its fingerprint was read ({expected}, now {actual}): "
+                              "someone edited it, or another sequence is active. Nothing was changed; read it again "
+                              "(get_sequence) and re-plan.", code="PRECONDITION_FAILED", outcome="not_committed",
+                              data={"expected": expected, "actual": actual})
+
+    def guarded(action, params=None):
+        if spec.kind(action) == "write" and not (params or {}).get("dryRun"):
+            verify()
+        return rpc(action, params)
+
+    guarded.verify = verify
+    return guarded
+
+
+def has_feature(info: dict | None, name: str) -> bool:
+    """Whether a ping reply advertises a panel behaviour in `features` (actions.json "features"): "fingerprintGuard",
+    "shiftItemsPrecise". Panels before 0.6 send no features."""
+    return name in ((info or {}).get("features") or [])
 
 
 def require_panel(rpc, actions, *, min_protocol: int = 1) -> dict:

@@ -105,6 +105,11 @@ class AuditUnitTest(unittest.TestCase):
                          {"sequence": "S", "videoTracks": 4, "audioTracks": 1})
         self.assertEqual(audit.summary("trim_clip", {"undoLabel": "Agent: trim"}), {"undoLabel": "Agent: trim"})
         self.assertEqual(audit.summary("x", None), {})
+        ping = {"pong": True, "plugin": "ppro-agent-bridge 0.6.0", "version": "0.6.0", "protocol": 2, "actions": ["ping"],
+                "loadedAt": 1793600000000, "build": {"dev": False, "packaged": True}, "capabilities": {"x": True}}
+        self.assertEqual(audit.summary("ping", ping),
+                         {"plugin": "ppro-agent-bridge 0.6.0", "version": "0.6.0", "protocol": 2,
+                          "build": {"dev": False, "packaged": True}, "loadedAt": 1793600000000})
 
     def test_request_record(self):
         msg = {"id": "r1", "action": "remove_items", "params": {"videoTracks": [2], "dryRun": True},

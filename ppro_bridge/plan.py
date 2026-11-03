@@ -23,7 +23,8 @@ Nothing is written until every command resolves; `--dry-run` stops after that an
 
 A real run refuses a plan whose "sequence" is not the active one (--any-sequence overrides), and stops before the
 next write if the active sequence or project changes underneath it. A range covering the whole file is placed as
-the whole clip, because an out point at the very end gets clamped and loses a frame.
+the whole clip, because an out point at the very end gets clamped and loses a frame. In a file whose audio runs on
+after the picture, a range past the picture's end stops at its last frame (step "pictureEnds").
 """
 
 import json
@@ -32,7 +33,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
-from . import framegrid, items, media, spec
+from . import framegrid, items, media, paths, spec
 from .errors import BridgeError
 
 BAD = {"conflict", "error", "missing-media", "failed", "unverified", "aborted"}
@@ -156,6 +157,11 @@ def run(args, *, rpc, require_panel, parse_track, probe_media, fit_scale) -> dic
                                             f"({n_video} video tracks).")
             continue
 
+        try:
+            paths.check(media_root / c["src"], what=f"{cid} src")  # as typed: no UNC share, no data stream
+        except BridgeError as e:
+            step.update(status="error", why=str(e))
+            continue
         media_file = (media_root / c["src"]).resolve()
         step["media"] = str(media_file)
         if not media_file.is_file():
@@ -176,19 +182,39 @@ def run(args, *, rpc, require_panel, parse_track, probe_media, fit_scale) -> dic
             step.update(status="error", why="Needs timeline_at and a positive duration")
             continue
 
+        info = probe_media(str(media_file))
+        has_audio = info.get("hasAudio", True)  # unknown → assume audio, route it safely
+        codecs = media.unimportable(info)
+        if codecs and not by_path.get(_norm(str(media_file))):  # already in the project: it did import
+            step.update(status="error", why=f"Premiere does not import {', '.join(codecs)} (the import would hang "
+                                            "the panel); transcode it first", transcode=media.transcode_command(
+                                                media_file, info))
+            continue
+        picture_end = framegrid.short_picture(info, fps)
+        clamped = picture_end is not None and src_in + dur > picture_end + frame / 2
+        if clamped:
+            if src_in >= picture_end - frame / 2:
+                step.update(status="error", why=f"src_in {src_in}s is past the end of the picture ({picture_end:.3f}s; "
+                                                "the file's audio runs on)")
+                continue
+            warnings.append(f"{cid}: the picture ends at {picture_end:.3f}s, before the out point "
+                            f"{src_in + dur:.3f}s (the audio runs on); placing up to its last frame.")
+            step["pictureEnds"] = round(picture_end, 4)
+            dur = picture_end - src_in
+
         # Snap both edges to the frame grid (not start + rounded duration), so clips
-        # that butt up in the plan still share a boundary frame after snapping.
+        # that butt up in the plan still share a boundary frame after snapping. A range stopped at the
+        # picture's end gets whole frames that fit before it, so its out point never lands past the last frame.
         start_f = round(float(at) * fps)
         end_f = max(start_f + 1, round((float(at) + dur) * fps))
+        if clamped:
+            end_f = max(start_f + 1, min(end_f, start_f + math.floor(dur * fps + 1e-6)))
         at_s, dur_s = start_f / fps, (end_f - start_f) / fps
         step.update(track=f"V{vidx + 1}", at=round(at_s, 4), duration=round(dur_s, 4),
                     srcIn=src_in, srcOut=round(src_in + dur_s, 4))
         step["_at"], step["_out"] = at_s, src_in + dur_s  # exact: a rounded frame boundary loses the frame
         if abs(at_s - float(at)) > 1e-4:
             step["snapped"] = f"{at} -> {at_s:.4f}"
-
-        info = probe_media(str(media_file))
-        has_audio = info.get("hasAudio", True)  # unknown → assume audio, route it safely
 
         # A range over the whole file goes in as the whole clip. Its real length depends on
         # how the item is interpreted, so make room for the longest possible one.

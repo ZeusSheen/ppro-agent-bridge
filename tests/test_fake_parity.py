@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
+PRESETS_FIXTURE = REPO / "tests" / "fixtures" / "effect_presets.prfpset"
 for _p in (REPO, REPO / "broker"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
@@ -41,6 +42,7 @@ errors = _module("ppro_bridge.errors")
 replace = _module("ppro_bridge.replace")
 ops = _module("ppro_bridge.ops")
 transcript = _module("ppro_bridge.transcript")
+presets = _module("ppro_bridge.presets")
 
 FPS = fake.FPS
 CN_TITLE = {"name": "title.mov", "bin": "CN", "mediaPath": "/fake/cn/title.mov"}
@@ -163,6 +165,30 @@ class DispatchTest(FakeCase):
         self.ok("insert_clip", place, guard=good)
         self.fails("get_project", {}, "BAD_PARAMS", guard={"projetGuid": "typo"})
         self.fails("get_project", {}, "BAD_PARAMS", guard="Smoke Test.prproj")
+
+    def test_fingerprint_guard(self):
+        """guard.fingerprint, as the panel checks it: writes that are not dry runs need the timeline they were
+        planned on; reads and dry runs ignore it; checked once, before the handler."""
+        from ppro_bridge import items
+        fp = items.fingerprint(self.ok("list_items"), self.ok("get_sequence"))
+        place = {"itemName": "broll_city.mp4", "atSeconds": 10.0, "videoTrack": 1, "audioTrack": 1,
+                 "inSeconds": 2.0, "outSeconds": 7.0}
+        self.ok("insert_clip", place, guard={"fingerprint": fp})  # three transactions after one check
+        self.assertEqual(len(fake.TRANSACTIONS), 3)
+        before = snapshot()
+        reply = self.fails("insert_clip", dict(place, atSeconds=30.0), "PRECONDITION_FAILED", guard={"fingerprint": fp})
+        self.assertEqual(reply["data"], {"expected": fp, "actual": items.fingerprint(self.ok("list_items"),
+                                                                                     self.ok("get_sequence"))})
+        self.assertEqual((snapshot(), fake.LAST_CTX["sideEffects"]), (before, 0))
+        self.ok("list_items", {}, guard={"fingerprint": fp})
+        self.ok("remove_items", {"videoTracks": [1], "fromSeconds": 0.0, "toSeconds": 60.0, "dryRun": True},
+                guard={"fingerprint": fp})
+        self.fails("add_marker", {"atSeconds": 1.0, "name": "x"}, "PROJECT_MISMATCH",
+                   guard={"fingerprint": fp, "project": "Other.prproj"})
+        self.fails("add_marker", {"atSeconds": 1.0, "name": "x"}, "BAD_PARAMS", guard={"fingerprint": "ABCDEF0123456789"})
+        fake.STATE["sequence"] = None
+        self.fails("import_media", {"paths": ["/fake/b.mp4"]}, "PRECONDITION_FAILED", guard={"fingerprint": fp})
+        self.ok("list_transition_names", {}, guard={"fingerprint": fp})  # a fingerprint alone pins no project
 
     def test_project_name_switch_and_guids(self):
         os.environ["PPRO_FAKE_PROJECT_NAME"] = "PAB_TEST_fake"
@@ -309,6 +335,29 @@ class EffectsTest(FakeCase):
             self.assertAlmostEqual(p["keyframes"][0]["t"], 2.5, places=9)
         self.assertEqual(data["set"], ["AE.ADBE Opacity[1]#0 Opacity", "AE.ADBE Motion[1]#1 Scale",
                                        "AE.ADBE Motion[1]#4 Rotation"])
+
+    def test_interpolation_on_new_and_existing_keyframes(self):
+        data = self.ok("set_params", {"videoTrack": 1, "atSeconds": self.mid, "components": [
+            {"matchName": "AE.ADBE Opacity", "params": [
+                {"index": 0, "timeBase": "media", "interpolation": "Bezier",
+                 "keyframes": [{"t": 2.5, "value": 0.0}, {"t": 3.5, "value": 100.0}]}]}]})
+        row = data["interpolation"][0]
+        self.assertEqual((row["mode"], row["name"], row["keyframeCount"]), (5, "BEZIER", 2))
+        self.assertEqual([s["at"] for s in row["samples"]], [0, 0.25, 0.5, 0.75, 1])
+        self.assertEqual(fake.TRANSACTIONS[-2:], [data["undoLabel"], data["undoLabel"] + " [interpolation]"])
+        n = len(fake.TRANSACTIONS)
+        data = self.ok("set_params", {"videoTrack": 1, "atSeconds": self.mid, "components": [
+            {"matchName": "AE.ADBE Opacity", "params": [{"index": 0, "interpolation": "hold"}]}]})
+        row = data["interpolation"][0]
+        self.assertEqual((row["name"], data["keyframes"], len(fake.TRANSACTIONS) - n), ("HOLD", [], 1))
+        self.assertEqual(row["samples"][3]["value"], 0.0)  # a held key keeps its value up to the next one
+        before = snapshot()
+        for prm in ({"index": 0, "interpolation": "auto"}, {"index": 0, "interpolation": 9},
+                    {"index": 1, "interpolation": "bezier"}, {"index": 0, "value": 50.0, "interpolation": "bezier"}):
+            with self.subTest(prm=prm):  # unknown names, a param without keyframes, a static value
+                self.fails("set_params", {"videoTrack": 1, "atSeconds": self.mid, "components": [
+                    {"matchName": "AE.ADBE Opacity", "params": [prm]}]}, "BAD_PARAMS")
+        self.assertEqual(snapshot(), before)
 
     def test_everything_is_checked_before_anything_changes(self):
         self.comps(1, self.mid)  # the default chain exists once read
@@ -642,12 +691,30 @@ class TrimCloneTest(FakeCase):
         for fields in ({"end": b["start"]},                   # no length left
                        {"start": b["start"] - 3.0},           # in point before the media's start
                        {"outPoint": 12.5},                    # past the 12 s of media
-                       {"end": 21.0},                         # into the neighbour
-                       {"moveTo": 19.0}):                     # onto the neighbour
+                       {"end": 21.0}):                        # into the neighbour
             with self.subTest(fields=fields):
                 self.fails("trim_clip", dict({"kind": "video", "track": 1, "atSeconds": self.mid}, **fields),
                            "TRANSACTION_FAILED", "unknown")
         self.assertEqual(snapshot(), before)
+
+    def test_a_move_past_or_onto_another_clip_is_refused(self):
+        """B1 (27.1): a clip moved past another one on its track renders silent / blank, so the panel and the fake
+        refuse such a moveTo before any transaction; a move with nothing in its path still runs."""
+        self.place("broll_city.mp4", at=20.0, rng=(0.0, 2.0))  # a neighbour on V2 / A2
+        before, labels = snapshot(), list(fake.TRANSACTIONS)
+        for move_to in (19.0, 24.0, 40.0):  # onto it, just past it, far past it
+            with self.subTest(moveTo=move_to):
+                reply = self.fails("trim_clip", {"kind": "video", "track": 1, "atSeconds": self.mid, "moveTo": move_to},
+                                   "PRECONDITION_FAILED")
+                self.assertEqual([d["name"] for d in reply["data"]["inWay"]], ["broll_city.mp4"])
+                self.assertIn("B1", reply["error"])
+                self.assertEqual(fake.LAST_CTX["sideEffects"], 0)
+        self.assertEqual((snapshot(), fake.TRANSACTIONS), (before, labels))
+        b = self.before
+        nb = next(fake.describe(c) for c in fake.STATE["video"][1] if c["start"] > b["end"])
+        self.assertEqual(self.trim(moveTo=b["start"] - 3.0)["fields"], ["moveTo"])  # nothing on the way left
+        after = self.trim(at=b["start"] - 2.0, moveTo=nb["start"] - (b["end"] - b["start"]) - 1.0)["after"]
+        self.assertLess(after["end"], nb["start"])  # back right, stopping short of the neighbour
 
     def test_audio_and_video_legs_trim_separately(self):
         a = fake.describe(fake.STATE["audio"][1][0])
@@ -700,8 +767,9 @@ class TrimCloneTest(FakeCase):
         self.assertEqual(snapshot(), before)
 
     def test_split_without_a_razor(self):
-        """The split_clip recipe on the fake: clone past the end, trim the original's tail, trim the clone's head,
-        move it into place - two pieces with continuous source and the same attributes."""
+        """The pre-0.6 split recipe on the fake: clone past the end, trim the original's tail, trim the clone's head,
+        move it into place - two pieces with continuous source and the same attributes. The move crosses nothing
+        here; split_clip itself now clones the copy into place instead (a move past a clip is B1, refused)."""
         self.ok("set_params", {"videoTrack": 0, "atSeconds": 5.0, "components": [
             {"matchName": "AE.ADBE Motion", "params": [{"index": 1, "value": 110.0}]}]})
         at = fake.snap(20.0)
@@ -718,6 +786,23 @@ class TrimCloneTest(FakeCase):
         self.assertAlmostEqual(left["outPoint"], right["inPoint"], places=9)
         for t in (5.0, 30.0):
             self.assertEqual(self.param(0, t, "AE.ADBE Motion", 1)["value"], 110.0)
+
+    def test_shift_items_checks_the_room_per_track(self):
+        """The panel's precise rule: a staying clip blocks only when it ends after where its own track's first moving
+        clip lands; a track with nothing to move is not checked."""
+        fake.STATE["video"][1] = [{"name": "broll_city.mp4", "start": 10.0, "end": 15.0, "inPoint": 2.0, "outPoint": 7.0},
+                                  {"name": "broll_city.mp4", "start": 20.0, "end": 25.0, "inPoint": 2.0, "outPoint": 7.0}]
+        self.ok("shift_items", {"fromSeconds": 18.0, "deltaSeconds": -4.0, "videoTracks": [1], "audioTracks": [0]})
+        reply = self.fails("shift_items", {"fromSeconds": 16.0, "deltaSeconds": -3.0, "videoTracks": [1]},
+                           "PRECONDITION_FAILED")
+        self.assertEqual([(b["track"], b["end"]) for b in reply["data"]["blocking"]], [("V2", 15.0)])
+        fake.MAX_TRANSACTION_ACTIONS, cap = 1, fake.MAX_TRANSACTION_ACTIONS
+        self.addCleanup(setattr, fake, "MAX_TRANSACTION_ACTIONS", cap)
+        before = snapshot()
+        reply = self.fails("shift_items", {"fromSeconds": 0.0, "deltaSeconds": 1.0, "videoTracks": [1], "audioTracks": []},
+                           "BAD_PARAMS")
+        self.assertEqual(reply["data"], {"actions": 2, "max": 1})  # both V2 clips
+        self.assertEqual((snapshot(), fake.LAST_CTX["sideEffects"]), (before, 0))
 
 
 # ---------------------------------------------------------------- audio chains (provisional, measured on one mono clip)
@@ -865,6 +950,40 @@ class ExportSequenceTest(FakeCase):
         self.assertIn("Unable to initialize export!", reply["error"])
         fake.STATE["sequence"] = None
         self.fails("export_sequence", {"outputPath": out, "presetPath": self.PRESET}, "NO_SEQUENCE")
+
+    def test_export_jobs(self):
+        """wait false: the file is written, a job runs until PPRO_FAKE_EXPORT_POLLS export_status polls; one render at a
+        time; export_status lists every job, or one (NOT_FOUND for an unknown id); a reset (panel reload) forgets them."""
+        os.environ["PPRO_FAKE_EXPORT_POLLS"] = "2"
+        out = str(self.scratch / "cut.wav")
+        start = self.ok("export_sequence", {"outputPath": out, "presetPath": self.PRESET, "wait": False})
+        self.assertEqual({k: start[k] for k in ("exported", "started", "state", "jobId")},
+                         {"exported": False, "started": True, "state": "running", "jobId": "export-1"})
+        self.assertTrue(Path(out).is_file())
+        busy = self.fails("export_sequence", {"outputPath": out, "presetPath": self.PRESET}, "EXPORT_RUNNING")
+        self.assertEqual(busy["data"]["jobId"], "export-1")
+        first = self.ok("export_status", {"jobId": "export-1"})["jobs"][0]
+        self.assertEqual((first["state"], first["progress"], first["events"]), ("running", 0.5, {"progress": 1}))
+        done = self.ok("export_status", {})["jobs"][0]
+        self.assertEqual((done["state"], done["settledBy"], done["returned"], done["pending"], done["endEvent"]["type"]),
+                         ("done", "promise", True, False, "complete"))
+        self.assertEqual(done["events"], {"progress": 2, "complete": 1})
+        self.assertEqual((fake.LAST_CTX["sideEffects"], fake.TRANSACTIONS), (0, []))
+        second = self.ok("export_sequence", {"outputPath": out, "presetPath": self.PRESET, "wait": False})
+        self.assertEqual(len(self.ok("export_status", {})["jobs"]), 2)
+        self.fails("export_status", {"jobId": "export-9"}, "NOT_FOUND")
+        # no guard check: it touches no project or sequence (a guarded poll survives a sequence switch)
+        self.assertEqual(len(self.ok("export_status", {}, guard={"sequence": "Other"})["jobs"]), 2)
+        fake.reset()
+        self.fails("export_status", {"jobId": second["jobId"]}, "NOT_FOUND")
+        os.environ.update(PPRO_FAKE_EXPORT_POLLS="0")
+        now = self.ok("export_sequence", {"outputPath": out, "presetPath": self.PRESET, "wait": False})
+        self.assertEqual((now["state"], now["exported"]), ("done", True))
+        os.environ.update(PPRO_FAKE_EXPORT_RESULT="cancel")  # failed within the early window: no job
+        reply = self.fails("export_sequence", {"outputPath": out, "presetPath": self.PRESET, "wait": False},
+                           "EXPORT_FAILED")
+        self.assertIn("cancelled in Premiere", reply["error"])
+        self.assertEqual(len(self.ok("export_status", {})["jobs"]), 1)
 
 
 # ---------------------------------------------------------------- the library against the fake
@@ -1090,6 +1209,117 @@ class SwapSafetyTest(FakeCase):
         self.assertEqual(report["sourceSnap"]["out"][1], round(273 / FPS, 6))
 
 
+@unittest.skipUnless(replace is not None and errors is not None, "ppro_bridge.replace is not importable yet")
+class GraphicEffectOrderTest(FakeCase):
+    """A graphic's chain ends in its layer components (Opacity, Motion, Graphic Group, effects, Text: measured by
+    Apocale/khanjar on 26.3-26.5), and an effect after them does nothing to it: set_params adds effects before them,
+    replace_clip carries a graphic's effects in order and leaves its own components to the new clip. V2 holds an EN
+    title graphic at 10-15 s; a CN one waits in the project panel (graphics have no media file and no audio)."""
+    BLUR, TINT, TEXT = "AE.ADBE Gaussian Blur 2", "AE.ADBE Tint", "AE.ADBE Text"
+    GRAPHIC = {"name": "Basic Title", "bin": "EN", "mediaPath": None, "hasTranscript": False, "duration": 5.0,
+               "graphic": True}
+    CN = {"name": "Basic Title", "bin": "CN", "mediaPath": None}
+
+    def setUp(self):
+        super().setUp()
+        fake.STATE["items"] += [dict(self.GRAPHIC), dict(self.GRAPHIC, bin="CN")]
+        self.ok("insert_clip", {"itemName": "Basic Title", "binPath": "EN", "atSeconds": 10.0, "videoTrack": 1,
+                                "audioTrack": 1})
+        self.mid = 12.0
+
+    def names(self):
+        return [(c["matchName"], c["occurrence"]) for c in self.comps(1, self.mid)]
+
+    def add(self, *components, **extra):
+        return self.ok("set_params", dict({"videoTrack": 1, "atSeconds": self.mid, "components": list(components)},
+                                          **extra))
+
+    def test_a_new_effect_lands_before_the_graphics_layers(self):
+        self.assertEqual(fake.STATE["audio"][1], [])  # a graphic has no audio leg
+        data = self.add({"matchName": self.BLUR, "params": [{"index": 0, "value": 5.0}]})
+        self.assertEqual(data["createdComponents"], [{"matchName": self.BLUR, "occurrence": 1, "index": 3}])
+        self.assertEqual(self.names(), [("AE.ADBE Opacity", 1), ("AE.ADBE Motion", 1), ("AE.ADBE Graphic Group", 1),
+                                        (self.BLUR, 1), (self.TEXT, 1)])
+        # occurrence counting is unchanged: the second blur follows the first, still before the layers
+        two = [{"matchName": self.BLUR, "occurrence": 2, "params": [{"index": 0, "value": 9.0}]},
+               {"matchName": self.TINT, "params": []}]
+        before = snapshot()
+        dry = self.add(*two, dryRun=True)
+        self.assertEqual(snapshot(), before)
+        data = self.add(*two)
+        planned = [{"matchName": self.BLUR, "occurrence": 2, "index": 4}, {"matchName": self.TINT, "occurrence": 1, "index": 5}]
+        self.assertEqual((dry["createdComponents"], data["createdComponents"]), (planned, planned))
+        self.assertEqual(self.names()[3:], [(self.BLUR, 1), (self.BLUR, 2), (self.TINT, 1), (self.TEXT, 1)])
+        self.assertEqual([self.param(1, self.mid, self.BLUR, 0, occ)["value"] for occ in (1, 2)], [5.0, 9.0])
+        self.fails("set_params", {"videoTrack": 1, "atSeconds": self.mid, "components": [
+            {"matchName": self.TEXT, "occurrence": 2, "params": []}]}, "NOT_FOUND")  # a layer is not addable
+
+    def test_a_graphic_without_layers_gets_an_append_and_a_warning(self):
+        fake.STATE["video"][1][0].update(layers=False)
+        fake.STATE["video"][1][0].pop("components", None)
+        data = self.add({"matchName": self.BLUR, "params": []})
+        self.assertEqual((data["createdComponents"][0]["index"], data["layerWait"]), (3, {"seconds": 2.0, "layers": 0}))
+        self.assertIn("appended", data["warning"])
+        self.assertEqual(self.names()[2:], [("AE.ADBE Graphic Group", 1), (self.BLUR, 1)])
+
+    def test_another_instance_of_an_effect_stuck_after_the_layers_is_refused(self):
+        fake.chain(fake.STATE["video"][1][0]).append(fake.make_component(self.BLUR))  # [.., Text, Blur]: an old append
+        before = snapshot()
+        self.fails("set_params", {"videoTrack": 1, "atSeconds": self.mid, "components": [
+            {"matchName": self.BLUR, "occurrence": 2, "params": []}]}, "UNSUPPORTED")
+        self.assertEqual(snapshot(), before)
+        data = self.add({"matchName": self.TINT, "params": []})  # another effect still goes before the layers
+        self.assertEqual(data["createdComponents"], [{"matchName": self.TINT, "occurrence": 1, "index": 3}])
+
+    def test_a_video_clip_still_appends_in_request_order(self):
+        self.place("broll_city.mp4", at=30.0)
+        data = self.ok("set_params", {"videoTrack": 1, "atSeconds": 32.0, "components": [
+            {"matchName": self.BLUR, "params": []}, {"matchName": self.TINT, "params": []},
+            {"matchName": self.BLUR, "occurrence": 2, "params": []}]})
+        self.assertEqual([(c["matchName"], c["index"]) for c in data["createdComponents"]],
+                         [(self.BLUR, 2), (self.TINT, 3), (self.BLUR, 4)])
+        self.assertEqual([c["matchName"] for c in self.comps(1, 32.0)],
+                         ["AE.ADBE Opacity", "AE.ADBE Motion", self.BLUR, self.TINT, self.BLUR])
+
+    def test_replace_keeps_a_graphics_effect_order_and_its_own_layers(self):
+        self.add({"matchName": self.BLUR, "params": [{"index": 0, "value": 12.0}]}, {"matchName": self.TINT, "params": []},
+                 {"matchName": self.BLUR, "occurrence": 2, "params": [{"index": 0, "value": 3.0}]},
+                 {"matchName": self.TEXT, "params": [{"index": 0, "value": "EN title"}]})
+        want = self.names()
+        self.assertEqual(want[3:], [(self.BLUR, 1), (self.TINT, 1), (self.BLUR, 2), (self.TEXT, 1)])
+        calls = []
+        swap = lambda **kw: replace.replace_clip(recording_rpc(calls), 1, self.mid, self.CN,  # noqa: E731
+                                                 probe_media=lambda p: {"hasAudio": False, "duration": 5.0}, **kw)
+        plan = swap(dry_run=True)
+        self.assertEqual((plan["graphicComponents"], plan["readdEffects"]),
+                         (["AE.ADBE Graphic Group", self.TEXT], [self.BLUR, self.TINT]))
+        report = swap()
+        self.assertTrue(report["verified"], report["problems"])
+        self.assertEqual([c["bin"] for c in self.ok("list_project_items")["items"] if c["name"] == "Basic Title"],
+                         ["EN", "CN"])
+        self.assertTrue(fake.STATE["video"][1][0].get("graphic"))
+        self.assertEqual(self.names(), want)
+        self.assertEqual([self.param(1, self.mid, self.BLUR, 0, occ)["value"] for occ in (1, 2)], [12.0, 3.0])
+        self.assertEqual(self.param(1, self.mid, self.TEXT, 0)["value"], "Title")  # the CN graphic's own text
+        self.assertTrue(any("graphic's own" in n for n in report["notes"]), report["notes"])
+        self.assertLessEqual(set(calls), set(spec.command("replace_clip")["calls"]))
+
+    def test_an_effect_order_that_did_not_come_across_is_reported(self):
+        self.add({"matchName": self.BLUR, "params": []}, {"matchName": self.TINT, "params": []},
+                 {"matchName": self.BLUR, "occurrence": 2, "params": []})
+        real = fake.HANDLERS["set_params"]
+
+        def grouping(p):  # a panel from before request-order creation: instances grouped by match name
+            if not any(c.get("params") for c in p["components"]):
+                p = dict(p, components=sorted(p["components"], key=lambda c: (c["matchName"] != self.BLUR, c["occurrence"])))
+            return real(p)
+        fake.HANDLERS["set_params"] = grouping
+        report = replace.replace_clip(recording_rpc([]), 1, self.mid, self.CN,
+                                      probe_media=lambda p: {"hasAudio": False, "duration": 5.0})
+        self.assertFalse(report["verified"])
+        self.assertTrue(any(p.startswith("effect order") for p in report["problems"]), report["problems"])
+
+
 @unittest.skipUnless(ops is not None and errors is not None, "ppro_bridge.ops is not importable yet")
 class OpsCallsTest(FakeCase):
     """Each CLI command, run through ops against the fake, calls only the actions its spec command lists (+ ping)."""
@@ -1119,14 +1349,40 @@ class OpsCallsTest(FakeCase):
         preset_file.write_bytes(b"<preset/>")
         probe = lambda p: {"hasAudio": True, "duration": 10.0, "width": 1920, "height": 1080, "fps": 59.94}  # noqa: E731
         silent = lambda p: {"hasAudio": False, "duration": 5.0}  # noqa: E731
+        vertical = lambda p: {"hasAudio": True, "duration": 60.0, "width": 1080, "height": 1920, "fps": FPS}  # noqa: E731
+        h264 = s / "presets" / "4E49434B_48323634"  # Premiere's H.264 preset folder
+        h264.mkdir(parents=True)
+        (h264 / "00 - Match Source - High bitrate.epr").write_bytes(b"<PremiereData/>")
+
+        def own_presets():  # this machine's Premiere and Documents folder stay out of it
+            for name, folders in (("system_dirs", [str(s / "presets")]), ("user_dirs", [])):
+                patch = mock.patch.object(presets, name, lambda folders=folders: folders)
+                patch.start()
+                self.addCleanup(patch.stop)
+        same_media = lambda p: {"hasAudio": True, "duration": 12.0, "width": 1920, "height": 1080,  # noqa: E731
+                                "fps": fake.FPS}  # the fake's broll_city.mp4: 12 s at 59.94
 
         def place_title():
             self.place("title.mov", at=10.0, rng=(0.5, 4.5))
+
+        def fade_in_v1():
+            self.ok("add_transition", {"videoTrack": 0, "atSeconds": 5.0, "matchName": "AE.ADBE Cross Dissolve New",
+                                       "durationSeconds": 0.5, "applyToStart": True})
+
+        def blur_v1():
+            self.ok("set_params", {"videoTrack": 0, "atSeconds": 5.0, "components": [
+                {"matchName": "AE.ADBE Gaussian Blur 2", "params": [{"index": 0, "value": 4.0}]}]})
+
+        def keyframes_v1():
+            self.ok("set_params", {"videoTrack": 0, "atSeconds": 5.0, "components": [{"matchName": "AE.ADBE Opacity",
+                    "params": [{"index": 0, "timeBase": "clip", "keyframes": [{"t": 0, "value": 0}, {"t": 1, "value": 100}]}]}]})
 
         return {
             "ping": ({}, None),
             "get_project": ({}, None),
             "get_sequence": ({}, None),
+            "set_active_sequence": ({"name": "Sequence 01"}, None),
+            "select_items": ({"track": ["V1", "A1"], "at": 5.0, "expect_seq": "Sequence 01"}, None),
             "list_items": ({"track": "V1"}, None),
             "inspect_items": ({"track": ["V1"], "from_s": 0.0, "to_s": 10.0}, None),
             "list_project_items": ({}, None),
@@ -1141,27 +1397,48 @@ class OpsCallsTest(FakeCase):
                                  "sleep": lambda seconds: None, "output": str(s / "stt.json")}, None),
             "import_media": ({"path": [str(media_file)], "bin": "Plan A"}, None),
             "add_marker": ({"at": 3.0, "name": "Fact check", "color": "red"}, None),
+            "list_markers": ({}, None),
+            "remove_marker": ({"name": "harness marker", "at": 1.0, "expect_seq": "Sequence 01"}, None),
+            "list_sequences": ({}, None),
+            "clone_sequence": ({"keep": 2, "label": "before the re-cut"}, None),
+            "save_project": ({}, None),
             "insert_clip": ({"item": "broll_city.mp4", "at": 10.0, "vtrack": 1, "atrack": 1, "in_s": 1.0,
                              "out_s": 3.0, "label": "b-roll"}, None),
             "set_scale": ({"track": "V1", "at": 5.0, "value": 110.0}, None),
             "set_fps": ({"item": ["CN/title.mov"], "fps": 59.94}, None),
+            "subclip": ({"item": "broll_city.mp4", "in_s": 1.0, "out_s": 3.0, "name": "b-roll 1-3", "bin": "Selects",
+                         "probe_media": probe}, None),
+            "relink": ({"item": "broll_city.mp4", "to": str(media_file), "probe_media": same_media}, None),
             "remove_items": ({"track": ["V1"], "from_s": 0.0, "to_s": 60.0, "dry_run": True}, None),
+            "remove_project_items": ({"bin": ["EN"], "item": ["/broll_city.mp4"]}, None),
             "apply_plan": ({"plan": str(plan_file), "probe_media": probe, "notes_as_markers": True}, None),
             "replace_clip": ({"track": "V2", "at": fake.snap(10.0) + 2.0, "with_item": "CN/title.mov",
                               "probe_media": silent}, place_title),
             "set_params": ({"track": "V1", "at": 5.0, "json_file": str(params_file)}, None),
             "add_transition": ({"track": "V1", "at": 5.0, "match_name": "AE.ADBE Cross Dissolve New",
                                 "duration": 0.5, "edge": "start"}, None),
+            "remove_transition": ({"track": "V1", "at": 5.0, "edge": "start"}, fade_in_v1),
+            "remove_effect": ({"track": "V1", "at": 5.0, "match_name": "AE.ADBE Gaussian Blur 2"}, blur_v1),
+            "remove_keyframes": ({"track": "V1", "at": 5.0, "match_name": "AE.ADBE Opacity", "param": 0,
+                                  "all_keys": True, "keep_value": True}, keyframes_v1),
             "set_volume": ({"track": "A1", "at": 5.0, "db": -6.0}, None),
             "split_clip": ({"track": "V1", "at": 20.0}, None),
             "cut_range": ({"from_s": 10.0, "to_s": 15.0}, None),
             "snap_edges": ({}, None),
+            "shift_items": ({"from_s": 20.0, "by": 1.0}, None),
             "extend_cut": ({"at": 20.0, "in_by": 0.25}, lambda: ops.split_clip(recording_rpc([]), track="V1", at=20.0)),
             "conform_captions": ({"track": "V2", "srt": str(srt_file)}, place_title),
             "review_cuts": ({"out_dir": str(s / "review"), "render": True, "preset": str(preset_file)}, None),
             "lint_timeline": ({}, None),
             "probe_api": ({"output": str(s / "api.json")}, None),
             "export_audio": ({"output": str(s / "mix.wav"), "render": True, "preset": str(preset_file)}, None),
+            "list_presets": ({"format": "h264"}, own_presets),
+            "export_video": ({"preset": "00 - Match Source - High bitrate", "output": str(s / "render" / "seq.mp4"),
+                              "probe_media": vertical, "sleep": lambda seconds: None}, own_presets),
+            "list_effects": ({"kind": "audio"}, None),
+            "add_audio_effect": ({"track": "A1", "at": 5.0, "name": "DeNoise", "label": "denoise"}, None),
+            "list_effect_presets": ({"file": str(PRESETS_FIXTURE)}, None),
+            "apply_preset": ({"track": "V1", "at": 5.0, "preset": "Tinted", "file": str(PRESETS_FIXTURE)}, None),
         }
 
     def test_every_command_calls_only_its_spec_actions(self):
@@ -1177,7 +1454,10 @@ class OpsCallsTest(FakeCase):
                 self.assertIsInstance(result, dict)
                 allowed = set(spec.command(name)["calls"]) | {"ping"}
                 self.assertLessEqual(set(calls), allowed, f"{name} called {sorted(set(calls) - allowed)}")
-                self.assertTrue(calls)
+                if spec.command(name)["calls"]:
+                    self.assertTrue(calls)
+                else:  # Python only (list_presets): never reaches the panel
+                    self.assertEqual(calls, [])
 
     def test_transcribe_clip_start_poll_export(self):
         os.environ["PPRO_FAKE_STT_POLLS"] = "3"

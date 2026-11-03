@@ -14,13 +14,18 @@
    (backlog item e), black frames on --phone-media (item c), and with --watch-tracks how long get_sequence takes to
    see a track you add by hand (item d).
 
+Needs a dev build of the panel (ping: build.dev true, the repository's plugin/): release exports and .ccx packages
+register no api_smoke, and the runner stops with exit code 2 and says so.
+
 Safety (on top of live_smoke.py's, whose machinery this reuses): refuses unless the open project's name starts with
 PAB_TEST, and the panel refuses api_smoke itself in any other project. Every request is pinned to the project and
 sequence (guard). The .prproj is copied into the report folder before the first write. Writes go to the scratch
 region (top video track, highest audio track, past the sequence end) and to objects the cases create and remove
-(a marker, a bin, a subclip, a sequence clone). Opt-ins: --mogrt (inserts a template: font dialogs are possible),
---allow-track-add (Premiere may add tracks that no API removes), --phone-media, --watch-tracks (asks you to add a
-track). A case whose outcome is unknown, or a stuck panel, stops the remaining cases; cleanup still runs.
+(a marker, a bin, a subclip, a sequence clone). The test media goes into a bin PAB_API_<run id>, removed at the end
+with remove_project_items after a dry run (kept, with a note, under --keep or while a sequence uses it). Opt-ins:
+--mogrt (inserts a template: font dialogs are possible), --allow-track-add (Premiere may add tracks that no API
+removes), --phone-media, --watch-tracks (asks you to add a track). A case whose outcome is unknown, or a stuck panel,
+stops the remaining cases; cleanup still runs.
 
 Output: report.json, api_smoke.md (one row per step: case | api | status | detail | ms) and probe_api.json in --out.
 Exit code: 0 no fail/error, 1 at least one, 2 refused or could not start.
@@ -42,10 +47,15 @@ from live_smoke import PREFIX, REPO, Refused, Smoke, norm_path  # noqa: E402
 
 CASES = ["markers", "clip_props", "track", "selection", "blend_mode", "keyframes", "components", "lumetri",
          "transitions", "audio_filter", "sequence_points", "properties", "project_items", "relink", "source_monitor",
-         "converter_exports", "mogrt", "sequences", "implicit_track", "save"]  # cleanup_bin runs last, always
+         "converter_exports", "mogrt", "sequences", "sequence_settings", "implicit_track",
+         "save"]  # the bin goes last (remove_bin)
 PREFERRED_AUDIO = ("DeNoise", "降噪", "Parametric Equalizer", "参数均衡器", "Hard Limiter", "强制限幅", "Dynamics", "动态")
 STATUS = {"pass": "PASS", "fail": "FAIL", "error": "FAIL", "absent": "KNOWN_ISSUE", "skipped": "SKIP"}
 STOP_CODES = {"PANEL_STUCK", "PANEL_TIMEOUT", "PANEL_DISCONNECTED", "TIMEOUT", "CONNECTION_CLOSED"}
+RELEASE_BUILD = ("the loaded panel is a release build (ping: build.dev false), and only dev builds register api_smoke "
+                 "(tests that change Premiere stay out of releases). Run this smoke from a dev checkout: load that "
+                 "checkout's plugin/ folder in UXP Developer Tool (start_bridge.bat does it), then run this script from it; "
+                 "in a release copy, set plugin/lib/build.js to dev: true first and Reload the panel")
 
 
 def detail_of(reply, api) -> dict:
@@ -280,11 +290,11 @@ class ApiSmoke(Smoke):
                     f"{len(times)} times, black at {sorted(set(black))}" if black else f"{len(times)} times, none black")
 
     def remove_bin(self):
+        """The runner's bin and the media imported into it: remove_project_items (dry run first; refused while a
+        sequence uses an item), not the panel's cleanup_bin case, which checks no uses."""
         if "broll" not in self.items:
             return
-        reply = self.run_case("cleanup_bin", {"binName": self.bin})
-        if reply and not reply.get("leftovers") and all(st["status"] == "pass" for st in reply.get("steps") or []):
-            self.left["projectItems"] = [x for x in self.left["projectItems"] if not x.startswith(f"bin {self.bin}")]
+        self.remove_bins([self.bin])
 
     def watch_tracks(self):
         if not self.args.watch_tracks or not sys.stdin.isatty():
@@ -316,14 +326,25 @@ class ApiSmoke(Smoke):
                 lines.append(f"| {case} | {s['api']} | {s['status']} | {detail} | {s.get('ms', '')} |")
         (self.out / "api_smoke.md").write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
 
+    def release_panel(self) -> bool:
+        """A release panel (ping build.dev false) has no api_smoke at all: say so before anything else."""
+        build = (getattr(self, "ping", None) or {}).get("build")
+        if isinstance(build, dict) and build.get("dev") is False:
+            self.record("FAIL", "bootstrap: dev build", RELEASE_BUILD)
+            return True
+        return False
+
     def run(self):
         try:
             self.bootstrap()
         except Refused as e:
-            self.record("FAIL", "bootstrap", f"refused: {e}")
+            if not self.release_panel():
+                self.record("FAIL", "bootstrap", f"refused: {e}")
             return self.finish(2)
         except self.BridgeError as e:
             self.record("FAIL", "bootstrap", f"{e.code} ({e.outcome}): {e}")
+            return self.finish(2)
+        if self.release_panel():
             return self.finish(2)
         named = self.args.allow_project and (self.project or {}).get("name") == self.args.allow_project
         if not self.is_test_project and not named:
@@ -364,8 +385,7 @@ class ApiSmoke(Smoke):
             try:
                 if self.placements or getattr(self, "scratch", None):
                     self.cleanup()
-                if not self.args.keep and not self.left.get("clips"):
-                    self.remove_bin()
+                self.remove_bin()  # skipped with a note under --keep or while clips of this run are left
             except Exception as e:  # noqa: BLE001 - e.g. a stuck panel: report what is left instead of a traceback
                 self.error("cleanup: unexpected error", e)
                 self.left["clips"] = self.left.get("clips") or [

@@ -20,6 +20,7 @@ frames/
 *.mp3
 *.m4a
 *.png
+!plugin/icon.png
 *.jpg
 *.srt
 *.vtt
@@ -32,6 +33,10 @@ report*.json
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Built packages (scripts/build_ccx.py)
+dist/
+*.ccx
 
 # Local research output (not part of the release)
 research_notes/

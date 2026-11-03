@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -64,16 +65,34 @@ class Bridge:
     def __init__(self, panel=True, broker_env=None, panel_env=None):
         self.port = free_port()
         self.url = f"ws://127.0.0.1:{self.port}"
-        self.procs = []
+        self.procs, self.readers = [], []
         self.procs.append(subprocess.Popen([sys.executable, str(BROKER / "broker.py")],
                                            env=env(PPRO_BRIDGE_PORT=self.port, **(broker_env or {})),
                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
         self._wait_port()
         if panel:
-            self.procs.append(subprocess.Popen([sys.executable, str(BROKER / "fake_panel.py")],
-                                               env=env(PPRO_BRIDGE_URL=self.url, **(panel_env or {})),
-                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-            time.sleep(0.8)
+            fake = subprocess.Popen([sys.executable, str(BROKER / "fake_panel.py")],
+                                    env=env(PPRO_BRIDGE_URL=self.url, **(panel_env or {})), stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
+            self.procs.append(fake)
+            self._wait_registered(fake)
+
+    def _wait_registered(self, fake):
+        """Until the broker confirms the fake panel ({"event": "registered"}, which the fake prints): a test that
+        started earlier would get NO_PANEL, or register a panel of its own first and see the fake refused (4409)."""
+        registered = threading.Event()
+
+        def drain():  # read every line, or the fake blocks on a full pipe
+            for line in fake.stdout:
+                if line.startswith("registered by the broker"):
+                    registered.set()
+
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
+        self.readers.append(reader)
+        if not registered.wait(15):
+            self.stop()
+            raise RuntimeError("the fake panel did not register with the broker within 15 s")
 
     def _wait_port(self):
         deadline = time.monotonic() + 10
@@ -92,6 +111,11 @@ class Bridge:
         for p in reversed(self.procs):
             p.kill()
             p.wait()
+        for reader in self.readers:  # the fake's stdout ends with the process
+            reader.join(5)
+        for p in self.procs:
+            if p.stdout is not None:
+                p.stdout.close()
 
 
 def run_cli(*args, url, timeout=60):
@@ -155,6 +179,6 @@ def ping_reply(protocol=2, actions=None, **extra) -> dict:
     from ppro_bridge._version import VERSION
     data = {"pong": True, "plugin": f"test-panel {VERSION}", "version": VERSION, "protocol": protocol,
             "actions": spec.action_names() if actions is None else actions, "stuck": False, "denied": False,
-            "capabilities": {}, "brokerVersion": VERSION}
+            "capabilities": {}, "brokerVersion": VERSION, "build": {"dev": True, "packaged": False}}
     data.update(extra)
     return data

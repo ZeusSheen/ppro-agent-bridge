@@ -232,7 +232,7 @@ module.exports = function (deps) {
         for (const idx of list) {
           const track = await timeline.getTrack(sequence, kind, idx);
           const label = timeline.trackLabel(kind, idx);
-          for (const it of await timeline.clipItems(track)) {
+          for (const it of await timeline.clipItems(track, label)) {
             const d = timeline.requireSpan(await timeline.describeItem(it), label);
             const hit = mode === "inside"
               ? d.start >= params.fromSeconds - EPS && d.end <= params.toSeconds + EPS
@@ -257,6 +257,121 @@ module.exports = function (deps) {
       });
       if (err) throw err;
       return { dryRun: false, mode, removed, undoLabel: label };
+    },
+
+    /*
+     * Remove bins and/or project items from the project in one undo step; the media files on disk stay. Refused
+     * before anything changes when a sequence still uses one of the items (Premiere would take those clips out of
+     * the sequence too: IN_USE), when a sequence would go with them (UNSUPPORTED), or for the root bin. Every
+     * sequence is read strictly: a read that fails refuses the removal instead of counting an item as unused.
+     * Items are matched to clips by ProjectItem#getId (else name + media path). Read back afterwards (remaining).
+     * params: { bins?: ["Bin/Sub bin"], items?: [{ name, binPath? }], dryRun?, undoLabel? }
+     */
+    async remove_project_items(params, ctx) {
+      const project = await core.requireProject(ctx);
+      const tree = await projectLib.walkTree(project);
+      const clips = tree.filter((e) => e.kind === "clip");
+      const targets = [];
+      for (const raw of params.bins || []) {
+        const p = String(raw).replace(/^\/+|\/+$/g, "");
+        if (!p) throw new BridgeError("BAD_PARAMS", "The root bin cannot be removed: name a bin inside it.");
+        const bin = tree.find((e) => e.kind === "bin" && e.path === p);
+        if (!bin) {
+          throw new BridgeError("NOT_FOUND", `No bin "${p}". Bins: ` +
+            (tree.filter((e) => e.kind === "bin").map((e) => e.path).join(" | ") || "none"));
+        }
+        targets.push(bin);
+      }
+      for (const it of params.items || []) {
+        const matches = projectLib.matchClips(clips, it.name, it.binPath);
+        if (matches.length > 1) {
+          throw new BridgeError("AMBIGUOUS", `${matches.length} project items are named "${it.name}" (` +
+            matches.map((m) => m.path).join(", ") + "). Name the one to remove with its bin path.");
+        }
+        targets.push(matches[0] || (await projectLib.resolveClip(project, it.name, it.binPath, clips)));
+      }
+      const within = (e, bin) => e.binPath === bin.path || e.binPath.indexOf(bin.path + "/") === 0;
+      const doomed = [];
+      for (const t of targets) {
+        for (const e of [t].concat(t.kind === "bin" ? tree.filter((x) => within(x, t)) : [])) {
+          if (doomed.indexOf(e) < 0) doomed.push(e);
+        }
+      }
+      // One remove action per target that is not already inside a bin being removed.
+      const acts = targets.filter((t, i) => targets.indexOf(t) === i &&
+        !targets.some((b) => b !== t && b.kind === "bin" && within(t, b)));
+
+      const keyOf = async (item) => {
+        let id = null;
+        try { id = core.isFn(item, "getId") ? item.getId() : null; } catch (e) { id = null; }
+        if (id !== null && id !== undefined && id !== "") return `id:${id}`;
+        const clip = ppro.ClipProjectItem.cast(item);
+        return `ref:${item.name}|${clip ? await core.tryGet(() => clip.getMediaFilePath(), "") : "bin"}`;
+      };
+      const items = [];
+      const keys = new Map();  // key -> path, for the clips (sequences included) that would go
+      for (const e of doomed) {
+        const d = { ref: e.path, kind: e.kind, mediaPath: null };
+        if (e.kind === "clip") {
+          let isSeq;
+          try { isSeq = await e.clip.isSequence(); } catch (err) { isSeq = null; }
+          d.kind = isSeq === null ? "unknown" : isSeq ? "sequence" : "clip";
+          if (d.kind === "clip") d.mediaPath = await core.tryGet(() => e.clip.getMediaFilePath(), null);
+          keys.set(await keyOf(e.item), e.path);
+        }
+        items.push(d);
+      }
+
+      const inUse = [];
+      if (keys.size) {
+        try {
+          for (const s of (await project.getSequences()) || []) {
+            for (const kind of ["video", "audio"]) {
+              const count = kind === "video" ? await s.getVideoTrackCount() : await s.getAudioTrackCount();
+              for (let i = 0; i < count; i++) {
+                const track = kind === "video" ? await s.getVideoTrack(i) : await s.getAudioTrack(i);
+                for (const it of await timeline.clipItems(track, `${timeline.trackLabel(kind, i)} of "${s.name}"`)) {
+                  const pi = await it.getProjectItem();
+                  const ref = pi ? keys.get(await keyOf(pi)) : undefined;
+                  if (ref !== undefined) {
+                    inUse.push({ item: ref, sequence: s.name, track: timeline.trackLabel(kind, i),
+                      start: secs(await it.getStartTime()), end: secs(await it.getEndTime()) });
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {
+          throw new BridgeError("INTERNAL", `[read] could not read every sequence's clips, so whether the items are in ` +
+            `use is unknown; nothing was removed: ${core.errorMessage(e)}`);
+        }
+      }
+      const sequencesGoing = items.filter((d) => d.kind !== "clip" && d.kind !== "bin").map((d) => d.ref);
+      const refusal = sequencesGoing.length ? "UNSUPPORTED" : inUse.length ? "IN_USE" : null;
+      const out = { dryRun: !!params.dryRun, items, inUse, removed: [], remaining: [] };
+      if (params.dryRun) {
+        if (refusal) out.wouldRefuse = refusal;
+        return out;
+      }
+      if (sequencesGoing.length) {
+        throw new BridgeError("UNSUPPORTED", `Removing would delete the sequence(s) ${sequencesGoing.join(", ")} (or ` +
+          "items the panel could not identify); nothing was removed. Move them out first.", { data: { items } });
+      }
+      if (inUse.length) {
+        const where = inUse.slice(0, 6).map((u) => `${u.item} on ${u.sequence} ${u.track} ${u.start.toFixed(2)}s`);
+        throw new BridgeError("IN_USE", `Still used in a sequence: ${where.join("; ")}` +
+          (inUse.length > 6 ? ` (+${inUse.length - 6} more)` : "") + ". Premiere would take those clips out of the " +
+          "sequence too; nothing was removed.", { data: { inUse } });
+      }
+      const label = params.undoLabel || `Agent: remove ${acts.map((t) => t.path).join(", ")} from the project`;
+      core.runTransaction(project, label, () => acts.map((t) => t.folder.createRemoveItemAction(t.item)), ctx);
+      const left = new Set();
+      for (const e of await projectLib.walkTree(project)) left.add(await keyOf(e.item));
+      for (const e of doomed) {
+        (left.has(await keyOf(e.item)) ? out.remaining : out.removed).push(e.path);
+      }
+      out.undoLabel = label;
+      return out;
     },
 
     /*
@@ -292,8 +407,9 @@ module.exports = function (deps) {
     /*
      * Trim or move the one clip under atSeconds: start / end (sequence seconds; head / tail trim),
      * inPoint / outPoint (source seconds; also a head / tail trim — the content stays anchored to the
-     * timeline), or moveTo (absolute new start, same length; alone). Sequence times land on the nearest
-     * whole frame. One undo step; read back afterwards.
+     * timeline), or moveTo (absolute new start, same length; alone; refused with PRECONDITION_FAILED when the path
+     * passes over or lands on another clip of the track - B1). Sequence times land on the nearest whole frame. One
+     * undo step; read back afterwards.
      * params: { kind: "video"|"audio", track, atSeconds, start?, end?, inPoint?, outPoint?, moveTo?, undoLabel? }
      */
     async trim_clip(params, ctx) {
@@ -313,6 +429,29 @@ module.exports = function (deps) {
       const newStart = fields.includes("moveTo") ? params.moveTo : fields.includes("start") ? params.start : before.start;
       if (newStart < -EPS) throw new BridgeError("BAD_PARAMS", `The clip would start at ${newStart.toFixed(3)}s, before 0s.`);
       const frameTicks = await core.frameTicksOf(sequence);
+      if (fields.includes("moveTo")) {
+        // B1 (27.1, measured 3 Nov 2026): a createMoveAction that carries a clip past another clip on its track left
+        // the moved clip - and once the clip it passed - silent (-180 dB) or blank (0 opaque px) in Premiere's
+        // renders, while every read looked right. So a move whose path crosses or lands on another clip of the track
+        // is refused (half a frame of tolerance, so a sub-frame snap next to a neighbour still runs); clone the clip
+        // to its new place instead (clone_clip renders) and remove the original.
+        const half = frameTicks / core.TICKS_PER_SECOND / 2;
+        const lo = Math.min(before.start, params.moveTo);
+        const hi = Math.max(before.end, params.moveTo + (before.end - before.start));
+        const inWay = [];
+        for (const other of await timeline.clipItems(await timeline.getTrack(sequence, kind, params.track), tl)) {
+          const d = timeline.requireSpan(await timeline.describeItem(other), tl);
+          if (Math.abs(d.start - before.start) < EPS && Math.abs(d.end - before.end) < EPS) continue;  // the clip
+          if (d.start < hi - half && d.end > lo + half) inWay.push({ name: d.name, start: d.start, end: d.end });
+        }
+        if (inWay.length) {
+          throw new BridgeError("PRECONDITION_FAILED", `Moving "${before.name}" on ${tl} from ${before.start.toFixed(3)}s ` +
+            `to ${params.moveTo.toFixed(3)}s would pass over or onto ` + inWay.map((d) =>
+            `"${d.name}" (${d.start.toFixed(3)}-${d.end.toFixed(3)}s)`).join(", ") + ": Premiere 27.1 renders a clip " +
+            "moved past another silent or blank (B1). Clone it there (clone_clip) and remove the original instead. " +
+            "Nothing was moved.", { data: { inWay } });
+        }
+      }
       // start / end / moveTo land on whole frames (exact ticks); the move is the tick distance from the clip's
       // own start, so the moved clip starts exactly on its frame. inPoint / outPoint are source times (nudged):
       // they move the sequence edge by the same source delta, so callers that need the grid use start / end.
@@ -335,9 +474,12 @@ module.exports = function (deps) {
 
     /*
      * Shift every clip that starts at or after fromSeconds on the given tracks by deltaSeconds (whole frames), in ONE
-     * transaction (one undo step) — the sync-keeping ripple after a cut. Moving left needs the room:
-     * refused when a clip that is not moved overlaps [from + delta, from) on a shifted track. Moves run
-     * in an order that never overlaps (left shift: earliest first; right shift: latest first).
+     * transaction (one undo step) — the sync-keeping ripple after a cut. Moving left needs the room, per track: a
+     * clip that stays is in the way only when it ends after where that track's FIRST moving clip lands (an SFX that
+     * ends between from + delta and a later first clip is not); a track with nothing to move is left alone (a music
+     * bed under everything). The same rule as ppro_bridge/editing.py shift_items (feature "shiftItemsPrecise"; 0.5
+     * refused any staying clip ending after from + delta). Moves run in an order that never overlaps (left shift:
+     * earliest first; right shift: latest first).
      * params: { fromSeconds, deltaSeconds, videoTracks?, audioTracks? (default: all tracks), undoLabel? }
      */
     async shift_items(params, ctx) {
@@ -354,18 +496,27 @@ module.exports = function (deps) {
         for (const idx of idxs) picks.push([kind, idx]);
       }
       const moves = [];
+      const blocking = [];
       for (const [kind, idx] of picks) {
         const track = await timeline.getTrack(sequence, kind, idx);
         const tl = timeline.trackLabel(kind, idx);
-        for (const it of await timeline.clipItems(track)) {
+        const mine = [];
+        const staying = [];
+        for (const it of await timeline.clipItems(track, tl)) {
           const d = timeline.requireSpan(await timeline.describeItem(it), tl);
-          if (d.start >= from - half) {
-            moves.push({ it, track: tl, name: d.name, from: d.start, to: d.start + delta });
-          } else if (delta < 0 && d.end > from + delta + half) {
-            throw new BridgeError("PRECONDITION_FAILED",
-              `${tl}: "${d.name}" (${d.start.toFixed(3)}–${d.end.toFixed(3)}s) is in the way of a ${delta}s shift from ${from}s.`);
-          }
+          (d.start >= from - half ? mine : staying).push({ it, d });
         }
+        if (!mine.length) continue;  // nothing moves here, so nothing here can be in the way
+        const lands = mine.reduce((m, x) => Math.min(m, x.d.start), Infinity) + delta;
+        for (const s of delta < 0 ? staying : []) {
+          if (s.d.end > lands + half) blocking.push({ track: tl, name: s.d.name, start: s.d.start, end: s.d.end, firstLandsAt: lands });
+        }
+        for (const m of mine) moves.push({ it: m.it, track: tl, name: m.d.name, from: m.d.start, to: m.d.start + delta });
+      }
+      if (blocking.length) {
+        throw new BridgeError("PRECONDITION_FAILED", `In the way of a ${delta}s shift from ${from}s: ` + blocking.map((b) =>
+          `${b.track} "${b.name}" (${b.start.toFixed(3)}–${b.end.toFixed(3)}s) ends after ${b.firstLandsAt.toFixed(3)}s, ` +
+          "where that track's first moving clip lands").join("; ") + ". Nothing was moved.", { data: { blocking } });
       }
       if (!moves.length) return { shifted: [], deltaSeconds: delta, undoLabel: null };
       moves.sort((a, b) => (delta < 0 ? a.from - b.from : b.from - a.from));

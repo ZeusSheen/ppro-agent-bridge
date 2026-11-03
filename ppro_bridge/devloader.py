@@ -17,6 +17,14 @@ What this does instead: it talks to UDT's service on its command-line endpoint (
 and starts UDT minimized when it is not running. The broker runs it with --load-panel. Loads are development loads,
 exactly like clicking Load in UDT.
 
+A load REPLACES a panel with the same plugin id that is already loaded: the old one disconnects ~30 ms before the
+load's reply and the new one registers ~0.35 s later, also when the old one came from another folder (the broker's
+audit logs, 22 Oct and 2 Nov 2026). So with the broker's `panel_state` (what its connected panel reports), watch()
+first waits up to LOAD_GRACE seconds for a panel and loads nothing over one that is busy, already runs this
+folder's code (codeHash) or is an installed package (ping build.packaged) - e.g. the panel whose Start bridge button
+just started this broker; a panel with other code is replaced as before. While such a panel is connected, UDT is
+not started either.
+
   python -m ppro_bridge.devloader              load once into the Premiere(s) connected to UDT
   python -m ppro_bridge.devloader --watch      keep loading whenever Premiere connects (Ctrl+C to stop)
 """
@@ -32,10 +40,16 @@ import sys
 import time
 from pathlib import Path
 
+from . import panelhash
+
 DEFAULT_PORT = 14001
 HOST = "127.0.0.1"
 REQUEST_TIMEOUT = 15.0
 RETRY_SECONDS = 5.0
+# Seconds to wait for a panel on the broker before loading: a disconnected panel retries every 3 s, and on Windows an
+# attempt that started while the broker was down can take ~1-2 s more to fail or succeed. (23:08, 2 Nov, a fresh
+# Premiere with no panel: UDT connected at 08:44.243, the load went out at 08:48.476 after the then 4 s grace.)
+LOAD_GRACE = 6.0
 PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugin"
 UDT_ENV = "PPRO_UDT_EXE"
 UDT_EXE = "Adobe UXP Developer Tools.exe"
@@ -101,13 +115,17 @@ def service_up(port=DEFAULT_PORT) -> bool:
 
 
 def start_udt(exe: Path) -> None:
-    """Start UXP Developer Tool minimized and without taking the focus."""
-    info = None
+    """Start UXP Developer Tool minimized and without taking the focus, detached from the caller's console: started
+    as a plain child of the broker it shared the broker window's console, so closing that window closed UDT too
+    (3 Nov 2026: UDT and its helpers were on the console's process list)."""
+    info, flags = None, 0
     if os.name == "nt":
         info = subprocess.STARTUPINFO()
         info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         info.wShowWindow = 7  # SW_SHOWMINNOACTIVE
-    subprocess.Popen([str(exe)], startupinfo=info, close_fds=True)
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+    subprocess.Popen([str(exe)], startupinfo=info, creationflags=flags, close_fds=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def plugin_id(plugin_dir) -> str | None:
@@ -189,6 +207,36 @@ class _Session:
                 self.complete.set()
 
 
+async def no_load_reason(panel_state, plugin_dir, grace=None) -> str | None:
+    """Why not to load the panel now, or None to load. `panel_state()` (the broker's) returns None without a connected
+    panel, else {"busy": bool, "codeHash": str | None, "packaged": bool}; a panel that is reconnecting is waited for
+    up to `grace` seconds (LOAD_GRACE)."""
+    grace = LOAD_GRACE if grace is None else grace
+    deadline = time.monotonic() + grace
+    want = panelhash.code_hash(plugin_dir)
+    while True:
+        try:
+            state = await asyncio.wait_for(panel_state(), max(grace, 1.0))
+        except asyncio.TimeoutError:
+            state = {"busy": True}  # it did not answer a ping in time: it is working on something
+        except Exception:  # noqa: BLE001  (the broker's view is advice: a failure must not stop loading)
+            state = None
+        if state:
+            if state.get("busy"):
+                return "the panel connected to the broker is busy with a request"
+            if state.get("packaged"):
+                return "an installed (packaged) Agent Bridge panel is connected to the broker"
+            if want and state.get("codeHash") == want:
+                return "the panel connected to the broker already runs this code"
+            if state.get("codeHash"):
+                return None  # other code: load it over that panel, as UDT's Load does
+            # no codeHash yet (a panel still hashing its files, or one older than 0.5): ask again until the grace ends,
+            # once a second (each ask is a ping through the panel's queue and log)
+        if time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(1.0 if state else 0.25)
+
+
 async def load_once(plugin_dir=PLUGIN_DIR, port=DEFAULT_PORT, wait=10.0, on_event=None) -> list[dict]:
     """Load the panel into every Premiere connected to UDT's service now; [] when none connects within `wait`."""
     import websockets
@@ -207,19 +255,28 @@ async def load_once(plugin_dir=PLUGIN_DIR, port=DEFAULT_PORT, wait=10.0, on_even
     return results
 
 
-async def watch(plugin_dir=PLUGIN_DIR, port=DEFAULT_PORT, start=True, on_event=None, stop: asyncio.Event = None):
+async def watch(plugin_dir=PLUGIN_DIR, port=DEFAULT_PORT, start=True, on_event=None, stop: asyncio.Event = None,
+                panel_state=None):
     """Keep a connection to UDT's service and load the panel into every Premiere that connects. Starts UDT
-    (minimized) when its service is down and `start`; retries every RETRY_SECONDS. Runs until `stop` is set."""
+    (minimized) when its service is down and `start`; retries every RETRY_SECONDS. Runs until `stop` is set.
+    panel_state: the broker's async view of its panel (see no_load_reason); without it every Premiere gets a load."""
     import websockets
     on_event = on_event or (lambda e: None)
     stop = stop or asyncio.Event()
     started_udt = False
+    said_not_needed = False
     while not stop.is_set():
         try:
             ws = await websockets.connect(f"ws://{HOST}:{port}/socket/cli", open_timeout=5)
         except ConnectionRefusedError:
             ws = None
-            if start and not started_udt:
+            reason = None
+            if start and not started_udt and panel_state is not None:
+                reason = await no_load_reason(panel_state, plugin_dir)
+                if reason and not said_not_needed:
+                    on_event({"event": "udt", "state": "not-needed", "reason": reason})
+                said_not_needed = bool(reason)
+            if start and not started_udt and not reason:
                 exe = find_udt()
                 if exe is not None:
                     on_event({"event": "udt", "state": "starting", "exe": str(exe)})
@@ -240,8 +297,16 @@ async def watch(plugin_dir=PLUGIN_DIR, port=DEFAULT_PORT, start=True, on_event=N
                 session = _Session(ws, plugin_dir, on_event)
                 loading = set()
 
+                async def load_unless_live(client_id, app):
+                    reason = await no_load_reason(panel_state, plugin_dir) if panel_state is not None else None
+                    if reason:
+                        on_event({"event": "load", "skipped": True, "reason": reason, "app": app.get("appId"),
+                                  "appVersion": app.get("appVersion")})
+                        return
+                    await session.load(client_id, app)
+
                 def on_app(client_id, app):
-                    task = asyncio.get_running_loop().create_task(session.load(client_id, app))
+                    task = asyncio.get_running_loop().create_task(load_unless_live(client_id, app))
                     loading.add(task)
                     task.add_done_callback(loading.discard)
 
@@ -267,6 +332,8 @@ async def _sleep_or_stop(stop: asyncio.Event, seconds: float):
 def describe(event: dict) -> str:
     kind, state = event.get("event"), event.get("state")
     if kind == "load":
+        if event.get("skipped"):
+            return f"Did not load the panel into {event.get('app')} {event.get('appVersion')}: {event.get('reason')}."
         if event.get("ok"):
             return f"Loaded the Agent Bridge panel into {event.get('app')} {event.get('appVersion')}."
         return f"Could not load the panel into {event.get('app')} {event.get('appVersion')}: {event.get('error')}"
@@ -277,6 +344,7 @@ def describe(event: dict) -> str:
                 "connected": "Connected to UXP Developer Tool's service; waiting for Premiere.",
                 "disconnected": "UXP Developer Tool's service went away; retrying.",
                 "missing": f"Cannot load the panel: {event.get('error')}.",
+                "not-needed": f"Not starting UXP Developer Tool: {event.get('reason')}.",
                 "unreachable": f"UXP Developer Tool's service is not answering ({event.get('error')}); retrying."}.get(state, "")
     return ""
 

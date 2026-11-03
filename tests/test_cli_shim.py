@@ -145,7 +145,7 @@ class ParserTest(unittest.TestCase):
     def test_subcommands_are_the_spec_commands(self):
         sub = next(a for a in cli.build_parser()._actions if a.dest == "action")
         self.assertEqual(sorted(sub.choices), sorted(spec.command_names()))
-        self.assertEqual(len(sub.choices), 34)
+        self.assertEqual(len(sub.choices), 54)
 
     def test_dest_names_are_ops_keywords(self):
         import inspect
@@ -157,9 +157,12 @@ class ParserTest(unittest.TestCase):
             params = list(sig.parameters.values())
             self.assertEqual(params[0].name, "rpc", name)
             self.assertIs(params[0].default, inspect.Parameter.empty, f"{name}: rpc must not have a default")
-            dests = {a.dest for a in parser._actions if a.dest != "help"}
+            # --expect-fingerprint is the CLI's own guard around rpc (cli.run), not an ops keyword
+            dests = {a.dest for a in parser._actions if a.dest not in ("help", "expect_fingerprint")}
             kwonly = {p.name for p in params[1:] if p.kind is inspect.Parameter.KEYWORD_ONLY}
             self.assertLessEqual(dests, kwonly, name)
+            write = (spec.command(name) or {}).get("kind") == "write"
+            self.assertEqual("expect_fingerprint" in {a.dest for a in parser._actions}, write, name)
             self.assertTrue(all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in params[1:]), name)
 
     def test_no_default_transport_in_the_library(self):

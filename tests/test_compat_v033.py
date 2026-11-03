@@ -66,6 +66,19 @@ class ShimRedirectTest(unittest.TestCase):
         self.assertEqual(got["items"], ["g.mov"])
         self.assertEqual((import_timeout, default, queue, en, has_apply), (120, 30, 120, "en-us", True))
 
+    def test_export_one_frame_refuses_a_time_past_the_end(self):
+        """QA F-EF1 through the 0.3.3 shim: past the sequence end Premiere hands back the 0 s frame."""
+        out = py_in_cli("import json, ppro\n"
+                        "calls = []\n"
+                        "def stub(action, params=None):\n"
+                        "    calls.append(action)\n"
+                        "    return {'name': 'Seq', 'durationSeconds': 10.0}\n"
+                        "ppro.rpc = stub\n"
+                        "r = ppro.export_one_frame('.', 10.0, 'f.png')\n"
+                        "print(json.dumps([r['ok'], r['code'], calls]))\n")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(json.loads(out.stdout), [False, "BAD_PARAMS", ["get_sequence"]])
+
 
 class LegacyTranscriptTest(unittest.TestCase):
     def test_zh_cn_is_upgraded_on_import(self):

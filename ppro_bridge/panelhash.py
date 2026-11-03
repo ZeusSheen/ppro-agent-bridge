@@ -27,11 +27,20 @@ def code_hash(plugin_dir) -> str | None:
     lib = root / "lib"
     if lib.is_dir():
         rel += [f"lib/{p.name}" for p in lib.iterdir() if p.is_file() and p.suffix == ".js"]
+    try:
+        return hash_files({name: (root / name).read_bytes() for name in rel})
+    except OSError:
+        return None
+
+
+def hash_files(files: dict) -> str | None:
+    """The same hash over in-memory files {relative POSIX path: bytes}, e.g. a .ccx package before it is written.
+    Only the files the panel hashes count; None when one of the fixed files is missing."""
+    if not all(f in files for f in FIXED_FILES):
+        return None
+    hashed = [n for n in files if n in FIXED_FILES or (n.startswith("lib/") and n.count("/") == 1
+                                                         and n.endswith(".js"))]
     h = FNV_OFFSET
-    for name in sorted(rel):
-        try:
-            content = (root / name).read_bytes()
-        except OSError:
-            return None
-        h = _fnv1a(h, name.encode("utf-8") + b"\0" + content + b"\0")
+    for name in sorted(hashed):
+        h = _fnv1a(h, name.encode("utf-8") + b"\0" + files[name] + b"\0")
     return f"{h:08x}"

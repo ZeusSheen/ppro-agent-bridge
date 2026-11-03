@@ -9,21 +9,26 @@ nothing has a default transport: a forgotten injection fails instead of reaching
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
 import time
 from pathlib import Path
 
-from . import apiprobe, framegrid, frames, items, media, panelhash, spec, transcript
+from . import apiprobe, ccx, framegrid, frames, items, media, panelhash, paths, spec, transcript
 from . import editing as _editing
+from . import rendercheck as _rendercheck
 from . import review as _review
 from . import plan as _plan
 from . import replace as _replace
+from . import presets as _presets
+from . import prfpset as _prfpset
 from ._version import VERSION
 from .errors import BridgeError
 
 MARKER_COLORS = {"green": 0, "red": 1, "purple": 2, "magenta": 2, "orange": 3,
                  "yellow": 4, "white": 5, "blue": 6, "cyan": 7}
+MARKER_COLOR_NAMES = {i: n for n, i in reversed(list(MARKER_COLORS.items()))}  # index -> first name (2: purple)
 
 PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugin"  # this checkout's panel, for the stale check
 
@@ -100,7 +105,13 @@ def ping(rpc, *, probe=False) -> dict:
         # A bundled panel (scripts/build_panel.py) has no lib/ folder, so its hash covers other files.
         if data.get("codeHash") and data.get("modules") != "bundle":
             data["stale"] = data["codeHash"] != local
-            if data["stale"]:
+            # A panel installed from a .ccx carries a rewritten manifest and build.js (ppro_bridge/ccx.py).
+            if data["stale"] and data["codeHash"] in ccx.packaged_code_hashes(PLUGIN_DIR):
+                data["stale"] = False
+            elif data["stale"] and isinstance(data.get("build"), dict) and data["build"].get("packaged") is True:
+                warnings.append("The panel is a .ccx install whose code differs from this checkout's plugin folder: "
+                                "build it again (python scripts/build_ccx.py) and reinstall it with Premiere closed.")
+            elif data["stale"]:
                 warnings.append("The panel is stale — its code differs from this checkout's plugin folder: "
                                 "Reload it in UXP Developer Tool.")
     data["compatible"] = (data.get("version") == VERSION and broker == VERSION
@@ -115,7 +126,59 @@ def get_project(rpc) -> dict:
 
 
 def get_sequence(rpc) -> dict:
-    return rpc("get_sequence")
+    """The active sequence, plus `fingerprint`: pass it back as --expect-fingerprint on a write to refuse the write
+    if the timeline has changed in between (items.fingerprint)."""
+    seq = rpc("get_sequence")
+    seq["fingerprint"] = items.fingerprint(rpc("list_items", {"kinds": ["video", "audio"]}), seq)
+    return seq
+
+
+def set_active_sequence(rpc, *, name=None, guid=None) -> dict:
+    """Open another sequence of the active project in the Timeline (by exact name or guid), so later commands work on
+    it; the panel reads the switch back. Nothing in the project changes."""
+    if not name and not guid:
+        raise _bad("name or guid is required")
+    return rpc("set_active_sequence", {"guid": guid} if guid else {"name": name})
+
+
+def select_items(rpc, *, track=None, at=None, from_s=None, to_s=None, mode="inside", clear=False, dry_run=False,
+                 expect_seq=None) -> dict:
+    """Select clips in the Timeline, replacing the selection: on the `track`s ("V1", "A1", …), the clip under `at`, or
+    the clips in `from_s`–`to_s` (`mode` inside: entirely inside; overlap: touching it); `clear` empties it. Only those
+    clips: Premiere's linked partners (an A1 clip's video) are not added, so name both tracks for both. For what only
+    Premiere's own panels do (Properties > Enhance Audio applies to every selected clip). Nothing in the project
+    changes and it is not an undo step; the panel reads the selection back (`verified`)."""
+    tracks = _as_list(track) or []
+    if clear:
+        if tracks or at is not None or from_s is not None or to_s is not None:
+            raise _bad("--clear empties the selection: give it no --track, --at or --from/--to")
+    else:
+        if not tracks:
+            raise _bad("Give at least one --track (or --clear)")
+        if at is not None and (from_s is not None or to_s is not None):
+            raise _bad("Give --at or --from/--to, not both")
+        if at is None and (from_s is None or to_s is None):
+            raise _bad("Give --at, or --from with --to")
+        if at is None and to_s < from_s:
+            raise _bad(f"--to {to_s} is before --from {from_s}")
+    if mode not in RANGE_MODES:
+        raise _bad(f'mode must be inside or overlap, not "{mode}"')
+    vts, ats = [], []
+    for value in tracks:
+        kind, idx = _track(value)
+        (vts if kind == "video" else ats).append(idx)
+    items.require_command(rpc, "select_items")
+    items.check_expect_seq(rpc, expect_seq)
+    params = {"dryRun": bool(dry_run)}
+    if clear:
+        params["clear"] = True
+    else:
+        params.update(videoTracks=vts, audioTracks=ats)
+        if at is not None:
+            params["atSeconds"] = at
+        else:
+            params.update(fromSeconds=from_s, toSeconds=to_s, mode=mode)
+    return rpc("select_items", params)
 
 
 def list_items(rpc, *, kind="all", track=None) -> dict:
@@ -158,7 +221,12 @@ def list_project_items(rpc) -> dict:
 
 
 def export_frame(rpc, *, dir, name=None, at=None, width=None, height=None) -> dict:
+    paths.check(dir, what="--dir")  # as typed: a mapped drive resolves to its UNC form and is fine
     out_dir = Path(dir).expanduser().resolve()
+    if name is not None:
+        paths.check_name(name, what="--name", ext=".png")  # before any panel call (export_one_frame checks it again)
+    if at is not None:
+        frames.check_times_inside(rpc, [at])
     out_dir.mkdir(parents=True, exist_ok=True)
     return frames.export_one_frame(rpc, out_dir, at, name, width, height)
 
@@ -174,7 +242,9 @@ def export_frames(rpc, *, dir, at, width=None, height=None, sheet=None, cols=4, 
         raise _bad(f"--at must be comma-separated seconds ({e})") from e
     if not times:
         raise _bad("--at needs at least one time")
+    paths.check(dir, what="--dir")
     out_dir = Path(dir).expanduser().resolve()
+    frames.check_times_inside(rpc, times)
     out_dir.mkdir(parents=True, exist_ok=True)
     shots, results, codes = [], [], []
     for t in times:
@@ -203,6 +273,7 @@ def export_frames(rpc, *, dir, at, width=None, height=None, sheet=None, cols=4, 
 
 
 def export_otio(rpc, *, output) -> dict:
+    paths.check(output, what="--output", ext=".otio")
     return rpc("export_otio", {"outputPath": str(_out_path(output))})
 
 
@@ -352,15 +423,35 @@ def _await_transcription(rpc, start, picked, wait, output, poll, sleep) -> dict:
 
 # ---------------------------------------------------------------- writes
 
-def import_media(rpc, *, path, bin=None) -> dict:
-    paths = [Path(p).expanduser().resolve() for p in _as_list(path) or []]
-    if not paths:
+def import_media(rpc, *, path, bin=None, force=False, probe_media=None) -> dict:
+    """Import files into the root or a top-level bin. Files in a codec Premiere refuses (VP9, AV1, Opus …) are
+    refused first, with an ffmpeg command for each, because that import hangs the panel; `force` sends them anyway.
+    UNC paths and data streams are refused as typed (paths.check)."""
+    given = _as_list(path) or []
+    for p in given:
+        paths.check(p, what="--path")
+    files = [Path(p).expanduser().resolve() for p in given]
+    if not files:
         raise _bad("Give at least one --path")
-    missing = [str(p) for p in paths if not p.is_file()]
+    missing = [str(p) for p in files if not p.is_file()]
     if missing:
         raise BridgeError("File(s) not found", code="FILE_NOT_FOUND", outcome="not_committed",
                           data={"missing": missing})
-    params = {"paths": [str(p) for p in paths]}
+    if not force:
+        probe = probe_media or media.probe_media
+        refused = []
+        for p in files:
+            info = probe(str(p)) or {}
+            codecs = media.unimportable(info)
+            if codecs:
+                refused.append({"path": str(p), "codecs": codecs, "transcode": media.transcode_command(p, info)})
+        if refused:
+            raise BridgeError(f"Premiere does not import {', '.join(sorted({c for r in refused for c in r['codecs']}))}"
+                              " (the import would hang the panel). Nothing was imported.", code="UNSUPPORTED",
+                              outcome="not_committed", data={"files": refused},
+                              hint="Transcode with the ffmpeg command listed for each file and import the result "
+                                   "(or pass --force to send the files anyway).")
+    params = {"paths": [str(p) for p in files]}
     if bin:
         params["bin"] = bin
     return rpc("import_media", params)
@@ -407,39 +498,87 @@ def replace_clip(rpc, *, track, at, with_item, in_s=None, out_s=None, atrack=Non
                                  drop_outside_keyframes=drop_outside_keyframes, skip_effects=skip_effects)
 
 
-def set_scale(rpc, *, track, at=None, from_s=None, to_s=None, value=None, fit=False, fill=False, dry_run=False,
-              label=None, expect_seq=None, probe_media=None) -> dict:
+RANGE_MODES = ("inside", "overlap")
+
+
+def _half_frame(seq: dict) -> float:
+    fps = framegrid.fps_from_timebase(seq.get("timebase"), seq.get("fps") or 30.0)
+    return 0.5 / fps
+
+
+def _split_inside(clips: list, frm: float, to: float, tol: float) -> tuple[list, list]:
+    """(clips entirely inside [frm, to], with half a frame of slack; the neighbours that only overlap it)."""
+    def within(c):
+        s, e = c.get("start"), c.get("end")
+        return isinstance(s, (int, float)) and isinstance(e, (int, float)) and s >= frm - tol and e <= to + tol
+    inside = [c for c in clips if within(c)]
+    return inside, [{"name": c.get("name"), "start": c.get("start"), "end": c.get("end")}
+                    for c in clips if not within(c)]
+
+
+def _none_inside(where: str, frm: float, to: float, skipped: list) -> BridgeError:
+    names = ", ".join(f"{s['name']} ({s['start']}–{s['end']}s)" for s in skipped)
+    return BridgeError(f"No clip on {where} lies entirely inside {frm}–{to}s" + (f"; only overlapping: {names}" if
+                       names else "") + ".", code="NOT_FOUND", outcome="not_committed", data={"skipped": skipped},
+                       hint="Widen the range, aim at one clip with --at, or pass --mode overlap to include clips "
+                            "that only overlap it." if skipped else None)
+
+
+def set_scale(rpc, *, track, at=None, from_s=None, to_s=None, value=None, fit=False, fill=False, mode="inside",
+              dry_run=False, label=None, expect_seq=None, probe_media=None) -> dict:
+    """Motion > Scale on the clip under `at`, or on the clips in [from, to]: by default only those entirely inside
+    it (half a frame of slack), so the neighbours either side are left alone; mode="overlap" takes every clip that
+    touches the range."""
     _, idx = _track(track, "video", "set_scale works on video tracks (V1, V2, …)")
     if sum([value is not None, bool(fit), bool(fill)]) != 1:
         raise _bad("Give exactly one of --value, --fit, --fill")
     if at is None and from_s is None:
         raise _bad("Give --at <sec> or --from <sec> [--to <sec>]")
+    if mode not in RANGE_MODES:
+        raise _bad(f'mode must be inside or overlap, not "{mode}"')
     probe = probe_media or media.probe_media
     frm = at if at is not None else from_s
     to = at if at is not None else (to_s if to_s is not None else from_s)
     base = {"videoTrack": idx, "fromSeconds": frm, "toSeconds": to}
-    items.check_expect_seq(rpc, expect_seq)
+    seq = items.check_expect_seq(rpc, expect_seq)
+    skipped = []
+    if at is None and to > frm and mode == "inside":
+        tol = _half_frame(seq or rpc("get_sequence"))
+        track_doc = next((t for t in rpc("list_items", {"kinds": ["video"]}).get("video", []) if t["index"] == idx),
+                         None)
+        clips = [it for it in (track_doc or {}).get("items", [])
+                 if it.get("start") is not None and it.get("end") is not None
+                 and it["start"] < to + tol and it["end"] > frm + tol]
+        inside, skipped = _split_inside(clips, frm, to, tol)
+        if not inside:
+            raise _none_inside(f"V{idx + 1}", frm, to, skipped)
+        # The panel takes every clip touching its range: narrow the range so that is exactly these clips (the
+        # neighbours end at the first start or start at the last end), in the same single undo step.
+        base.update(fromSeconds=min(c["start"] for c in inside),
+                    toSeconds=max(c["end"] - min(tol, (c["end"] - c["start"]) / 2) for c in inside))
+    ranged = {"rangeMode": mode, "skipped": skipped} if at is None and to > frm else {}
 
     if value is not None:
         params = dict(base, value=value, dryRun=bool(dry_run))
         if label:
             params["undoLabel"] = label
-        return rpc("set_scale", params)
+        return dict(rpc("set_scale", params), **ranged)
 
-    mode = "fit" if fit else "fill"
+    how = "fit" if fit else "fill"
     seq = rpc("get_sequence")
     preview = rpc("set_scale", dict(base, dryRun=True))
-    out = {"mode": mode, "dryRun": bool(dry_run), "sequence": [seq.get("width"), seq.get("height")], "clips": []}
+    out = dict({"mode": how, "dryRun": bool(dry_run), "sequence": [seq.get("width"), seq.get("height")],
+                "clips": []}, **ranged)
     for clip in preview["clips"]:
         info = probe(clip.get("mediaPath"))
-        scale = media.fit_scale(mode, info, seq)
+        scale = media.fit_scale(how, info, seq)
         row = {"name": clip["name"], "start": clip["start"], "media": [info.get("width"), info.get("height")],
                "scaleBefore": clip.get("scaleBefore"), "value": scale}
         if scale is None:
             row["error"] = "Could not read media size (is ffprobe on PATH?)"
         elif not dry_run:
             mid = (clip["start"] + clip["end"]) / 2
-            undo = label or f"Agent: {mode} {clip['name']} ({scale}%)"
+            undo = label or f"Agent: {how} {clip['name']} ({scale}%)"
             rpc("set_scale", {"videoTrack": idx, "fromSeconds": mid, "toSeconds": mid, "value": scale,
                               "undoLabel": undo})
             row["applied"] = True
@@ -460,11 +599,11 @@ def set_fps(rpc, *, item, fps, dry_run=False, label=None) -> dict:
     project_items = rpc("list_project_items").get("items", [])
     picked = [items.resolve_item(ref, project_items, unique=True) for ref in refs]
     if dry_run:
-        paths = {os.path.normcase(i.get("mediaPath") or "") for i in picked}
+        media_paths = {os.path.normcase(i.get("mediaPath") or "") for i in picked}
         timeline = rpc("list_items", {"kinds": ["video", "audio"]})
         uses = [{"track": t["label"], "name": it["name"], "start": it["start"], "end": it["end"]}
                 for kind in ("video", "audio") for t in timeline.get(kind, []) for it in t["items"]
-                if os.path.normcase(it.get("mediaPath") or "") in paths]
+                if os.path.normcase(it.get("mediaPath") or "") in media_paths]
         return {"dryRun": True, "fps": fps, "items": [items.item_ref(i) for i in picked],
                 "usesInActiveSequence": uses,
                 "warning": "Interpretation changes these items in every sequence that uses them; "
@@ -473,6 +612,200 @@ def set_fps(rpc, *, item, fps, dry_run=False, label=None) -> dict:
     if label:
         params["undoLabel"] = label
     return rpc("set_fps", params)
+
+
+def subclip(rpc, *, item, in_s, out_s, name, bin=None, video_only=False, audio_only=False, allow_duplicate_name=False,
+            dry_run=False, label=None, probe_media=None) -> dict:
+    """A subclip of a project item (`item`: a name or "<bin path>/<name>") from `in_s` to `out_s` source seconds,
+    named `name`, with hard boundaries, in `bin` (a bin path; default: the item's own bin, "" = root; a missing
+    top-level bin is created). Both points are snapped to the item's frames first (sourceSnap): its interpreted rate
+    as the panel reads it, else replace_clip's rule (ffprobe and the sequence rate). The panel refuses a name already
+    in that bin (PRECONDITION_FAILED) unless allow_duplicate_name, before anything changes. One undo step, two when
+    Premiere puts the subclip elsewhere and it is moved (undoSteps). Read back: the new item, its bin and its own
+    in/out point; VERIFY_FAILED (committed) when one of them is not what was asked."""
+    if video_only and audio_only:
+        raise _bad("--video-only and --audio-only exclude each other")
+    if not str(name or "").strip():
+        raise _bad("--name must not be empty")
+    try:
+        in_s, out_s = float(in_s), float(out_s)
+    except (TypeError, ValueError):
+        raise _bad(f"--in and --out must be seconds, not {in_s!r} / {out_s!r}") from None
+    if not (math.isfinite(in_s) and math.isfinite(out_s)) or in_s < 0 or out_s <= in_s:
+        raise _bad(f"--out ({out_s}) must come after --in ({in_s}), both >= 0 source seconds")
+    items.require_command(rpc, "subclip")
+    src = items.resolve_item(item, rpc=rpc)
+    params = {"itemName": src["name"], "binPath": src.get("bin") or "", "name": name, "inSeconds": in_s,
+              "outSeconds": out_s, "takeVideo": not audio_only, "takeAudio": not video_only}
+    if bin is not None:
+        params["bin"] = str(bin).strip("/")
+    if allow_duplicate_name:
+        params["allowDuplicateName"] = True
+    if label:
+        params["undoLabel"] = label
+    plan = rpc("subclip", dict(params, dryRun=True))  # the panel's refusals first, and the item's frame rate
+
+    info = (probe_media or media.probe_media)(src.get("mediaPath")) or {}
+    notes = []
+    rate, grid = plan.get("frameRate"), "item"
+    if not isinstance(rate, (int, float)) or isinstance(rate, bool) or rate <= 0:
+        seq_fps = None
+        try:
+            seq = rpc("get_sequence")
+            seq_fps = framegrid.fps_from_timebase(seq.get("timebase"), seq.get("fps"))
+        except BridgeError as e:
+            if e.code != "NO_SEQUENCE":
+                raise
+        if seq_fps:
+            rate, grid = framegrid.source_rate(info, seq_fps)
+        else:
+            rate, grid = info.get("fps"), "media"
+    snap = {}
+    if rate:
+        snap = {"grid": grid, "fps": round(rate, 4)}
+        in_s, out_s = _replace._snap_source(in_s, rate, snap, "in"), _replace._snap_source(out_s, rate, snap, "out")
+        if out_s < in_s + 1 / rate - 1e-9:
+            raise _bad(f"--out must be at least one frame after --in on the item's frames ({snap['fps']} fps)")
+    else:
+        notes.append("the item's frame rate is unknown (the panel could not read it, ffprobe could not tell and "
+                     "there is no active sequence): --in/--out were sent as given")
+    tol = (0.5 / rate if rate else 1e-3) + 1e-6
+    length = info.get("duration") or plan.get("mediaSeconds")
+    if isinstance(length, (int, float)) and out_s > length + tol:
+        raise _bad(f"--out ({out_s:.4f}s) is past the end of {items.item_ref(src)} ({length:.3f}s). Nothing was changed.")
+    if audio_only and info.get("hasAudio") is False:
+        raise _bad(f"{items.item_ref(src)} has no audio stream (ffprobe): --audio-only would make an empty subclip")
+    if video_only and info and not info.get("width"):
+        raise _bad(f"{items.item_ref(src)} has no video stream (ffprobe): --video-only would make an empty subclip")
+    params.update(inSeconds=in_s, outSeconds=out_s)
+    if plan.get("sameNameElsewhere"):
+        notes.append(f'other items are named "{name}" too ({", ".join(plan["sameNameElsewhere"])}): address the '
+                     'subclip as "<bin path>/<name>"')
+    extra = {k: v for k, v in (("sourceSnap", snap if snap.get("in") or snap.get("out") else None),
+                               ("notes", notes or None)) if v}
+    if dry_run:
+        return dict(plan, inSeconds=in_s, outSeconds=out_s, **extra)
+
+    result = dict(rpc("subclip", dict(params, dryRun=False)), **extra)
+    want_bin = plan.get("binPath")
+    back = result.get("readBack")
+    problems = []
+    if not result.get("created"):
+        problems.append(f'no new item named "{name}" after the subclip step (new items: {result.get("newItems") or []})')
+    else:
+        if (result.get("binPath") or "") != (want_bin or ""):
+            problems.append(f'it is in bin "{result.get("binPath")}", not "{want_bin}"')
+        # Premiere 27.1 answers a subclip's getInPoint / getOutPoint with -400000 s, its "no in/out set" value (live,
+        # 2 Nov 2026): the range cannot be read over UXP, so only the new item and its bin are checked then.
+        unreadable = back is not None and min(back["inSeconds"], back["outSeconds"]) <= -399999
+        if back is None or unreadable:
+            result.setdefault("notes", []).append(
+                "Premiere does not report a subclip's in/out over UXP (it answers -400000 s, 'not set'): the subclip "
+                "exists in its bin, its range is not verified - place it and check its length")
+            result["rangeVerified"] = False
+        elif abs(back["inSeconds"] - in_s) > tol or abs(back["outSeconds"] - out_s) > tol:
+            problems.append(f"its in/out reads {back['inSeconds']:.4f}–{back['outSeconds']:.4f}s, not "
+                            f"{in_s:.4f}–{out_s:.4f}s")
+    result["verified"] = not problems
+    if problems:
+        raise BridgeError(f"The subclip step ran ({', '.join(result.get('undoSteps') or [])}), but " + "; ".join(problems)
+                          + ". Check the project panel.", code="VERIFY_FAILED", outcome="committed", data=result)
+    return result
+
+
+def _media_facts(info: dict) -> dict:
+    """What relink compares, from probe_media (None = unknown)."""
+    return {"duration": info.get("duration"), "fps": info.get("fps"),
+            "hasVideo": bool(info.get("width")) if info else None, "hasAudio": info.get("hasAudio")}
+
+
+def compare_media(old: dict, new: dict, fps_tolerance: float = 0.01) -> tuple[list[str], list[str]]:
+    """(differences, facts compared) between two _media_facts dicts: the duration within one frame (of the old
+    media's rate, else the new one's, else 1/24 s), the frame rate within `fps_tolerance`, video and audio presence.
+    A fact either side does not know is not compared."""
+    diffs, checked = [], []
+    fps = old.get("fps") or new.get("fps") or 24.0
+    if old.get("duration") and new.get("duration"):
+        checked.append("duration")
+        if abs(old["duration"] - new["duration"]) > 1 / fps + 1e-6:
+            diffs.append(f"duration {old['duration']:.3f}s -> {new['duration']:.3f}s (more than a frame)")
+    if old.get("fps") and new.get("fps"):
+        checked.append("fps")
+        if abs(old["fps"] - new["fps"]) > fps_tolerance:
+            diffs.append(f"frame rate {old['fps']:.3f} -> {new['fps']:.3f} fps")
+    for key, what in (("hasVideo", "video"), ("hasAudio", "audio")):
+        if old.get(key) is not None and new.get(key) is not None:
+            checked.append(key)
+            if old[key] != new[key]:
+                diffs.append(f"{'has' if old[key] else 'no'} {what} -> {'has' if new[key] else 'no'} {what}")
+    return diffs, checked
+
+
+def relink(rpc, *, item, to, force=False, dry_run=False, probe_media=None) -> dict:
+    """Point a project item (`item`: a name or "<bin path>/<name>"; it must name exactly one item) at the media file
+    `to`. Before anything changes: `to` passes paths.check as typed and exists, is in a codec Premiere imports, and
+    ffprobe finds it matches the item's media (compare_media against the old file, or against what Premiere reports
+    when the old file cannot be read, e.g. offline) — a difference, or nothing to compare, is refused
+    (PRECONDITION_FAILED, data.comparison) unless `force`. Read back: VERIFY_FAILED (committed) when the item's media
+    path did not change. Every sequence using the item follows: `uses` counts its clips in all sequences. Not an undo
+    step the bridge can label: relink back to previousPath to revert."""
+    paths.check(to, what="--to")  # as typed: a mapped drive resolves to its UNC form and is fine
+    new = Path(to).expanduser().resolve()
+    if not new.is_file():
+        raise BridgeError(f"File not found: {new}", code="FILE_NOT_FOUND", outcome="not_committed")
+    items.require_command(rpc, "relink")
+    picked = items.resolve_item(item, rpc("list_project_items").get("items", []), unique=True)
+    base = {"itemName": picked["name"], "binPath": picked.get("bin") or "", "newPath": str(new)}
+    plan = rpc("relink", dict(base, dryRun=True))
+    old_path = plan.get("previousPath") or picked.get("mediaPath")
+    norm = lambda p: os.path.normcase(os.path.normpath(str(p).removeprefix("\\\\?\\"))) if p else ""  # noqa: E731
+    if norm(old_path) == norm(new):
+        return dict(plan, dryRun=bool(dry_run), alreadyLinked=True, verified=True,
+                    note=f"{items.item_ref(picked)} already uses {new}; nothing was changed.")
+
+    probe = probe_media or media.probe_media
+    if probe_media is None and not shutil.which("ffprobe") and not force:
+        raise BridgeError("ffprobe is needed to compare the new file with the old media (install ffmpeg), or pass "
+                          "--force to relink without the check. Nothing was changed.", code="MISSING_DEPENDENCY",
+                          outcome="not_committed")
+    new_info = probe(str(new)) or {}
+    codecs = media.unimportable(new_info)
+    if codecs and not force:
+        raise BridgeError(f"Premiere does not read {', '.join(codecs)} (it would hang the panel). Nothing was changed.",
+                          code="UNSUPPORTED", outcome="not_committed",
+                          data={"path": str(new), "codecs": codecs, "transcode": media.transcode_command(new, new_info)})
+    old_info = probe(old_path) if old_path and os.path.isfile(str(old_path).removeprefix("\\\\?\\")) else {}
+    current = plan.get("current") or {}
+    old_facts = _media_facts(old_info) if old_info else {
+        "duration": current.get("mediaSeconds"), "fps": current.get("frameRate"), "hasVideo": None, "hasAudio": None}
+    new_facts = _media_facts(new_info)
+    diffs, checked = compare_media(old_facts, new_facts)
+    comparison = {"old": old_facts, "new": new_facts, "oldFrom": "file" if old_info else "premiere",
+                  "checked": checked, "differences": diffs, "forced": bool(force and (diffs or not checked))}
+    if not force and (diffs or not checked):
+        why = ("; ".join(diffs) if diffs else
+               "nothing could be compared (ffprobe could not read the new file, or neither the old file nor "
+               "Premiere gave the old media's facts)")
+        raise BridgeError(f"{new.name} does not match the media of {items.item_ref(picked)}: {why}. Nothing was "
+                          "changed; pass --force to relink anyway.", code="PRECONDITION_FAILED",
+                          outcome="not_committed", data={"comparison": comparison, "previousPath": old_path})
+    uses = plan.get("uses") or {}
+    note = (f"Every use of {items.item_ref(picked)} now shows the new file: {uses.get('clips', 0)} clip(s) in "
+            f"{len(uses.get('sequences') or [])} sequence(s)"
+            + ("" if uses.get("complete", True) else " (the count is incomplete: a sequence could not be read)")
+            + f". Relinking is not a labelled undo step: relink to {old_path} to revert.")
+    if dry_run:
+        return dict(plan, comparison=comparison, note=note)
+
+    result = rpc("relink", dict(base, dryRun=False))
+    result.update(comparison=comparison, note=note)
+    if not result.get("relinked") or norm(result.get("mediaPath")) != norm(new):
+        raise BridgeError(f"relink ran, but {items.item_ref(picked)} reads {result.get('mediaPath')!r}, not {str(new)!r}"
+                          + (" (Premiere returned false)" if result.get("returned") is False else "")
+                          + ". Check the item in the project panel.", code="VERIFY_FAILED", outcome="committed",
+                          data=result)
+    result["verified"] = True
+    return result
 
 
 def add_marker(rpc, *, at, name, comment="", duration=0.0, type="Comment", color=None, label=None) -> dict:
@@ -486,6 +819,111 @@ def add_marker(rpc, *, at, name, comment="", duration=0.0, type="Comment", color
     if label:
         params["undoLabel"] = label
     return rpc("add_marker", params)
+
+
+def _name_colours(markers) -> None:
+    for m in markers or []:
+        m["color"] = MARKER_COLOR_NAMES.get(m.get("colorIndex"))
+
+
+def list_markers(rpc) -> dict:
+    """The active sequence's markers in start order (guid, name, comments, start / duration / end in sequence seconds,
+    type, colorIndex), each with `color`: the name add_marker --color takes for that index."""
+    items.require_command(rpc, "list_markers")
+    data = rpc("list_markers")
+    _name_colours(data.get("markers"))
+    return data
+
+
+def remove_marker(rpc, *, guid=None, name=None, at=None, dry_run=False, label=None, expect_seq=None) -> dict:
+    """Remove ONE sequence marker: by `guid` (list_markers), or by exact `name`, with `at` (its start, sequence
+    seconds, half a frame of tolerance) when several share the name. The panel refuses before changing anything when
+    none (NOT_FOUND, data.markers) or several (AMBIGUOUS, data.matches) match; one undo step, read back."""
+    if not guid and not name:
+        raise _bad("Give --guid, or --name (with --at when several markers share it); list_markers shows both")
+    items.require_command(rpc, "remove_marker")
+    items.check_expect_seq(rpc, expect_seq)
+    params = {"dryRun": bool(dry_run)}
+    if guid:
+        params["guid"] = guid
+    if name:
+        params["name"] = name
+    if at is not None:
+        params["atSeconds"] = at
+    if label:
+        params["undoLabel"] = label
+    result = rpc("remove_marker", params)
+    _name_colours(result.get("removed"))
+    return result
+
+
+def list_sequences(rpc) -> dict:
+    """Every sequence of the project: name, guid, active, and restorePoint (clone_sequence's record: sourceGuid,
+    sourceName, created, renamed; null for every other sequence)."""
+    items.require_command(rpc, "list_sequences")
+    return rpc("list_sequences")
+
+
+def clone_sequence(rpc, *, name=None, guid=None, keep=5, dry_run=False, label=None) -> dict:
+    """A restore point before a risky edit: the panel clones the active sequence (or `name` / `guid`), renames the
+    clone "<name> [restore YYYY-MM-DD HH:MM]", tags it, and deletes the oldest restore points of that same sequence
+    beyond `keep` (the new one counts; never an untagged, renamed or active sequence). The clone is not made active:
+    set_active_sequence --guid <clone.guid> opens it. A dry run gives the name and what pruning would delete."""
+    if keep is None or keep < 1:
+        raise _bad("--keep must be at least 1: the new restore point always stays")
+    items.require_command(rpc, "clone_sequence")
+    params = {"keep": int(keep), "dryRun": bool(dry_run)}
+    if guid:
+        params["guid"] = guid
+    elif name:
+        params["name"] = name
+    if label:
+        params["undoLabel"] = label
+    return rpc("clone_sequence", params)
+
+
+def _file_time(path) -> int | None:
+    """A file's modification time in ns; None when it is missing or not readable from here."""
+    try:
+        return os.stat(path).st_mtime_ns
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _local_time(ns: int | None) -> str | None:
+    if ns is None:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(ns // 10 ** 9)) + f".{(ns // 10 ** 6) % 1000:03d}"
+
+
+def save_project(rpc, *, wait=3.0, sleep=time.sleep) -> dict:
+    """Save the active project (Project#save; not an undo step) and check the file: its modification time must change
+    (polled for up to `wait` seconds), else VERIFY_FAILED (committed). A path this machine cannot read (a project never
+    saved, another drive mapping) is reported in `note` and not checked."""
+    items.require_command(rpc, "save_project")
+    path = rpc("get_project").get("path") or None
+    before = _file_time(path) if path else None
+    try:
+        result = rpc("save_project")
+    except BridgeError as e:
+        if before is not None and e.outcome == "unknown" and _file_time(path) == before:
+            e.outcome = "not_committed"  # the file is untouched: nothing was written
+        raise
+    after, waited = (_file_time(path) if path else None), 0.0
+    while before is not None and after in (None, before) and waited < wait:
+        sleep(0.25)
+        waited += 0.25
+        after = _file_time(path)
+    changed = None if before is None or after is None else after != before
+    result.update(fileTimeBefore=_local_time(before), fileTimeAfter=_local_time(after), fileTimeChanged=changed)
+    if before is None:
+        result["note"] = f"The project file ({path}) is not readable from here, so its time stamp was not checked."
+    elif not changed:
+        why = "is gone" if after is None else "has the same time stamp"
+        raise BridgeError(f"Premiere reported the project saved, but the file {path} {why} after {waited:g} s. Premiere "
+                          "may skip writing a project without unsaved changes; check File > Save in Premiere before "
+                          "relying on it.", code="VERIFY_FAILED", outcome="committed", data=result)
+    return result
 
 
 def _clip_keys(timeline: dict) -> dict:
@@ -529,6 +967,35 @@ def remove_items(rpc, *, track, from_s, to_s, mode="inside", ripple=False, confi
     old, new = _clip_keys(before), _clip_keys(rpc("list_items", {"kinds": ["video", "audio"]}))
     result["shifted"] = [{"track": k[0], "name": k[1], "from": round(old[k], 4), "to": round(new[k], 4)}
                          for k in old if k in new and abs(new[k] - old[k]) > 1e-4]
+    return result
+
+
+def remove_project_items(rpc, *, item=None, bin=None, dry_run=False, label=None) -> dict:
+    """Remove bins (`bin`: "Bin" or "Bin/Sub bin", repeatable; everything inside goes too) and/or project items
+    (`item`: a name or "<bin path>/<name>", repeatable) from the project in one undo step. The media files stay on
+    disk. The panel refuses before changing anything while a sequence uses one of the items (IN_USE, data.inUse) or
+    a sequence would go with them (UNSUPPORTED); a dry run lists what would go, the uses and `wouldRefuse`."""
+    bins = [str(b).strip("/") for b in _as_list(bin) or []]
+    refs = _as_list(item) or []
+    if not bins and not refs:
+        raise _bad("Give at least one --bin or --item")
+    if any(not b for b in bins):
+        raise _bad("The root bin cannot be removed: name a bin inside it")
+    items.require_command(rpc, "remove_project_items")
+    params = {"dryRun": bool(dry_run)}
+    if bins:
+        params["bins"] = bins
+    if refs:
+        project_items = rpc("list_project_items").get("items", [])
+        picked = [items.resolve_item(ref, project_items, unique=True) for ref in refs]
+        params["items"] = [{"name": i["name"], "binPath": i.get("bin") or ""} for i in picked]
+    if label:
+        params["undoLabel"] = label
+    result = rpc("remove_project_items", params)
+    result["note"] = "Media files on disk are not touched; Edit > Undo in Premiere brings the items back."
+    if not dry_run and result.get("remaining"):
+        raise BridgeError(f"Still in the project after the removal: {', '.join(result['remaining'])}",
+                          code="VERIFY_FAILED", outcome="committed", data=result)
     return result
 
 
@@ -584,7 +1051,7 @@ def level_from_db(db: float) -> float:
 def db_from_level(level) -> float | None:
     if not isinstance(level, (int, float)) or isinstance(level, bool):
         return None
-    return round(20 * math.log10(level) + VOLUME_MAX_DB, 2) if level > 0 else float("-inf")
+    return round(20 * math.log10(level) + VOLUME_MAX_DB, 2) + 0.0 if level > 0 else float("-inf")  # +0.0: no "-0.0"
 
 
 def _volume_param(clip: dict):
@@ -600,11 +1067,12 @@ def _volume_param(clip: dict):
     return None, None
 
 
-def set_volume(rpc, *, track, db, at=None, from_s=None, to_s=None, dry_run=False, label=None,
+def set_volume(rpc, *, track, db, at=None, from_s=None, to_s=None, mode="inside", dry_run=False, label=None,
                expect_seq=None) -> dict:
     """Clip volume (Volume > Level, in dB as Premiere shows it: 0 = as recorded, -6 = half, at most +15) on the
-    audio clip under `at`, or on every clip overlapping [from, to]. One undo step per clip; read back afterwards.
-    A keyframed Level is refused before anything is written."""
+    audio clip under `at`, or on the clips in [from, to]: by default only those entirely inside it (half a frame of
+    slack), so the neighbours either side keep their level; mode="overlap" takes every clip that touches the range.
+    One undo step per clip; read back afterwards. A keyframed Level is refused before anything is written."""
     _, idx = _track(track, "audio", "set_volume works on audio tracks (A1, A2, …)")
     try:
         db = float(db)
@@ -614,18 +1082,26 @@ def set_volume(rpc, *, track, db, at=None, from_s=None, to_s=None, dry_run=False
         raise _bad(f"--db must be a finite number up to +{VOLUME_MAX_DB:g} (Premiere's maximum), not {db}")
     if at is None and from_s is None:
         raise _bad("Give --at <sec> or --from <sec> [--to <sec>]")
+    if mode not in RANGE_MODES:
+        raise _bad(f'mode must be inside or overlap, not "{mode}"')
     frm = at if at is not None else from_s
     to = at if at is not None else (to_s if to_s is not None else from_s)
     items.require_command(rpc, "set_volume")
-    items.check_expect_seq(rpc, expect_seq)
+    seq = items.check_expect_seq(rpc, expect_seq)
+    ranged = at is None and to > frm
 
     def read():
         doc = rpc("inspect_items", {"audioTracks": [idx], "fromSeconds": frm, "toSeconds": to})
         return [c for t in doc.get("tracks") or [] for c in t.get("clips") or []]
 
+    clips, skipped = read(), []
+    if ranged and mode == "inside":
+        clips, skipped = _split_inside(clips, frm, to, _half_frame(seq or rpc("get_sequence")))
+        if not clips:
+            raise _none_inside(f"A{idx + 1}", frm, to, skipped)
     level = level_from_db(db)
     rows, problems = [], []
-    for clip in read():
+    for clip in clips:
         comp, param = _volume_param(clip)
         row = {"name": clip.get("name"), "start": clip.get("start"), "end": clip.get("end")}
         if param is None:
@@ -644,6 +1120,8 @@ def set_volume(rpc, *, track, db, at=None, from_s=None, to_s=None, dry_run=False
                           if all("keyframed" in p for p in problems) else "UNSUPPORTED", outcome="not_committed",
                           data={"problems": problems})
     out = {"track": f"A{idx + 1}", "db": db, "level": level, "dryRun": bool(dry_run), "clips": rows}
+    if ranged:
+        out.update(rangeMode=mode, skipped=skipped)
     done = []
     for row in rows:
         match_name, occurrence, index = row.pop("_target")
@@ -681,7 +1159,7 @@ def add_transition(rpc, *, track, at, match_name, duration, edge, double_sided=F
     (+0.1 frame, so Premiere's tick rounding cannot drop one).
 
     Refused (TRANSITION_EXISTS, nothing written) where that edit point already has a transition, a neighbour's
-    included: Premiere keeps the one there and changes nothing, and the bridge cannot delete it. Read back from an
+    included: Premiere keeps the one there and changes nothing; remove_transition takes it off first. Read back from an
     OTIO export (transition items expose no times over UXP): `verified` and `transition` {matchName, name, at,
     before, after}; VERIFY_FAILED (committed) when no transition of that name and length is there afterwards."""
     _, idx = _track(track, "video", "add_transition works on video tracks (V1, V2, …)")
@@ -714,11 +1192,12 @@ def add_transition(rpc, *, track, at, match_name, duration, edge, double_sided=F
         e = existing[0]
         raise BridgeError(f"{track} already has a transition at the {edge} of {hits[0]['name']} ({cut:.3f}s): "
                           f"{e['name'] or e['matchName']}, {e['before']:.3f}s before and {e['after']:.3f}s after the "
-                          "cut. Premiere keeps a transition already at an edit point and would change nothing, and "
-                          "the bridge cannot delete transitions. Nothing was written.",
+                          "cut. Premiere keeps a transition already at an edit point and would change nothing. "
+                          "Nothing was written.",
                           code="TRANSITION_EXISTS", outcome="not_committed", data={"existing": e, "cut": cut},
-                          hint="Delete that transition in Premiere (click it on the timeline, press Delete), then "
-                               "add this one again.")
+                          hint=f"Delete that transition first: remove_transition --track {track} --at {at} --edge "
+                               f"{edge} (or in Premiere: click it on the timeline, press Delete), then add this one "
+                               "again.")
     params = {"videoTrack": idx, "atSeconds": at, "matchName": match_name, "durationSeconds": (n_frames + 0.1) / fps,
               "applyToStart": edge == "start", "forceSingleSided": not double_sided}
     if label:
@@ -737,36 +1216,206 @@ def add_transition(rpc, *, track, at, match_name, duration, edge, double_sided=F
     return data
 
 
+def _same_transition(a: dict, b: dict, tol: float) -> bool:
+    return (a["matchName"] == b["matchName"] and abs(a["at"] - b["at"]) <= tol and abs(a["before"] - b["before"]) <= tol
+            and abs(a["after"] - b["after"]) <= tol)
+
+
+def remove_transition(rpc, *, track, at, edge, dry_run=False, label=None, expect_seq=None) -> dict:
+    """Remove the video transition at the start or end of the clip under `at`, in one undo step.
+
+    It is found in an OTIO export first (transition items expose no times over UXP): none within a frame of that edit
+    point is NOT_FOUND, and nothing is sent. `transition` says which one goes — matchName, name, `at` (the cut),
+    seconds `before` / `after` it, and `owner`: "clip" (it lies on this clip), "shared" (across the cut), or
+    "previous" / "next" (the neighbour's single-sided fade at this edit point: an edit point holds one transition,
+    whichever clip it lies on, so that is the one that goes — check the dry run). Afterwards a second export must show
+    it gone and every other transition on the track still there (`verified`), else VERIFY_FAILED (committed). The
+    panel's `via` is "neighbour" when Premiere filed it under the neighbouring clip's edge (one more undo step)."""
+    _, idx = _track(track, "video", "remove_transition works on video tracks (V1, V2, …); UXP reaches no audio "
+                                    "transitions")
+    if edge not in ("start", "end"):
+        raise _bad(f'edge must be "start" or "end", not "{edge}"')
+    items.require_command(rpc, "remove_transition")
+    seq = _sequence(rpc, expect_seq)
+    frame = 1.0 / framegrid.fps_from_timebase(seq.get("timebase"), seq.get("fps") or 30)
+    track_ = next((t for t in rpc("list_items", {"kinds": ["video"]}).get("video", []) if t["index"] == idx), None)
+    hits = [i for i in (track_ or {}).get("items", []) if i.get("start") is not None and i.get("end") is not None
+            and i["start"] <= at + _replace.EPS and i["end"] > at + _replace.EPS]
+    if len(hits) != 1:
+        raise BridgeError(f"Expected one clip on {track} at {at}s, found {len(hits)}",
+                          code="NOT_FOUND" if not hits else "AMBIGUOUS", outcome="not_committed")
+    clip = hits[0]
+    cut = clip["start"] if edge == "start" else clip["end"]
+    report = {"track": f"V{idx + 1}", "edge": edge, "cut": round(cut, 6),
+              "clip": {"name": clip["name"], "start": clip["start"], "end": clip["end"]}}
+    before = _replace.otio_transitions(rpc, idx)
+    near = sorted((t for t in before if abs(t["at"] - cut) <= frame), key=lambda t: abs(t["at"] - cut))
+    if not near:
+        reason = (f"No transition at the {edge} of {clip['name']} ({cut:.3f}s) on V{idx + 1}: the OTIO export shows "
+                  "none within a frame of that edit point. Nothing was changed.")
+        if dry_run:
+            return dict(report, dryRun=True, transition=None, wouldRefuse="NOT_FOUND", reason=reason)
+        raise BridgeError(reason, code="NOT_FOUND", outcome="not_committed", data={"transitions": before})
+    owned = _replace.cut_transitions(near[:1], clip["start"], clip["end"], frame)
+    target = {"matchName": near[0]["matchName"], "name": near[0]["name"], "at": round(near[0]["at"], 6),
+              "before": round(near[0]["before"], 6), "after": round(near[0]["after"], 6),
+              "owner": owned[0]["owner"] if owned else None}
+    params = {"videoTrack": idx, "atSeconds": at, "edge": edge, "dryRun": bool(dry_run)}
+    if label:
+        params["undoLabel"] = label
+    data = rpc("remove_transition", params)
+    data.update(report, transition=target)
+    if dry_run:
+        return data
+    after = _replace.otio_transitions(rpc, idx)
+    still = [t for t in after if abs(t["at"] - cut) <= frame]
+    gone = [t for t in before if t is not near[0] and not any(_same_transition(t, a, frame / 2) for a in after)]
+    if still or gone:
+        what = ([f"a transition is still at {cut:.3f}s ({still[0]['name'] or still[0]['matchName']})"] if still else []) \
+            + ([f"{len(gone)} other transition(s) on V{idx + 1} went too"] if gone else [])
+        raise BridgeError(f"remove_transition ran, but the OTIO export disagrees: {'; '.join(what)}. Check the "
+                          "timeline (Edit > Undo brings it back).", code="VERIFY_FAILED", outcome="committed",
+                          data={"reply": data, "stillThere": still, "alsoGone": gone})
+    data["verified"] = True
+    return data
+
+
+def remove_effect(rpc, *, track, at, match_name, occurrence=1, dry_run=False, label=None, expect_seq=None) -> dict:
+    """Remove one added effect (filter) from the clip under `at` on a video or an audio track, in one undo step: the
+    `occurrence`-th instance of `match_name` in chain order, as inspect_items lists it. Motion, Opacity, Time
+    Remapping and an audio clip's own volume components are refused (UNSUPPORTED); a component the clip lacks is
+    NOT_FOUND (a dry run says wouldRefuse). The panel reads the chain back: it must be the old one without exactly
+    that instance (`verified`), else VERIFY_FAILED (committed)."""
+    kind, idx = _track(track)
+    if not match_name:
+        raise _bad("match_name is required (inspect_items lists each clip's components)")
+    if not isinstance(occurrence, int) or isinstance(occurrence, bool) or occurrence < 1:
+        raise _bad(f"occurrence must be a whole number >= 1, not {occurrence!r}")
+    items.require_command(rpc, "remove_effect")
+    items.check_expect_seq(rpc, expect_seq)
+    params = {("audioTrack" if kind == "audio" else "videoTrack"): idx, "atSeconds": at, "matchName": match_name,
+              "occurrence": occurrence, "dryRun": bool(dry_run)}
+    if label:
+        params["undoLabel"] = label
+    data = rpc("remove_effect", params)
+    if not dry_run and not data.get("verified"):
+        raise BridgeError(f"remove_effect ran, but the chain read back as {data.get('chain')} (before: "
+                          f"{data.get('chainBefore')}).", code="VERIFY_FAILED", outcome="committed", data=data)
+    return data
+
+
+KEYFRAME_TIME_BASES = ("media", "clip", "sequence")
+
+
+def remove_keyframes(rpc, *, track, at, match_name, param, occurrence=1, all_keys=False, from_s=None, to_s=None,
+                     time_base=None, keep_value=False, dry_run=False, label=None, expect_seq=None) -> dict:
+    """Remove keyframes of one param (`match_name` / `occurrence` / `param` index, as inspect_items lists them) of the
+    clip under `at`, in one undo step: all of them (`all_keys`), or those from `from_s` to `to_s` (inclusive) in
+    `time_base` — media (what inspect_items reports), clip or sequence seconds, converted like set_params' keyframes;
+    the range may reach past the clip, where a trim left keyframes. No keyframes there is NOT_FOUND (a dry run says
+    wouldRefuse).
+
+    When every keyframe goes, animation is switched off (`animationOff`); `valueAfter` is the value Premiere kept
+    (unmeasured which: the playhead's, probably). `keep_value` sets the value the param had at the middle of the clip
+    instead, in the same step (`keptValue`) — the clip's body value, where fades at either end do not reach. Read
+    back (`remaining`, the kept value): `verified`, else VERIFY_FAILED (committed)."""
+    kind, idx = _track(track)
+    if not match_name:
+        raise _bad("match_name is required (inspect_items lists each clip's components)")
+    if not isinstance(occurrence, int) or isinstance(occurrence, bool) or occurrence < 1:
+        raise _bad(f"occurrence must be a whole number >= 1, not {occurrence!r}")
+    if not isinstance(param, int) or isinstance(param, bool) or param < 0:
+        raise _bad(f"param must be the param's index (0, 1, …; inspect_items lists them), not {param!r}")
+    ranged = from_s is not None or to_s is not None
+    if bool(all_keys) == ranged:
+        raise _bad("Give --all, or --from and --to with --time-base (not both)")
+    if ranged:
+        if from_s is None or to_s is None:
+            raise _bad("--from and --to come as a pair")
+        if time_base not in KEYFRAME_TIME_BASES:
+            raise _bad(f"--time-base must be media, clip or sequence (inspect_items reports keyframes in media time), "
+                       f"not {time_base!r}")
+        if to_s < from_s:
+            raise _bad(f"--to ({to_s}) is before --from ({from_s})")
+    elif time_base is not None:
+        raise _bad("--time-base goes with --from/--to")
+    items.require_command(rpc, "remove_keyframes")
+    items.check_expect_seq(rpc, expect_seq)
+    params = {("audioTrack" if kind == "audio" else "videoTrack"): idx, "atSeconds": at, "matchName": match_name,
+              "occurrence": occurrence, "paramIndex": param, "keepValue": bool(keep_value), "dryRun": bool(dry_run)}
+    if all_keys:
+        params["all"] = True
+    else:
+        params.update(fromSeconds=from_s, toSeconds=to_s, timeBase=time_base)
+    if label:
+        params["undoLabel"] = label
+    data = rpc("remove_keyframes", params)
+    if not dry_run and not data.get("verified"):
+        raise BridgeError(f"remove_keyframes ran, but the param read back differently: keyframes left "
+                          f"{data.get('remaining')}" + (f", value {data.get('valueAfter')!r} (wanted "
+                                                         f"{data.get('keptValue')!r})" if keep_value else "") + ".",
+                          code="VERIFY_FAILED", outcome="committed", data=data)
+    if data.get("animationOff") and not keep_value and not data.get("wouldRefuse"):
+        data["note"] = ("Animation is off: the param holds one value (valueAfter, after a real run). --keep-value keeps "
+                        "the value at the middle of the clip; set_params sets any other.")
+    return data
+
+
 # ---------------------------------------------------------------- razor-free editing (clone + trim; keeps clip attributes)
 
-def split_clip(rpc, *, track, at, label=None, dry_run=False, expect_seq=None) -> dict:
-    """Split the clip under `at` on one track without a razor: clone, trim, move — the two halves keep every clip
-    attribute (effects, volume, scaling). At a clip edge it is a no-op."""
+def _render_checker(render_check, render_dir, preset, dry_run):
+    """rendercheck.check with its options bound, or None. ffmpeg and the WAV preset are checked here, before the edit
+    writes anything (a real run only)."""
+    if not render_check:
+        return None
+    if not dry_run:
+        _review._require_ffmpeg()
+        preset = _review.resolve_preset(preset)
+    if render_dir:
+        paths.check(render_dir, what="--render-dir")
+
+    def check(rpc, pieces):
+        return _rendercheck.check(rpc, pieces, out_dir=render_dir, preset=preset)
+    return check
+
+
+def split_clip(rpc, *, track, at, label=None, dry_run=False, expect_seq=None, render_check=False, render_dir=None,
+               preset=None) -> dict:
+    """Split the clip under `at` on one track without a razor: clone past the end, trim, head-trim the copy, clone
+    it to the cut, remove the parked copy (5 undo steps, no move: a move across clips renders silent / blank on
+    27.1) - the two halves keep every clip attribute (effects, volume, scaling). At a clip edge it is a no-op.
+    render_check: render the sequence afterwards and check both pieces play (rendercheck; render_dir keeps the files,
+    preset is the WAV .epr)."""
     items.require_command(rpc, "split_clip")
     _sequence(rpc, expect_seq)
-    return _editing.split_clip(rpc, track=track, at=at, label=label or f"Agent split {track} at {at}s", dry_run=dry_run)
+    return _editing.split_clip(rpc, track=track, at=at, label=label or f"Agent split {track} at {at}s", dry_run=dry_run,
+                               render_check=_render_checker(render_check, render_dir, preset, dry_run))
 
 
 def cut_range(rpc, *, from_s, to_s, track=None, no_ripple=False, captions=None, srt=None, srt_offset=0.0,
-              label=None, dry_run=False, expect_seq=None) -> dict:
+              label=None, dry_run=False, expect_seq=None, render_check=False, render_dir=None, preset=None) -> dict:
     """Remove [from, to) from every track (or the --track ones) and, unless no_ripple, move everything after it left
     on all those tracks by the same amount (one undo step), keeping them in sync; clips crossing an edge are split or
-    trimmed, so they keep their attributes. With captions (a caption track) + srt, conform that track afterwards."""
+    trimmed, so they keep their attributes. With captions (a caption track) + srt, conform that track afterwards.
+    render_check: render afterwards and check every piece it split, trimmed or moved plays (see split_clip)."""
     if captions and not srt:
         raise _bad("--captions needs --srt (the caption lines' SRT)")
     items.require_command(rpc, "cut_range")
     _sequence(rpc, expect_seq)
     cap = {"track": captions, "srt_path": srt, "offset": srt_offset or 0.0} if captions else None
     return _editing.cut_range(rpc, start=from_s, end=to_s, tracks=track or None, ripple=not no_ripple, captions=cap,
-                              label=label or f"Agent cut {from_s}-{to_s}s", dry_run=dry_run)
+                              label=label or f"Agent cut {from_s}-{to_s}s", dry_run=dry_run,
+                              render_check=_render_checker(render_check, render_dir, preset, dry_run))
 
 
 def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, track=None, extend=None, captions=None, srt=None, srt_offset=0.0,
-               label=None, dry_run=False, expect_seq=None, probe_media=None, allow_silent=False) -> dict:
+               label=None, dry_run=False, expect_seq=None, probe_media=None, allow_silent=False, render_check=False,
+               render_dir=None, preset=None) -> dict:
     """Open up the cut at `at` (breathing room): out_by more of the outgoing clip's source, in_by more of the
     incoming one's, with everything after the cut moving right on every track (or the --track ones) in one step.
     --extend limits which tracks get the longer clips (others keep a gap); media lengths come from ffprobe.
-    An extension held silent or invisible by a keyframed fade is refused unless allow_silent."""
+    An extension held silent or invisible by a keyframed fade is refused unless allow_silent. render_check: render
+    afterwards and check every clip it extended or moved plays (see split_clip)."""
     if captions and not srt:
         raise _bad("--captions needs --srt (the caption lines' SRT)")
     items.require_command(rpc, "extend_cut")
@@ -785,7 +1434,19 @@ def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, track=None, extend=None, capti
     cap = {"track": captions, "srt_path": srt, "offset": srt_offset or 0.0} if captions else None
     return _editing.extend_cut(rpc, at=at, out_by=out_by or 0.0, in_by=in_by or 0.0, tracks=track or None,
                                extend=extend or None, captions=cap, media_seconds=media_seconds, dry_run=dry_run,
-                               label=label or f"Agent open cut at {at}s", allow_silent=allow_silent)
+                               label=label or f"Agent open cut at {at}s", allow_silent=allow_silent,
+                               render_check=_render_checker(render_check, render_dir, preset, dry_run))
+
+
+def shift_items(rpc, *, from_s, by, track=None, label=None, dry_run=False, expect_seq=None) -> dict:
+    """Move every clip that starts at/after `from_s` on every track (or the --track ones) by `by` seconds (whole
+    frames; negative = left) in one undo step, keeping them in sync: room before a clip that has no edit point for
+    extend_cut, or a gap closed. Clips crossing `from_s` stay put."""
+    info = items.require_command(rpc, "shift_items")
+    _sequence(rpc, expect_seq)
+    return _editing.shift_items(rpc, at=from_s, by=by, tracks=track or None, dry_run=dry_run,
+                                label=label or f"Agent shift from {from_s}s by {by}s",
+                                precise=items.has_feature(info, "shiftItemsPrecise"))
 
 
 def snap_edges(rpc, *, track=None, label=None, dry_run=False, expect_seq=None) -> dict:
@@ -846,3 +1507,366 @@ def export_audio(rpc, *, output, track=None, render=False, preset=None) -> dict:
     """The sequence's audio as a mono WAV for analysis: a shadow mix of the source files of `track` (default A1;
     no render), or with render=True Premiere's own mix rendered with its WAV preset (export_sequence)."""
     return _review.export_audio(rpc, output=output, tracks=_audio_tracks(track), render=render, preset=preset)
+
+
+# ---------------------------------------------------------------- export: presets and video renders, effect lists
+
+def list_presets(rpc, *, format=None) -> dict:
+    """Encoder presets (.epr) on disk; no panel needed (`rpc` is unused, as every command's first argument): Premiere's
+    system presets (MediaIO/systempresets next to each running Premiere, or PPRO_PRESET_DIR) and the user's own (Adobe
+    Media Encoder's Presets folders, which Premiere's Export dialog saves to), each with the format it writes (decoded
+    from its folder's FourCCs or its XML). `format` filters ("h264", "hevc", "quicktime", "wav" …)."""
+    found = _presets.discover(format)
+    out = {"count": len(found["presets"]), "presets": found["presets"], "systemDirs": found["systemDirs"],
+           "userDirs": found["userDirs"]}
+    if format:
+        out["format"] = format
+    if found["notes"]:
+        out["notes"] = found["notes"]
+    return out
+
+
+EXPORT_LOST = ("PANEL_TIMEOUT", "TIMEOUT", "PANEL_STUCK", "CONNECTION_CLOSED", "PANEL_DISCONNECTED")
+# An export_status poll that fails with one of these is no news (the panel or broker is busy or reconnecting).
+EXPORT_POLL_MISSES = ("PANEL_TIMEOUT", "TIMEOUT", "BRIDGE_BUSY", "NO_PANEL", "PANEL_DISCONNECTED", "CONNECTION_CLOSED")
+EXPORT_ENDED = ("done", "failed", "cancelled")
+# The temp files a render writes first, beside the target: "<stem><uuid>.m4v" and ".aac" for H.264 (live 27.1)
+EXPORT_TEMP = r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\.[A-Za-z0-9]+"
+
+
+def _rendered_file(out: Path, reply: dict, started: float) -> Path | None:
+    """The file this render wrote: the output path, the path Premiere reports, or the name with its extension doubled
+    (export_frame's quirk) — whichever was written since `started` (an older file there is not the render)."""
+    reported = str(reply.get("outputPath") or "")
+    reported = reported[4:] if reported.startswith("\\\\?\\") else reported
+    for cand in (out, Path(reported) if reported else None, out.with_name(out.name + out.suffix)):
+        try:
+            if cand is not None and cand.is_file() and cand.stat().st_mtime >= started - 2:
+                return cand
+        except OSError:
+            continue
+    return None
+
+
+def _output_size(out: Path) -> int | None:
+    """Bytes the render has written so far: the output path or its doubled-extension twin (the larger), plus the temp
+    files Premiere renders into first. Live on 27.1, an H.264 render writes "<stem><uuid>.m4v" and "<stem><uuid>.aac"
+    beside the target and creates the .mp4 only at the end, and no encoder event fires: those files are the only sign
+    of life. None while none of them exists. Sizes come from os.stat: on Windows a directory listing's size (scandir's
+    DirEntry.stat) lags for a file another process holds open — it read 0 for a temp file through a 20 s window live."""
+    sizes = []
+    for cand in (out, out.with_name(out.name + out.suffix)):
+        try:
+            sizes.append(cand.stat().st_size)
+        except OSError:
+            continue
+    total = max(sizes) if sizes else None
+    temp = re.compile(re.escape(out.stem) + EXPORT_TEMP, re.IGNORECASE)
+    try:
+        with os.scandir(out.parent) as entries:
+            found = [e.path for e in entries if temp.fullmatch(e.name) and e.is_file()]
+    except OSError:
+        found = []
+    for path in found:
+        try:
+            total = (total or 0) + os.stat(path).st_size
+        except OSError:  # renamed or removed since the listing (the render ended)
+            continue
+    return total
+
+
+def _job_signs(job: dict) -> tuple:
+    """What counts as a sign of life in a job's status: its state, its progress and how many events fired."""
+    events = sum(v for v in (job.get("events") or {}).values() if isinstance(v, (int, float)))
+    return job.get("state"), job.get("progress"), events
+
+
+def _await_export(rpc, job: dict, out: Path, *, stall_seconds, poll, sleep) -> tuple[dict, dict]:
+    """Poll export_status every `poll` s until the job ends, with no time limit. A stall ends the wait instead: no new
+    state, progress or event from the panel and no growth of the output file for `stall_seconds` (stats
+    "stalledSeconds"). A poll the broker or panel cannot answer (busy, timed out, reconnecting) is no news. After the
+    end, the file must stop growing (equal sizes one poll apart): IMMEDIATELY fills a file it created early."""
+    job_id = job["jobId"]
+    stats, progress = {"polls": 0, "missedPolls": 0}, set()
+    prev = size = _output_size(out)
+    signs = _job_signs(job)
+    quiet_since, quiet_slept = time.monotonic(), 0.0
+    while job.get("state") not in EXPORT_ENDED:
+        sleep(poll)
+        quiet_slept += poll
+        current = None
+        try:
+            current = (rpc("export_status", {"jobId": job_id}).get("jobs") or [None])[0]
+            stats["polls"] += 1
+        except BridgeError as e:
+            if e.code == "NOT_FOUND":
+                raise BridgeError(f"Export job {job_id} is gone from the panel's job table (was the panel reloaded?): "
+                                  f"Premiere may still be rendering to {out}. Check the file before rendering again.",
+                                  code="EXPORT_LOST", outcome="unknown",
+                                  data={"jobId": job_id, "output": str(out), "bytes": _output_size(out)}) from e
+            if e.code not in EXPORT_POLL_MISSES:
+                raise
+            stats["missedPolls"] += 1
+        prev, size = size, _output_size(out)
+        alive = size != prev
+        if current:
+            job = current
+            if isinstance(job.get("progress"), (int, float)):
+                progress.add(job["progress"])
+            alive = alive or _job_signs(job) != signs
+            signs = _job_signs(job)
+        if alive:
+            quiet_since, quiet_slept = time.monotonic(), 0.0
+        elif max(quiet_slept, time.monotonic() - quiet_since) >= stall_seconds:
+            stats["stalledSeconds"] = round(max(quiet_slept, time.monotonic() - quiet_since), 1)
+            break
+    stats["progressSamples"] = len(progress)
+    waited = 0.0
+    while job.get("state") == "done" and size != prev and waited < stall_seconds:
+        sleep(poll)
+        waited += poll
+        prev, size = size, _output_size(out)
+    return job, stats
+
+
+def _render_result(plan: dict, out: Path, reply: dict, started: float, seq: dict, info: dict, warnings: list,
+                   seconds, probe_media, probed=None) -> dict:
+    """The rendered file checked against the sequence (ffprobe); no new file -> EXPORT_FAILED."""
+    got = _rendered_file(out, reply, started)
+    if got is None:
+        raise BridgeError(f"Premiere reported the render done, but no new file is at {out}.", code="EXPORT_FAILED",
+                          outcome="not_committed", data=dict(plan, reply=reply))
+    checks, problems = probed or _presets.check_render((probe_media or media.probe_media)(str(got)), seq, info)
+    return dict(plan, exported=True, output=str(got), renderSeconds=seconds, bytes=got.stat().st_size, checks=checks,
+                verified=bool(checks) and all(c["ok"] for c in checks.values()), warnings=warnings + problems)
+
+
+def _finish_job(rpc, plan: dict, job: dict, out: Path, started: float, seq: dict, info: dict, warnings: list, *,
+                stall_seconds, poll, sleep, probe_media) -> dict:
+    """Wait for an export job (_await_export), then check its file. A failed or cancelled job is EXPORT_FAILED. A
+    stalled one whose file holds the whole sequence (ffprobe) counts as done, with a warning; otherwise
+    EXPORT_STALLED (outcome unknown: the render may still finish; --job resumes the wait)."""
+    job, stats = _await_export(rpc, job, out, stall_seconds=stall_seconds, poll=poll, sleep=sleep)
+    report = dict(plan, jobId=job["jobId"], polls=stats["polls"], progressSamples=stats["progressSamples"])
+    if stats["missedPolls"]:
+        report["missedPolls"] = stats["missedPolls"]
+    state = job.get("state")
+    if state in ("failed", "cancelled"):
+        what = "was cancelled in Premiere" if state == "cancelled" else "failed"
+        raise BridgeError(f"The render {what}: {job.get('error')}", code="EXPORT_FAILED", outcome="not_committed",
+                          data=dict(report, job=job))
+    elapsed = job.get("elapsedSeconds")
+    seconds = elapsed if state == "done" and isinstance(elapsed, (int, float)) else round(time.time() - started, 1)
+    report["job"] = job
+    probed = None
+    if state != "done":
+        got = _rendered_file(out, job, started)
+        probed = _presets.check_render((probe_media or media.probe_media)(str(got)), seq, info) if got else ({}, [])
+        if not (probed[0].get("duration") or {}).get("ok"):
+            raise BridgeError(f"Export job {job['jobId']}: no progress, no panel event and no new bytes in {out} for "
+                              f"{stats['stalledSeconds']:.0f} s, and the file does not hold the whole sequence. The "
+                              f"render may still finish: export_video --job {job['jobId']} waits for it again.",
+                              code="EXPORT_STALLED", outcome="unknown",
+                              data=dict(report, output=str(out), bytes=_output_size(out),
+                                        idleSeconds=stats["stalledSeconds"]))
+        report["doneBy"] = "file"
+        warnings = warnings + [f"The panel never reported the end of the render (state {state}); the file stopped "
+                               f"growing {stats['stalledSeconds']:.0f} s ago and holds the whole sequence."]
+    return _render_result(report, out, job, started, seq, info, warnings, seconds, probe_media, probed)
+
+
+def _resume_export(rpc, job_id, *, preset, output, format, detach, stall_seconds, poll, sleep, probe_media) -> dict:
+    """export_video --job: the render export_sequence started as `job_id` (its output and preset come from the job);
+    wait for it and check its file, or with detach only look at it once."""
+    if not items.has_feature(rpc("ping"), "exportJobs"):
+        raise BridgeError("The loaded panel has no export jobs (feature exportJobs): Reload the current panel in UXP "
+                          "Developer Tool.", code="PANEL_OUTDATED", outcome="not_committed",
+                          data={"missingFeature": "exportJobs"})
+    try:
+        job = rpc("export_status", {"jobId": str(job_id)})["jobs"][0]
+    except BridgeError as e:
+        if e.code == "NOT_FOUND":
+            e.data = dict(e.data or {}, note="A panel reload forgets its jobs: look for the rendered file itself.")
+        raise
+    out = Path(job.get("outputPath") or "").expanduser().resolve()
+    if output and Path(output).expanduser().resolve() != out:
+        raise _bad(f"--output {output} is not the file job {job_id} renders ({out}). Nothing was sent.")
+    try:
+        info = _presets.resolve(job.get("preset"))
+    except BridgeError:  # the preset file is gone: check the length only
+        info = {"name": Path(str(job.get("preset"))).stem, "title": None, "format": None, "kind": None,
+                "source": "path", "path": job.get("preset"), "extensions": []}
+    same = os.path.normcase
+    if preset and same(str(_presets.resolve(preset, format)["path"])) != same(str(info["path"])):
+        raise _bad(f"--preset {preset!r} is not the preset job {job_id} renders with ({info['path']}). "
+                   "Nothing was sent.")
+    seq = rpc("get_sequence")
+    plan = {"dryRun": False, "resumed": True, "mode": "job",
+            "preset": {k: info.get(k) for k in ("name", "title", "format", "kind", "source", "path")},
+            "output": str(out),
+            "sequence": {k: seq.get(k) for k in ("name", "width", "height", "fps", "durationSeconds")}}
+    warnings = []
+    if job.get("sequence") and job["sequence"] != seq.get("name"):
+        warnings.append(f'Job {job_id} renders "{job["sequence"]}" but the active sequence is now "{seq.get("name")}": '
+                        "the file is checked against the active one.")
+    if detach and job.get("state") not in EXPORT_ENDED:
+        return dict(plan, detached=True, jobId=job["jobId"], state=job.get("state"), progress=job.get("progress"),
+                    job=job, warnings=warnings)
+    started = (job.get("startedAt") or 0) / 1000
+    return _finish_job(rpc, plan, job, out, started, seq, info, warnings, stall_seconds=stall_seconds, poll=poll,
+                       sleep=sleep, probe_media=probe_media)
+
+
+def export_video(rpc, *, preset=None, output=None, format=None, overwrite=False, dry_run=False, job=None, detach=False,
+                 stall_seconds=180.0, poll=2.0, sleep=time.sleep, probe_media=None) -> dict:
+    """Render the active sequence with an encoder preset inside Premiere (export_sequence; the project does not change)
+    and check the file with ffprobe: frame size, frame rate and length (one frame of slack) against the sequence. A
+    mismatch is a warning, not a failure (a 16:9 preset letterboxes a vertical sequence: "High Quality 1080 HD" made
+    1920x1080 of a 1080x1920 one). `preset`: a name from list_presets (`format` narrows it) or an .epr path. The output
+    must end in an extension the preset's format writes (.mp4 for H.264 / HEVC, .mov for QuickTime …); an existing
+    file is refused unless `overwrite` (Premiere 27.1 then replaces it in place, without a dialog), a read-only one
+    always. No new file afterwards -> EXPORT_FAILED.
+    A panel with the exportJobs feature renders as a job: export_status is polled every `poll` s with no time limit,
+    until the job ends or stalls (no progress, no panel event and no file growth for `stall_seconds`: EXPORT_STALLED,
+    unless the file already holds the whole sequence). `detach` returns the job at once; `job` resumes a job (its
+    output and preset come from the job; with `detach`, one look). An older panel renders in one request (600 s)."""
+    stall_seconds, poll = float(stall_seconds), float(poll)
+    if stall_seconds <= 0 or poll <= 0:
+        raise _bad("--stall-seconds and the poll interval must be > 0")
+    if job:
+        if dry_run:
+            raise _bad("--dry-run does not go with --job (the render is already running). Nothing was sent.")
+        return _resume_export(rpc, job, preset=preset, output=output, format=format, detach=detach,
+                              stall_seconds=stall_seconds, poll=poll, sleep=sleep, probe_media=probe_media)
+    if not preset or not output:
+        raise _bad("export_video needs --preset and --output (or --job <id> to wait for a render already started).")
+    info = _presets.resolve(preset, format)
+    if info["kind"] == "image":
+        raise BridgeError(f'"{info["name"]}" writes a {info["format"]} (one file per frame): export_frames makes '
+                          "stills. Nothing was rendered.", code="UNSUPPORTED", outcome="not_committed")
+    exts = tuple(info["extensions"] or ())
+    if exts and not str(output).strip().lower().endswith(exts):
+        raise _bad(f"--output {str(output)!r}: a {info['format']} preset writes {' or '.join(exts)} files. "
+                   "Nothing was sent.", extensions=list(exts))
+    paths.check(output, what="--output")
+    out = Path(output).expanduser().resolve()
+    if out.is_dir():
+        raise _bad(f"--output {out} is a folder: give a file name. Nothing was rendered.")
+    if out.exists() and not overwrite:
+        raise BridgeError(f"{out} already exists: pass --overwrite to replace it. Nothing was rendered.",
+                          code="CONFIRM_REQUIRED", outcome="not_committed", data={"output": str(out)})
+    if out.exists() and not os.access(out, os.W_OK):
+        # 27.1 replaces an existing file in place without asking; a read-only one fails at once with "Unable to
+        # initialize export!", the message a broken preset gives too (measured 3 Nov 2026)
+        raise BridgeError(f"{out} is read-only, so Premiere cannot replace it. Nothing was rendered.",
+                          code="BAD_PARAMS", outcome="not_committed", data={"output": str(out)})
+    seq = rpc("get_sequence")
+    as_job = items.has_feature(rpc("ping"), "exportJobs")
+    plan = {"dryRun": bool(dry_run),
+            "preset": {k: info[k] for k in ("name", "title", "format", "kind", "source", "path")},
+            "output": str(out),
+            "sequence": {k: seq.get(k) for k in ("name", "width", "height", "fps", "durationSeconds")},
+            "mode": "job" if as_job else "sync"}
+    warnings = [] if exts else [f"{info['format']} presets: the output extension is not checked."]
+    slow = None if as_job else _presets.render_warning(seq.get("durationSeconds"), info,
+                                                       spec.timeout("export_sequence"))
+    if slow:
+        warnings.append(slow)
+    if detach and not as_job:
+        raise BridgeError("--detach needs export jobs (feature exportJobs), which the loaded panel lacks: Reload the "
+                          "current panel in UXP Developer Tool. Nothing was rendered.", code="PANEL_OUTDATED",
+                          outcome="not_committed", data={"missingFeature": "exportJobs"})
+    if dry_run:
+        return dict(plan, warnings=warnings)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    started = time.time()
+    if as_job:
+        start = rpc("export_sequence", {"outputPath": str(out), "presetPath": info["path"], "wait": False})
+        job = {"jobId": start["jobId"], "state": start.get("state"), "outputPath": start.get("outputPath"),
+               "progress": None, "events": {}}
+        if detach:
+            return dict(plan, detached=True, jobId=job["jobId"], state=job["state"], warnings=warnings,
+                        hint=f"export_video --job {job['jobId']} waits for the render and checks the file "
+                             "(add --detach for one look).")
+        return _finish_job(rpc, plan, job, out, started, seq, info, warnings, stall_seconds=stall_seconds, poll=poll,
+                           sleep=sleep, probe_media=probe_media)
+    try:
+        reply = rpc("export_sequence", {"outputPath": str(out), "presetPath": info["path"]})
+    except BridgeError as e:
+        if e.code in EXPORT_LOST:
+            e.data = dict(e.data or {}, output=str(out), note="Premiere may still be rendering: look for the file "
+                          "before rendering again (and Reload the panel if ping reports it stuck).")
+        raise
+    return _render_result(plan, out, reply, started, seq, info, warnings, round(time.time() - started, 1), probe_media)
+
+
+def list_effects(rpc, *, kind=None) -> dict:
+    """The effects Premiere can add: video filters (match name and display name) and audio filters (display name only,
+    in Premiere's UI language); `kind` "audio" or "video" narrows it."""
+    items.require_command(rpc, "list_effects")
+    return rpc("list_effects", {"kind": kind} if kind else {})
+
+
+def add_audio_effect(rpc, *, track, at, name, dry_run=False, label=None, expect_seq=None) -> dict:
+    """Append an audio effect to the audio clip under `at`, by its display name as list_effects shows it (Premiere's UI
+    language: "降噪" on a Chinese UI) or by a match name: one undo step, verified by reading the chain back. An
+    unknown name is refused with the closest names (data.closeNames). The reply's `component` lists the new effect's
+    params by index, for set_params --track A1; a param Premiere animates from the start (`keyframed`) refuses a
+    static value there (KEYFRAMED), and `note` says which."""
+    _, idx = _track(track, "audio", "add_audio_effect works on audio tracks (A1, A2, …)")
+    if not str(name or "").strip():
+        raise _bad("--name is empty")
+    items.require_command(rpc, "add_audio_effect")
+    items.check_expect_seq(rpc, expect_seq)
+    params = {"audioTrack": idx, "atSeconds": at, "name": str(name).strip(), "dryRun": bool(dry_run)}
+    if label:
+        params["undoLabel"] = label
+    result = rpc("add_audio_effect", params)
+    if dry_run:
+        return result
+    armed = [p.get("index") for p in (result.get("component") or {}).get("params") or []
+             if p.get("keyframed") and not p.get("keyframes")]
+    if armed:
+        result["note"] = (f"Premiere turns animation on for param(s) {armed} of the new effect, with no keyframes: "
+                          "set_params --track A1 by index sets a static value there (it switches the animation off "
+                          "in the same undo step) or adds keyframes.")
+    if not result.get("verified"):
+        raise BridgeError("The effect was appended but the chain reads back differently (see data).",
+                          code="VERIFY_FAILED", outcome="committed", data=result)
+    return result
+
+
+def list_effect_presets(rpc, *, file=None, search=None, locale=None) -> dict:
+    """Effect presets (.prfpset) on disk: Premiere's own next to the running Premiere (LocalizedPresets/<UI locale>:
+    Factory and Lumetri Presets; PPRO_EFFECT_PRESET_DIR adds folders) and the user's (Documents/Adobe/Premiere Pro
+    [(Beta)]/<version>/Profile-*), or only `file`. Each preset: name, bin path, file, effects (match names, in Effect
+    Controls order), animated / anchor, and `replay` (full, partial with reasons, none) for apply_preset. `search`
+    filters names and bins; `locale` picks the localised files (default: Premiere's UI locale from ping, else en_US).
+    A read: when the bridge does not answer, the files are listed anyway (`premiere.checked` false)."""
+    return _prfpset.list_presets(rpc, file=file, search_text=search, locale=locale)
+
+
+def apply_preset(rpc, *, track, preset, at=None, from_s=None, to_s=None, mode="inside", file=None, locale=None,
+                 dry_run=False, label=None, expect_seq=None) -> dict:
+    """Apply an effect preset to the video clip under `at`, or to the clips in [from, to] (mode inside: entirely
+    inside it; overlap: every clip reaching into it), as one set_params request per clip: Motion / Opacity params on
+    the clip's own components, every other effect added as a new instance, keyframes in clip time per the preset's
+    anchoring (scale / in point / out point), interpolation linear, hold, or bezier as Premiere's eased mode 3.
+    Effects or params UXP cannot write (masks, arbitrary data, colours, audio, effects this Premiere lacks or whose
+    params no longer line up) are skipped and reported. Every request is dry-run first; dry_run returns them."""
+    _, idx = _track(track, "video", "apply_preset works on video tracks (V1, V2, …): audio presets are not replayed")
+    if at is not None and (from_s is not None or to_s is not None):
+        raise _bad("Give --at or --from/--to, not both")
+    if at is None and (from_s is None or to_s is None):
+        raise _bad("Give --at, or --from with --to")
+    if at is None and to_s <= from_s:
+        raise _bad(f"--to {to_s} must be after --from {from_s}")
+    if mode not in RANGE_MODES:
+        raise _bad(f'mode must be inside or overlap, not "{mode}"')
+    locale = _prfpset.norm_locale(locale)
+    if file:
+        _prfpset.check_file(file)
+    info = items.require_command(rpc, "apply_preset")
+    seq = items.check_expect_seq(rpc, expect_seq)
+    return _prfpset.apply(rpc, idx, preset, at=at, frm=from_s, to=to_s, mode=mode, file=file, locale=locale,
+                          ping=info, seq=seq, dry_run=dry_run, label=label)

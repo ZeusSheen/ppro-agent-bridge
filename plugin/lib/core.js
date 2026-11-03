@@ -2,7 +2,8 @@
  * core: shared plumbing for the Agent Bridge panel.
  *  - BridgeError (every error carries a code from ppro_bridge/actions.json) and the outcome rule
  *  - the spec param check, a mirror of ppro_bridge/spec.py (same rules, same problem texts)
- *  - request guards, checked on the very project / sequence object a handler then uses
+ *  - request guards, checked on the very project / sequence object a handler then uses, and the
+ *    fingerprint guard (the timeline must be the one the request was planned on; sha256Hex / fixed6)
  *  - runTransaction: build every action inside lockedAccess first, then execute them in one transaction
  *  - small time helpers
  * Factory module: module.exports = function (deps) { ...; return api; }   deps: { ppro, spec, log? }
@@ -26,9 +27,20 @@ module.exports = function (deps) {
     "SEQUENCE_MISMATCH", "NO_PROJECT", "NO_SEQUENCE", "NOT_FOUND", "AMBIGUOUS", "UNSUPPORTED", "KEYFRAMED",
     "KEYFRAME_OUT_OF_RANGE", "NO_TRANSCRIPT", "TRANSCRIPT_EXISTS", "TRANSCRIPT_NOT_IMPORTED",
     "TRANSCRIBE_RUNNING", "TRANSCRIBE_FAILED", "LANGUAGE_UNAVAILABLE", "EXPORT_FAILED", "IMPORT_FAILED",
-    "TRANSACTION_FAILED", "PRECONDITION_FAILED",
+    "TRANSACTION_FAILED", "PRECONDITION_FAILED", "IN_USE", "VERIFY_FAILED", "EXPORT_RUNNING",
   ];
-  const GUARD_KEYS = ["project", "projectPrefix", "projectGuid", "sequence", "sequenceGuid"];
+  // Guard keys that pin the project / sequence (every action but ping and export_status checks them), plus
+  // `fingerprint`: the timeline's items.fingerprint, checked on writes that are not dry runs (checkFingerprintGuard).
+  const PIN_KEYS = ["project", "projectPrefix", "projectGuid", "sequence", "sequenceGuid"];
+  const GUARD_KEYS = PIN_KEYS.concat(["fingerprint"]);
+  const FINGERPRINT_RE = /^[0-9a-f]{16}$/;
+  // Behaviours a client may branch on, sent in the ping reply (actions.json "features" documents each).
+  const FEATURES = ["fingerprintGuard", "shiftItemsPrecise", "exportJobs"];
+  // Actions one transaction may hold: a runaway guard, not a working limit. The largest real transaction so far
+  // is shift_items moving 41 clips (a 4-minute job); a long timeline (4 tracks x 100 clips) or set_params with a
+  // keyframe per word of a 3-minute speech (~450) stays well below it. A build loop gone wrong makes thousands,
+  // and Premiere would run them all inside lockedAccess, where the watchdog cannot stop it.
+  const MAX_TRANSACTION_ACTIONS = 1000;
 
   /* An error the CLI can branch on: `code` (and an explicit `outcome` / `data`) travel in the reply. */
   class BridgeError extends Error {
@@ -149,12 +161,67 @@ module.exports = function (deps) {
   const own = (obj, name) => (hasOwn(obj, name) ? obj[name] : undefined);
   const absent = (v) => v === undefined || v === null;
 
+  /* ---------- paths Premiere may open (mirror of ppro_bridge/paths.py: the same rules and texts) ----------
+   * A network (UNC) path would make Windows offer the user's credentials to that host; a device path holds no media;
+   * a data stream writes what no folder listing shows. Refused in the spec check of every `localPath` param, before
+   * any handler runs, so a request that did not come through the CLI's checks cannot hand Premiere one either.
+   * / and \ count the same; \\?\<drive>:\ is a local long path (Premiere reports project paths that way). */
+  const DRIVE = /^[A-Za-z]:/;
+  const DRIVE_ROOT = /^[A-Za-z]:(\\|$)/;
+
+  /* "UNC", "device" or null (local). */
+  function remoteKind(text) {
+    const s = String(text).trim().replace(/\//g, "\\");
+    if (s.startsWith("\\\\?\\")) {
+      const rest = s.slice(4);
+      if (DRIVE_ROOT.test(rest)) return null;
+      return rest.slice(0, 4).toUpperCase() === "UNC\\" ? "UNC" : "device";
+    }
+    if (s.startsWith("\\\\.\\")) return s.slice(4, 8).toUpperCase() === "UNC\\" ? "UNC" : "device";
+    if (s.startsWith("\\??\\") || s === "\\\\." || s === "\\\\?") return "device";
+    if (s.startsWith("\\\\")) return "UNC";
+    return null;
+  }
+
+  function hasStream(text) {
+    let s = String(text).trim().replace(/\//g, "\\");
+    if (s.startsWith("\\\\?\\") && DRIVE_ROOT.test(s.slice(4))) s = s.slice(4);
+    const rest = DRIVE.test(s) ? s.slice(2) : s;
+    return rest.indexOf(":") >= 0;
+  }
+
+  /* Why Premiere must not be handed this path, or null. */
+  function pathProblem(text) {
+    const kind = remoteKind(text);
+    if (kind === "UNC") {
+      return "a network (UNC) path: Premiere would connect to that host with your Windows credentials. Copy the " +
+        "file to a local disk, or map a drive letter to the share";
+    }
+    if (kind === "device") return "a Windows device path (\\\\.\\, \\??\\ or \\\\?\\ without a drive): no media lives there";
+    if (hasStream(String(text).trim())) {
+      return "an NTFS data stream or a URL (a colon after the drive): only plain local paths are opened";
+    }
+    return null;
+  }
+
+  /* Why this is not a plain file name (no folder, drive or stream), or null: export_frame's name. */
+  function nameProblem(text) {
+    const s = String(text).trim();
+    const bad = !s || s.indexOf("/") >= 0 || s.indexOf("\\") >= 0 || s === "." || s === ".." || s.indexOf(":") >= 0;
+    return bad ? "must be a plain file name (no folder, drive or stream)" : null;
+  }
+
   function checkValue(schema, value, path) {
     const t = hasOwn(schema, "type") ? schema.type : "any";
     if (!typeOk(t, value)) return [`${path}: expected ${t}, got ${pyTypeName(value)}`];
     const problems = [];
     if (hasOwn(schema, "enum") && !schema.enum.some((e) => e === value)) {
       problems.push(`${path}: must be one of ${schema.enum.map(String).join(", ")}`);
+    }
+    if (t === "string") {
+      const why = (schema.localPath === true ? pathProblem(value) : null) ||
+        (schema.fileName === true ? nameProblem(value) : null);
+      if (why) problems.push(`${path}: ${why}`);
     }
     if (t === "number" || t === "integer") {
       if (hasOwn(schema, "minimum") && value < schema.minimum) problems.push(`${path}: must be >= ${schema.minimum}`);
@@ -230,6 +297,8 @@ module.exports = function (deps) {
         problems.push(`guard.${k}: expected string, got ${pyTypeName(guard[k])}`);
       } else if (guard[k] === "") {
         problems.push(`guard.${k}: must not be empty (an empty prefix would match every project)`);
+      } else if (k === "fingerprint" && !absent(guard[k]) && !FINGERPRINT_RE.test(guard[k])) {
+        problems.push("guard.fingerprint: expected 16 lowercase hex digits (get_sequence's fingerprint)");
       }
     }
     return problems;
@@ -237,10 +306,11 @@ module.exports = function (deps) {
 
   /* ---------- guards: project / sequence ---------- */
 
+  /* The guard when it pins a project or sequence (a fingerprint alone pins neither: reads ignore it). */
   function guardOf(ctx) {
     const g = ctx && ctx.guard;
     if (!isPlainObject(g)) return null;
-    for (const k of GUARD_KEYS) if (!absent(g[k])) return g;
+    for (const k of PIN_KEYS) if (!absent(g[k])) return g;
     return null;
   }
 
@@ -330,13 +400,131 @@ module.exports = function (deps) {
     if (hasGuard(ctx)) await requireProject(ctx);
   }
 
+  /* ---------- guards: timeline fingerprint ---------- */
+
+  /*
+   * guard.fingerprint (ppro_bridge/items.py fingerprint, the value get_sequence reports): a write that is not a dry
+   * run runs only while the active sequence still holds the timeline the request was planned on; otherwise
+   * PRECONDITION_FAILED before anything changes. Reads and dry runs ignore it, like the CLI's own check. main.js
+   * calls this once per request, before the handler, so the request's own writes never trip it.
+   * fingerprintOf(sequence) is timeline.fingerprint (core cannot depend on timeline).
+   */
+  async function checkFingerprintGuard(ctx, kind, params, fingerprintOf) {
+    const g = ctx && isPlainObject(ctx.guard) ? ctx.guard : null;
+    const want = g && !absent(g.fingerprint) ? g.fingerprint : null;
+    if (!want || kind !== "write" || (params && params.dryRun === true)) return;
+    const project = await requireProject(ctx);
+    let sequence;
+    try {
+      sequence = await project.getActiveSequence();
+    } catch (e) {
+      throw new BridgeError("INTERNAL", `[read] the active sequence could not be read, so the timeline fingerprint ` +
+        `cannot be checked; nothing was changed: ${errorMessage(e)}`);
+    }
+    if (!sequence) {
+      throw new BridgeError("PRECONDITION_FAILED", `The project has no active sequence; the request is pinned to ` +
+        `timeline fingerprint ${want}. Nothing was changed.`, { data: { expected: want, actual: null } });
+    }
+    const actual = await fingerprintOf(sequence);
+    if (actual !== want) {
+      throw new BridgeError("PRECONDITION_FAILED", `The timeline changed since its fingerprint was read (${want}, ` +
+        `now ${actual}): someone edited it, or another sequence is active. Nothing was changed; read it again ` +
+        "(get_sequence) and re-plan.", { data: { expected: want, actual } });
+    }
+  }
+
+  /* A number as Python's f"{v:.6f}" prints it (items.fingerprint), with "-0.000000" as "0.000000" on both sides.
+   * toFixed rounds an exact tie away from zero where Python rounds it to even; at 6 decimals a double is an exact
+   * tie only when 128 * |v| is an odd integer (sample 375 of 48 kHz audio is one), so that case is rounded here.
+   * Times and speeds stay far below 1e21, where toFixed would switch to exponent notation. */
+  function fixed6(v) {
+    const a = Math.abs(v);
+    const t = a * 128;  // exact: a power-of-two scale
+    let s;
+    if (Number.isInteger(t) && t % 2 === 1 && t < 2 ** 40) {
+      const lo = Math.floor(a * 1e6);  // a * 1e6 = t * 7812.5 exactly
+      const n = lo % 2 === 0 ? lo : lo + 1;
+      const frac = n % 1e6;
+      s = `${(n - frac) / 1e6}.${String(frac).padStart(6, "0")}`;
+    } else {
+      s = a.toFixed(6);
+    }
+    return v < 0 && s !== "0.000000" ? "-" + s : s;
+  }
+
+  /* ---------- SHA-256 (the fingerprint; UXP offers no crypto.subtle to count on) ---------- */
+
+  const SHA256_K = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  ];
+
+  /* UTF-8 bytes of a string, like Python's str.encode("utf-8") (a lone surrogate becomes U+FFFD). */
+  function utf8Bytes(s) {
+    const out = [];
+    for (let i = 0; i < s.length; i++) {
+      let c = s.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length && s.charCodeAt(i + 1) >= 0xdc00 && s.charCodeAt(i + 1) <= 0xdfff) {
+        c = 0x10000 + ((c - 0xd800) << 10) + (s.charCodeAt(i + 1) - 0xdc00);
+        i += 1;
+      } else if (c >= 0xd800 && c <= 0xdfff) {
+        c = 0xfffd;
+      }
+      if (c < 0x80) out.push(c);
+      else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+      else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+      else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    }
+    return out;
+  }
+
+  /* SHA-256 of a string's UTF-8 bytes, as lowercase hex (hashlib.sha256(s.encode("utf-8")).hexdigest()). */
+  function sha256Hex(text) {
+    const bytes = utf8Bytes(String(text));
+    const bits = bytes.length * 8;
+    bytes.push(0x80);
+    while (bytes.length % 64 !== 56) bytes.push(0);
+    const hi = Math.floor(bits / 0x100000000);
+    const lo = bits >>> 0;
+    bytes.push(hi >>> 24, (hi >>> 16) & 255, (hi >>> 8) & 255, hi & 255, lo >>> 24, (lo >>> 16) & 255, (lo >>> 8) & 255, lo & 255);
+    const h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    const w = new Array(64);
+    const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+    for (let off = 0; off < bytes.length; off += 64) {
+      for (let i = 0; i < 16; i++) {
+        const j = off + i * 4;
+        w[i] = (bytes[j] << 24) | (bytes[j + 1] << 16) | (bytes[j + 2] << 8) | bytes[j + 3];
+      }
+      for (let i = 16; i < 64; i++) {
+        const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+        const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+      }
+      let [a, b, c, d, e, f, g, k] = h;
+      for (let i = 0; i < 64; i++) {
+        const t1 = (k + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + SHA256_K[i] + w[i]) | 0;
+        const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+        k = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      [a, b, c, d, e, f, g, k].forEach((x, i) => { h[i] = (h[i] + x) | 0; });
+    }
+    return h.map((x) => (x >>> 0).toString(16).padStart(8, "0")).join("");
+  }
+
   /* ---------- transactions ---------- */
 
   /*
    * lockedAccess + executeTransaction. buildActions() returns an Action or an array of Actions. It
    * runs inside the transaction callback (where 0.3.3 created its actions — the pattern verified on
    * 27.1 and used by Adobe's samples), and every action is built before the first addAction, so a
-   * throw while building adds nothing. Throws TRANSACTION_FAILED when Premiere reports failure.
+   * throw while building adds nothing. More than MAX_TRANSACTION_ACTIONS actions are refused the same
+   * way (BAD_PARAMS, nothing added). Throws TRANSACTION_FAILED when Premiere reports failure.
    */
   function runTransaction(project, label, buildActions, ctx) {
     if (!ctx || typeof ctx.sideEffect !== "function") {
@@ -352,6 +540,11 @@ module.exports = function (deps) {
           actions = Array.isArray(built) ? built : [built];
           for (let i = 0; i < actions.length; i++) {
             if (!actions[i]) throw new BridgeError("INTERNAL", `Transaction "${label}": action ${i + 1} could not be created.`);
+          }
+          if (actions.length > MAX_TRANSACTION_ACTIONS) {
+            throw new BridgeError("BAD_PARAMS", `Transaction "${label}" would hold ${actions.length} actions; the panel ` +
+              `runs at most ${MAX_TRANSACTION_ACTIONS} in one (a runaway guard). Nothing was changed: split the edit ` +
+              "into smaller requests.", { data: { actions: actions.length, max: MAX_TRANSACTION_ACTIONS } });
           }
         } catch (e) {
           buildError = e;  // nothing was added; rethrown below even if Premiere swallows it
@@ -380,11 +573,11 @@ module.exports = function (deps) {
   }
 
   return {
-    TICKS_PER_SECOND, EPS, TIME_NUDGE_S, OUTCOMES, ERROR_CODES, GUARD_KEYS,
+    TICKS_PER_SECOND, EPS, TIME_NUDGE_S, OUTCOMES, ERROR_CODES, GUARD_KEYS, FEATURES, MAX_TRANSACTION_ACTIONS,
     BridgeError, hasOwn, isPlainObject, isFn, errorMessage, codeOf, prefixError, outcomeFor,
     secs, atTime, tickTimeFromTicks, ticksOf, frameTicksOf, seqTicks, seqTime, tryGet, tryGetSync, sleep,
-    checkParams, checkValue, checkObject, checkGuardShape, pyTypeName, requireText,
-    hasGuard, readGuid, requireProject, requireSequence, checkGuard,
+    checkParams, checkValue, checkObject, checkGuardShape, pyTypeName, requireText, pathProblem, nameProblem,
+    hasGuard, readGuid, requireProject, requireSequence, checkGuard, checkFingerprintGuard, fixed6, sha256Hex,
     runTransaction, countWords,
   };
 };

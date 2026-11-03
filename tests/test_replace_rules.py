@@ -143,6 +143,14 @@ class SourceSnapTest(unittest.TestCase):
         self.assertEqual(report["sourceSnap"]["grid"], "sequence")
         self.assertTrue(any("frame rate" in n for n in report["notes"]), report["notes"])
 
+    def test_out_point_past_a_short_picture_is_refused(self):
+        short = {"duration": 30.0, "videoDuration": 6.0, "fps": 60.0}  # the audio runs on for 24 s
+        with self.assertRaises(BridgeError) as cm:
+            self.dry(short, src_in=2.0, src_out=7.0)
+        self.assertEqual((cm.exception.code, cm.exception.outcome), ("BAD_PARAMS", "not_committed"))
+        report = self.dry(short)  # the old clip's 2-7 s range: shifted to end on the last frame of picture
+        self.assertEqual(report["source"], [1.0, 6.0])
+
 
 class UnaddableEffectTest(unittest.TestCase):
     """A component on the old clip that cannot be created on the new one is found while planning."""
@@ -183,6 +191,35 @@ class UnaddableEffectTest(unittest.TestCase):
         report, _ = self.dry([self.COMPOUND], skip_effects=["AE.ADBE CompoundComponent"])
         self.assertEqual([(x["matchName"], x["occurrence"]) for x in report["skippedEffects"]],
                          [("AE.ADBE CompoundComponent", 1)])
+
+
+class GraphicOwnTest(unittest.TestCase):
+    """A graphic's own components: its Graphic Group and the components the panel cannot create that close its chain
+    after the last top intrinsic or added effect. They belong to the media, so replace_clip neither carries nor
+    refuses them; anywhere else (or on a clip without a Graphic Group) an uncreatable component is still refused."""
+    TOP = ["AE.ADBE Opacity", "AE.ADBE Motion"]
+    GG, BLUR, TEXT, SHAPE = "AE.ADBE Graphic Group", "AE.ADBE Gaussian Blur 2", "AE.ADBE Text", "AE.ADBE Shape"
+
+    def own(self, names, cannot):
+        return replace._graphic_own([{"matchName": m} for m in names], [{"matchName": m} for m in cannot])
+
+    def test_the_layers_after_the_effects(self):
+        self.assertEqual(self.own(self.TOP + [self.GG, self.BLUR, self.TEXT, self.SHAPE], [self.TEXT, self.SHAPE]),
+                         [self.GG, self.TEXT, self.SHAPE])
+        self.assertEqual(self.own(self.TOP + [self.GG, self.TEXT], [self.TEXT]), [self.GG, self.TEXT])
+
+    def test_not_on_a_clip_without_a_graphic_group(self):
+        self.assertEqual(self.own(self.TOP + [self.BLUR, "AE.Unknown"], ["AE.Unknown"]), [])
+
+    def test_an_uncreatable_component_among_the_effects_is_not_the_graphics(self):
+        self.assertEqual(self.own(self.TOP + [self.GG, "AE.Unknown", self.BLUR, self.TEXT], ["AE.Unknown", self.TEXT]),
+                         [self.GG, self.TEXT])
+        # a colour-tool container counts as an effect, so it stays refused (NOT_ADDABLE), and the layers after it go
+        compound = "AE.ADBE CompoundComponent"
+        self.assertEqual(self.own(self.TOP + [self.GG, compound, self.TEXT], [compound, self.TEXT]), [self.GG, self.TEXT])
+
+    def test_an_older_panel_finds_only_the_graphic_group(self):  # no dryRun: nothing is known to be uncreatable
+        self.assertEqual(self.own(self.TOP + [self.GG, self.BLUR, self.TEXT], []), [self.GG])
 
 
 if __name__ == "__main__":

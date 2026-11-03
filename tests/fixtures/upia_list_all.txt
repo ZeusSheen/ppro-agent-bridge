@@ -1,0 +1,47 @@
+0 extension installed for Adobe Media Encoder (ver 25.6.6)
+ Status                        Extension Name                         Version
+=========  =======================================================  ==========
+
+0 extension installed for Adobe Media Encoder (ver 26.5.2)
+ Status                        Extension Name                         Version
+=========  =======================================================  ==========
+
+1 extension installed for After Effects (ver 25.6.6)
+ Status                        Extension Name                         Version
+=========  =======================================================  ==========
+ Enabled    Motion Array                                                 1.7.0
+
+1 extension installed for After Effects (ver 26.5.0)
+ Status                        Extension Name                         Version
+=========  =======================================================  ==========
+ Enabled    Motion Array                                                 1.7.0
+
+0 extension installed for Audition (ver 25.6.6)
+ Status                        Extension Name                         Version
+=========  =======================================================  ==========
+
+0 extension installed for Audition (ver 26.5.0)
+ Status                        Extension Name                         Version
+=========  =======================================================  ==========
+
+0 extension installed for Bridge (ver 16.0.8)
+ Status                        Extension Name                         Version
+=========  =======================================================  ==========
+
+0 extension installed for InDesign 2026 64 (ver 21.6.0)
+ Status                        Extension Name                         Version
+=========  =======================================================  ==========
+
+0 extension installed for Photoshop 2026 64 (ver 27.11.0)
+ Status                        Extension Name                         Version
+=========  =======================================================  ==========
+
+1 extension installed for Premiere Pro (ver 26.5.2)
+ Status                        Extension Name                         Version
+=========  =======================================================  ==========
+ Enabled    Motion Array                                                 1.7.0
+
+0 extension installed for Others
+ Status                        Extension Name                         Version
+=========  =======================================================  ==========
+

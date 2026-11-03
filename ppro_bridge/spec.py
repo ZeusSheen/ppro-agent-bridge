@@ -5,15 +5,21 @@ One file is the contract for the panel (plugin/lib/spec.js is generated from it)
 
 Rules (a JSON-Schema subset): `type` is one of string, number, integer, boolean, array, object, any; `required`;
 `enum`; `minimum` / `maximum`; `minItems`; `items` (array element schema); `properties` (object schema — unknown
-keys are refused unless `additionalProperties` is true); `pairedWith` (both or neither). A param sent as null
+keys are refused unless `additionalProperties` is true); `pairedWith` (both or neither); on a string, `localPath`
+(a path Premiere will open: no network (UNC) or device path, no data stream - ppro_bridge/paths.path_problem, the
+panel's pathProblem) and `fileName` (a plain file name: no folder, drive or stream). A param sent as null
 counts as absent. `default` is documentation: handlers apply defaults. At action level, `requireOneOf` lists name
 groups of which at least one must be present (non-empty when it is an array). Unknown top-level params are refused.
+An action with `devOnly: true` (api_smoke) is a test that changes Premiere: only a dev build of the panel registers it
+(`panel_action_names(dev=False)` is what a release build answers with).
 """
 
 import json
 import math
 from functools import lru_cache
 from pathlib import Path
+
+from . import paths
 
 SPEC_PATH = Path(__file__).resolve().with_name("actions.json")
 
@@ -39,6 +45,12 @@ def action(name: str) -> dict | None:
 
 def action_names() -> list[str]:
     return [a["name"] for a in load()["actions"]]
+
+
+def panel_action_names(dev: bool = True) -> list[str]:
+    """The actions a panel registers, in spec order: all of them in a dev build, all but the devOnly ones in a release
+    build (ping's `build.dev` says which; panels before 0.6 report no build and register every action they know)."""
+    return [a["name"] for a in load()["actions"] if dev or not a.get("devOnly")]
 
 
 def command(name: str) -> dict | None:
@@ -89,6 +101,11 @@ def check_value(schema: dict, value, path: str) -> list[str]:
     problems = []
     if "enum" in schema and value not in schema["enum"]:
         problems.append(f"{path}: must be one of {', '.join(map(str, schema['enum']))}")
+    if t == "string":
+        why = (paths.path_problem(value) if schema.get("localPath") else None) or \
+            (paths.name_problem(value) if schema.get("fileName") else None)
+        if why:
+            problems.append(f"{path}: {why}")
     if t in ("number", "integer"):
         if "minimum" in schema and value < schema["minimum"]:
             problems.append(f"{path}: must be >= {schema['minimum']}")

@@ -36,12 +36,13 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import wave
 from array import array
 from operator import mul
 from pathlib import Path
 
-from . import framegrid, items, media, transcript
+from . import framegrid, items, media, paths, transcript
 from .errors import BridgeError
 
 RATE = 16000              # analysis sample rate
@@ -910,6 +911,7 @@ def resolve_preset(preset=None) -> str:
         raise BridgeError("Premiere's 'Waveform Audio 48kHz 16-bit' preset was not found next to a running Premiere: "
                           "pass the .epr as preset (CLI --preset) or set PPRO_WAV_PRESET.", code="FILE_NOT_FOUND",
                           outcome="not_committed")
+    paths.check(path, what="preset", ext=".epr")
     if not os.path.isfile(path):
         raise BridgeError(f"Preset not found: {path}", code="FILE_NOT_FOUND", outcome="not_committed")
     return str(path)
@@ -921,6 +923,7 @@ def export_audio(rpc, *, output, tracks=("A1",), render: bool = False, preset=No
     with render=True Premiere's own render (export_sequence, every audible track) converted for analysis; the
     full-rate render is kept next to it (`preset`: see resolve_preset). Returns {wav, source, notes, …}. The shadow
     mix refuses clips without readable media (NO_MEDIA, nothing written): it never falls back to the render."""
+    paths.check(output, what="output", ext=".wav")
     _require_ffmpeg()
     out = Path(output).expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -936,13 +939,22 @@ def export_audio(rpc, *, output, tracks=("A1",), render: bool = False, preset=No
                         "(render=True analyses Premiere's own mix)."] + mix["notes"]
         return mix
     rendered = out.with_name(out.stem + "_render.wav")
+    started = time.time()
     reply = rpc("export_sequence", {"outputPath": str(rendered), "presetPath": resolve_preset(preset)})
+
+    def fresh(p):  # written by this render: an older render of the same name is not it
+        try:
+            return p.is_file() and p.stat().st_mtime >= started - 2
+        except OSError:
+            return False
     got = next((Path(_clean_path(p)) for p in (reply.get("outputPath"), rendered)
-                if p and Path(_clean_path(p)).is_file()), None)
+                if p and fresh(Path(_clean_path(p)))), None)
     if got is None:
-        raise BridgeError("export_sequence reported success but no file was written at "
-                          f"{reply.get('outputPath') or rendered}.", code="EXPORT_FAILED", outcome="not_committed",
-                          data={"reply": reply})
+        old = rendered.is_file()
+        raise BridgeError("export_sequence reported success but no new file was written at "
+                          f"{reply.get('outputPath') or rendered}" + (" (the file there is from an earlier render)"
+                                                                      if old else "") + ".",
+                          code="EXPORT_FAILED", outcome="not_committed", data={"reply": reply, "stale": old})
     to_analysis_wav(got, out, rate=rate)
     return {"wav": str(out), "rate": rate, "source": "render", "rendered": str(got), "preset": reply.get("preset"),
             "tracks": labels,

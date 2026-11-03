@@ -1,0 +1,910 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<PremiereData Version="3">
+	<Tree ObjectRef="75"/>
+	<Tree ObjectID="75" ClassID="177f2841-dd5b-43bd-9d9a-79e231bd47dd" Version="1">
+		<Node Version="1">
+		</Node>
+		<RootBin ObjectRef="74"/>
+	</Tree>
+	<VideoComponentParam ObjectID="1" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Blurriness</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes>914457600000000,40.,0,2,0.,0.166667,0.,0.166667;914711616000000,0.,0,2,0.,0.166667,0.,0.166667</Keyframes>
+		<IsTimeVarying>true</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,0.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="2" ClassID="6e02e8bb-2569-46b2-8ab1-4ab11c43e9c8" Version="10">
+		<Name>Blur Dimensions</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>7</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,1,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="3" ClassID="cc12343e-f113-4d3b-ae05-b287db77d461" Version="10">
+		<Name>Repeat Edge Pixels</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>4</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,true,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>false</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="4" ClassID="cc12343e-f113-4d3b-ae05-b287db77d461" Version="10">
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>11</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,false,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoFilterComponent ObjectID="5" ClassID="d10da199-beea-4dd1-b941-ed3a78766d50" Version="9">
+		<Component Version="7">
+			<Node Version="1">
+				<Children Version="1">
+					<Child Index="0" ObjectRef="3"/>
+					<Child Index="1" ObjectRef="1"/>
+					<Child Index="2" ObjectRef="4"/>
+					<Child Index="3" ObjectRef="2"/>
+				</Children>
+			</Node>
+			<DisplayName>Gaussian Blur</DisplayName>
+			<Params Version="1">
+				<Param Index="0" ObjectRef="1"/>
+				<Param Index="1" ObjectRef="2"/>
+				<Param Index="2" ObjectRef="3"/>
+				<Param Index="3" ObjectRef="4"/>
+			</Params>
+			<Intrinsic>false</Intrinsic>
+		</Component>
+		<MatchName>AE.ADBE Gaussian Blur 2</MatchName>
+		<VideoFilterType>2</VideoFilterType>
+	</VideoFilterComponent>
+	<FilterPreset ObjectID="6" ClassID="ee52a7d2-069e-47f7-aa30-e3e3286b65a3" Version="3">
+		<Component ObjectRef="5"/>
+		<MediaType>228cda18-3625-4d2d-951e-348879e4ed93</MediaType>
+		<Node Version="1">
+		</Node>
+		<Description>Blur 40 to 0</Description>
+		<Type>1</Type>
+		<FilterMatchName>AE.ADBE Gaussian Blur 2</FilterMatchName>
+		<AnchorInPoint>914457600000000</AnchorInPoint>
+		<AnchorOutPoint>914711616000000</AnchorOutPoint>
+		<Speed>1.</Speed>
+	</FilterPreset>
+	<FilterPresetItem ObjectID="7" ClassID="e56c9ba0-91cb-4f21-9174-c1b52448c6c9" Version="2">
+		<EffectItem Version="1">
+			<EffectFlavor>5</EffectFlavor>
+			<EffectIsShorcut>false</EffectIsShorcut>
+		</EffectItem>
+		<FilterPreset ObjectRef="6"/>
+	</FilterPresetItem>
+	<TreeItem ObjectID="8" ClassID="025f59ac-1f29-42c0-9897-ada1059bd547" Version="3">
+		<TreeItemBase Version="4">
+			<Name>Blur In</Name>
+			<Node Version="1">
+			</Node>
+			<Data ObjectRef="7"/>
+			<Locked>false</Locked>
+		</TreeItemBase>
+	</TreeItem>
+	<VideoComponentParam ObjectID="9" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Blurriness</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes>914838624000000,0.,5,2,0.,0.166667,0.,0.166667;914965632000000,40.,5,2,0.,0.166667,0.,0.166667;915029136000000,60.,5,2,0.,0.166667,0.,0.166667</Keyframes>
+		<IsTimeVarying>true</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,0.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="10" ClassID="6e02e8bb-2569-46b2-8ab1-4ab11c43e9c8" Version="10">
+		<Name>Blur Dimensions</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>7</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,1,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="11" ClassID="cc12343e-f113-4d3b-ae05-b287db77d461" Version="10">
+		<Name>Repeat Edge Pixels</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>4</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,false,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<ArbVideoComponentParam ObjectID="12" ClassID="313e54d4-6903-49ad-b0bf-8262cdd10f4e" Version="10">
+		<Name>Blob</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>10</ParameterControlType>
+		<StartKeyframeValue Encoding="base64">AAAAAA==</StartKeyframeValue>
+		<ParameterID>-1</ParameterID>
+	</ArbVideoComponentParam>
+	<VideoFilterComponent ObjectID="13" ClassID="d10da199-beea-4dd1-b941-ed3a78766d50" Version="9">
+		<Component Version="7">
+			<Node Version="1">
+				<Children Version="1">
+					<Child Index="0" ObjectRef="9"/>
+					<Child Index="1" ObjectRef="10"/>
+					<Child Index="2" ObjectRef="11"/>
+					<Child Index="3" ObjectRef="12"/>
+				</Children>
+			</Node>
+			<DisplayName>Gaussian Blur</DisplayName>
+			<Params Version="1">
+				<Param Index="0" ObjectRef="9"/>
+				<Param Index="1" ObjectRef="10"/>
+				<Param Index="2" ObjectRef="11"/>
+				<Param Index="3" ObjectRef="12"/>
+			</Params>
+			<Intrinsic>false</Intrinsic>
+		</Component>
+		<MatchName>AE.ADBE Gaussian Blur 2</MatchName>
+		<VideoFilterType>2</VideoFilterType>
+	</VideoFilterComponent>
+	<FilterPreset ObjectID="14" ClassID="ee52a7d2-069e-47f7-aa30-e3e3286b65a3" Version="3">
+		<Component ObjectRef="13"/>
+		<MediaType>228cda18-3625-4d2d-951e-348879e4ed93</MediaType>
+		<Node Version="1">
+		</Node>
+		<Description></Description>
+		<Type>2</Type>
+		<FilterMatchName>AE.ADBE Gaussian Blur 2</FilterMatchName>
+		<AnchorInPoint>914457600000000</AnchorInPoint>
+		<AnchorOutPoint>914965632000000</AnchorOutPoint>
+		<Speed>1.</Speed>
+	</FilterPreset>
+	<FilterPresetItem ObjectID="15" ClassID="e56c9ba0-91cb-4f21-9174-c1b52448c6c9" Version="2">
+		<EffectItem Version="1">
+			<EffectFlavor>5</EffectFlavor>
+			<EffectIsShorcut>false</EffectIsShorcut>
+		</EffectItem>
+		<FilterPreset ObjectRef="14"/>
+	</FilterPresetItem>
+	<TreeItem ObjectID="16" ClassID="025f59ac-1f29-42c0-9897-ada1059bd547" Version="3">
+		<TreeItemBase Version="4">
+			<Name>Blur Out</Name>
+			<Node Version="1">
+			</Node>
+			<Data ObjectRef="15"/>
+			<Locked>false</Locked>
+		</TreeItemBase>
+	</TreeItem>
+	<VideoComponentParam ObjectID="17" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Blurriness</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,25.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="18" ClassID="6e02e8bb-2569-46b2-8ab1-4ab11c43e9c8" Version="10">
+		<Name>Blur Dimensions</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>7</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,1,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="19" ClassID="cc12343e-f113-4d3b-ae05-b287db77d461" Version="10">
+		<Name>Repeat Edge Pixels</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>4</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,false,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="20" ClassID="cc12343e-f113-4d3b-ae05-b287db77d461" Version="10">
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>11</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,false,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoFilterComponent ObjectID="21" ClassID="d10da199-beea-4dd1-b941-ed3a78766d50" Version="9">
+		<Component Version="7">
+			<Node Version="1">
+				<Children Version="1">
+					<Child Index="0" ObjectRef="20"/>
+				</Children>
+			</Node>
+			<DisplayName>Mask2</DisplayName>
+			<Params Version="1">
+				<Param Index="0" ObjectRef="20"/>
+			</Params>
+			<Intrinsic>false</Intrinsic>
+		</Component>
+		<MatchName>AE.ADBE AEMask2</MatchName>
+		<VideoFilterType>2</VideoFilterType>
+	</VideoFilterComponent>
+	<VideoFilterComponent ObjectID="22" ClassID="d10da199-beea-4dd1-b941-ed3a78766d50" Version="9">
+		<Component Version="7">
+			<Node Version="1">
+				<Children Version="1">
+					<Child Index="0" ObjectRef="17"/>
+					<Child Index="1" ObjectRef="18"/>
+					<Child Index="2" ObjectRef="19"/>
+				</Children>
+			</Node>
+			<DisplayName>Gaussian Blur</DisplayName>
+			<Params Version="1">
+				<Param Index="0" ObjectRef="17"/>
+				<Param Index="1" ObjectRef="18"/>
+				<Param Index="2" ObjectRef="19"/>
+			</Params>
+			<Intrinsic>false</Intrinsic>
+		</Component>
+		<MatchName>AE.ADBE Gaussian Blur 2</MatchName>
+		<VideoFilterType>2</VideoFilterType>
+		<SubComponents Version="1">
+			<SubComponent Index="0" ObjectRef="21"/>
+		</SubComponents>
+	</VideoFilterComponent>
+	<FilterPreset ObjectID="23" ClassID="ee52a7d2-069e-47f7-aa30-e3e3286b65a3" Version="3">
+		<Component ObjectRef="22"/>
+		<MediaType>228cda18-3625-4d2d-951e-348879e4ed93</MediaType>
+		<Node Version="1">
+		</Node>
+		<Description></Description>
+		<Type>0</Type>
+		<FilterMatchName>AE.ADBE Gaussian Blur 2</FilterMatchName>
+		<AnchorInPoint>0</AnchorInPoint>
+		<AnchorOutPoint>508032000000</AnchorOutPoint>
+		<Speed>1.</Speed>
+	</FilterPreset>
+	<FilterPresetItem ObjectID="24" ClassID="e56c9ba0-91cb-4f21-9174-c1b52448c6c9" Version="2">
+		<EffectItem Version="1">
+			<EffectFlavor>5</EffectFlavor>
+			<EffectIsShorcut>false</EffectIsShorcut>
+		</EffectItem>
+		<FilterPresets Version="1">
+			<FilterPreset Index="0" ObjectRef="23"/>
+		</FilterPresets>
+	</FilterPresetItem>
+	<TreeItem ObjectID="25" ClassID="025f59ac-1f29-42c0-9897-ada1059bd547" Version="3">
+		<TreeItemBase Version="4">
+			<Name>Masked Blur</Name>
+			<Node Version="1">
+			</Node>
+			<Data ObjectRef="24"/>
+			<Locked>false</Locked>
+		</TreeItemBase>
+	</TreeItem>
+	<VideoComponentParam ObjectID="26" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Gain</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,6.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<AudioFilterComponent ObjectID="27" ClassID="d10da199-beea-4dd1-b941-ed3a78766d50" Version="9">
+		<Component Version="7">
+			<Node Version="1">
+				<Children Version="1">
+					<Child Index="0" ObjectRef="26"/>
+				</Children>
+			</Node>
+			<DisplayName>Gain</DisplayName>
+			<Params Version="1">
+				<Param Index="0" ObjectRef="26"/>
+			</Params>
+			<Intrinsic>false</Intrinsic>
+		</Component>
+		<MatchName>AE.ADBE Gain</MatchName>
+		<VideoFilterType>2</VideoFilterType>
+	</AudioFilterComponent>
+	<FilterPreset ObjectID="28" ClassID="ee52a7d2-069e-47f7-aa30-e3e3286b65a3" Version="3">
+		<Component ObjectRef="27"/>
+		<MediaType>80b8e3d5-6dca-4195-aefb-cb5f407ab009</MediaType>
+		<Node Version="1">
+		</Node>
+		<Description></Description>
+		<Type>0</Type>
+		<FilterMatchName>AE.ADBE Gain</FilterMatchName>
+		<AnchorInPoint>0</AnchorInPoint>
+		<AnchorOutPoint>254016000000</AnchorOutPoint>
+		<Speed>1.</Speed>
+	</FilterPreset>
+	<FilterPresetItem ObjectID="29" ClassID="e56c9ba0-91cb-4f21-9174-c1b52448c6c9" Version="2">
+		<EffectItem Version="1">
+			<EffectFlavor>5</EffectFlavor>
+			<EffectIsShorcut>false</EffectIsShorcut>
+		</EffectItem>
+		<FilterPresets Version="1">
+			<FilterPreset Index="0" ObjectRef="28"/>
+		</FilterPresets>
+	</FilterPresetItem>
+	<TreeItem ObjectID="30" ClassID="025f59ac-1f29-42c0-9897-ada1059bd547" Version="3">
+		<TreeItemBase Version="4">
+			<Name>Audio Gain</Name>
+			<Node Version="1">
+			</Node>
+			<Data ObjectRef="29"/>
+			<Locked>false</Locked>
+		</TreeItemBase>
+	</TreeItem>
+	<VideoComponentParam ObjectID="31" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Left</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,10.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="32" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Top</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,0.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="33" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Right</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,0.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="34" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Bottom</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,0.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="35" ClassID="cc12343e-f113-4d3b-ae05-b287db77d461" Version="10">
+		<Name>Zoom</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>4</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,false,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="36" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Edge Feather</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,0.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoFilterComponent ObjectID="37" ClassID="d10da199-beea-4dd1-b941-ed3a78766d50" Version="9">
+		<Component Version="7">
+			<Node Version="1">
+				<Children Version="1">
+					<Child Index="0" ObjectRef="31"/>
+					<Child Index="1" ObjectRef="32"/>
+					<Child Index="2" ObjectRef="33"/>
+					<Child Index="3" ObjectRef="34"/>
+					<Child Index="4" ObjectRef="35"/>
+					<Child Index="5" ObjectRef="36"/>
+				</Children>
+			</Node>
+			<DisplayName>Crop</DisplayName>
+			<Params Version="1">
+				<Param Index="0" ObjectRef="31"/>
+				<Param Index="1" ObjectRef="32"/>
+				<Param Index="2" ObjectRef="33"/>
+				<Param Index="3" ObjectRef="34"/>
+				<Param Index="4" ObjectRef="35"/>
+				<Param Index="5" ObjectRef="36"/>
+			</Params>
+			<Intrinsic>false</Intrinsic>
+		</Component>
+		<MatchName>AE.ADBE Crop</MatchName>
+		<VideoFilterType>2</VideoFilterType>
+	</VideoFilterComponent>
+	<FilterPreset ObjectID="38" ClassID="ee52a7d2-069e-47f7-aa30-e3e3286b65a3" Version="3">
+		<Component ObjectRef="37"/>
+		<MediaType>228cda18-3625-4d2d-951e-348879e4ed93</MediaType>
+		<Node Version="1">
+		</Node>
+		<Description></Description>
+		<Type>0</Type>
+		<FilterMatchName>AE.ADBE Crop</FilterMatchName>
+		<AnchorInPoint>0</AnchorInPoint>
+		<AnchorOutPoint>508032000000</AnchorOutPoint>
+		<Speed>1.</Speed>
+	</FilterPreset>
+	<PointComponentParam ObjectID="39" ClassID="ca81d347-309b-44d2-acc7-1c572efb973c" Version="10">
+		<Name>Position</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>6</ParameterControlType>
+		<Keyframes>-254016000000,0.:0.5,0,2,0.,0.166667,0.,0.166667,5,4,0.,0.,0.,0.;0,0.25:0.5,5,2,0.,0.166667,0.,0.166667,5,4,0.,0.,0.,0.;508032000000,0.75:0.5,5,2,0.,0.166667,0.,0.166667,5,4,0.,0.,0.,0.</Keyframes>
+		<IsTimeVarying>true</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,0.75:0.5,0,2,0.,0.166667,0.,0.166667,5,4,0.,0.,0.,0.</StartKeyframe>
+		<CurrentValue>0,0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</PointComponentParam>
+	<VideoComponentParam ObjectID="40" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Scale</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,50.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="41" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Scale Width</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,100.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="42" ClassID="cc12343e-f113-4d3b-ae05-b287db77d461" Version="10">
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>4</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,true,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="43" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Rotation</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,0.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<PointComponentParam ObjectID="44" ClassID="ca81d347-309b-44d2-acc7-1c572efb973c" Version="10">
+		<Name>Anchor Point</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>6</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,0.5:0.5,0,2,0.,0.166667,0.,0.166667,5,4,0.,0.,0.,0.</StartKeyframe>
+		<CurrentValue>0,0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</PointComponentParam>
+	<VideoFilterComponent ObjectID="45" ClassID="d10da199-beea-4dd1-b941-ed3a78766d50" Version="9">
+		<Component Version="7">
+			<Node Version="1">
+				<Children Version="1">
+					<Child Index="0" ObjectRef="39"/>
+					<Child Index="1" ObjectRef="40"/>
+					<Child Index="2" ObjectRef="41"/>
+					<Child Index="3" ObjectRef="42"/>
+					<Child Index="4" ObjectRef="43"/>
+					<Child Index="5" ObjectRef="44"/>
+				</Children>
+			</Node>
+			<DisplayName>Motion</DisplayName>
+			<Params Version="1">
+				<Param Index="0" ObjectRef="39"/>
+				<Param Index="1" ObjectRef="40"/>
+				<Param Index="2" ObjectRef="41"/>
+				<Param Index="3" ObjectRef="42"/>
+				<Param Index="4" ObjectRef="43"/>
+				<Param Index="5" ObjectRef="44"/>
+			</Params>
+			<Intrinsic>true</Intrinsic>
+		</Component>
+		<MatchName>AE.ADBE Motion</MatchName>
+		<VideoFilterType>2</VideoFilterType>
+	</VideoFilterComponent>
+	<FilterPreset ObjectID="46" ClassID="ee52a7d2-069e-47f7-aa30-e3e3286b65a3" Version="3">
+		<Component ObjectRef="45"/>
+		<MediaType>228cda18-3625-4d2d-951e-348879e4ed93</MediaType>
+		<Node Version="1">
+		</Node>
+		<Description></Description>
+		<Type>0</Type>
+		<FilterMatchName>AE.ADBE Motion</FilterMatchName>
+		<AnchorInPoint>0</AnchorInPoint>
+		<AnchorOutPoint>508032000000</AnchorOutPoint>
+		<Speed>1.</Speed>
+	</FilterPreset>
+	<FilterPresetItem ObjectID="47" ClassID="e56c9ba0-91cb-4f21-9174-c1b52448c6c9" Version="2">
+		<EffectItem Version="1">
+			<EffectFlavor>5</EffectFlavor>
+			<EffectIsShorcut>false</EffectIsShorcut>
+		</EffectItem>
+		<FilterPresets Version="1">
+			<FilterPreset Index="0" ObjectRef="38"/>
+			<FilterPreset Index="1" ObjectRef="46"/>
+		</FilterPresets>
+	</FilterPresetItem>
+	<TreeItem ObjectID="48" ClassID="025f59ac-1f29-42c0-9897-ada1059bd547" Version="3">
+		<TreeItemBase Version="4">
+			<Name>Slide Scale</Name>
+			<Node Version="1">
+			</Node>
+			<Data ObjectRef="47"/>
+			<Locked>false</Locked>
+		</TreeItemBase>
+	</TreeItem>
+	<VideoComponentParam ObjectID="49" ClassID="0fde4e9f-f895-4ba3-b0fe-9a6feafda583" Version="10">
+		<Name>Map Black To</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>5</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,18374686479671623680,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="50" ClassID="0fde4e9f-f895-4ba3-b0fe-9a6feafda583" Version="10">
+		<Name>Map White To</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>5</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,18374966858357964800,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="51" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Amount to Tint</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,50.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoFilterComponent ObjectID="52" ClassID="d10da199-beea-4dd1-b941-ed3a78766d50" Version="9">
+		<Component Version="7">
+			<Node Version="1">
+				<Children Version="1">
+					<Child Index="0" ObjectRef="49"/>
+					<Child Index="1" ObjectRef="50"/>
+					<Child Index="2" ObjectRef="51"/>
+				</Children>
+			</Node>
+			<DisplayName>Tint</DisplayName>
+			<Params Version="1">
+				<Param Index="0" ObjectRef="49"/>
+				<Param Index="1" ObjectRef="50"/>
+				<Param Index="2" ObjectRef="51"/>
+			</Params>
+			<Intrinsic>false</Intrinsic>
+		</Component>
+		<MatchName>AE.ADBE Tint</MatchName>
+		<VideoFilterType>2</VideoFilterType>
+	</VideoFilterComponent>
+	<FilterPreset ObjectID="53" ClassID="ee52a7d2-069e-47f7-aa30-e3e3286b65a3" Version="3">
+		<Component ObjectRef="52"/>
+		<MediaType>228cda18-3625-4d2d-951e-348879e4ed93</MediaType>
+		<Node Version="1">
+		</Node>
+		<Description></Description>
+		<Type>0</Type>
+		<FilterMatchName>AE.ADBE Tint</FilterMatchName>
+		<AnchorInPoint>0</AnchorInPoint>
+		<AnchorOutPoint>254016000000</AnchorOutPoint>
+		<Speed>1.</Speed>
+	</FilterPreset>
+	<VideoComponentParam ObjectID="54" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Opacity</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,80.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoComponentParam ObjectID="55" ClassID="6e02e8bb-2569-46b2-8ab1-4ab11c43e9c8" Version="10">
+		<Name>Blend Mode</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>7</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,0,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoFilterComponent ObjectID="56" ClassID="d10da199-beea-4dd1-b941-ed3a78766d50" Version="9">
+		<Component Version="7">
+			<Node Version="1">
+				<Children Version="1">
+					<Child Index="0" ObjectRef="54"/>
+					<Child Index="1" ObjectRef="55"/>
+				</Children>
+			</Node>
+			<DisplayName>Opacity</DisplayName>
+			<Params Version="1">
+				<Param Index="0" ObjectRef="54"/>
+				<Param Index="1" ObjectRef="55"/>
+			</Params>
+			<Intrinsic>true</Intrinsic>
+		</Component>
+		<MatchName>AE.ADBE Opacity</MatchName>
+		<VideoFilterType>2</VideoFilterType>
+	</VideoFilterComponent>
+	<FilterPreset ObjectID="57" ClassID="ee52a7d2-069e-47f7-aa30-e3e3286b65a3" Version="3">
+		<Component ObjectRef="56"/>
+		<MediaType>228cda18-3625-4d2d-951e-348879e4ed93</MediaType>
+		<Node Version="1">
+		</Node>
+		<Description></Description>
+		<Type>0</Type>
+		<FilterMatchName>AE.ADBE Opacity</FilterMatchName>
+		<AnchorInPoint>0</AnchorInPoint>
+		<AnchorOutPoint>254016000000</AnchorOutPoint>
+		<Speed>1.</Speed>
+	</FilterPreset>
+	<FilterPresetItem ObjectID="58" ClassID="e56c9ba0-91cb-4f21-9174-c1b52448c6c9" Version="2">
+		<EffectItem Version="1">
+			<EffectFlavor>5</EffectFlavor>
+			<EffectIsShorcut>false</EffectIsShorcut>
+		</EffectItem>
+		<FilterPresets Version="1">
+			<FilterPreset Index="0" ObjectRef="53"/>
+			<FilterPreset Index="1" ObjectRef="57"/>
+		</FilterPresets>
+	</FilterPresetItem>
+	<TreeItem ObjectID="59" ClassID="025f59ac-1f29-42c0-9897-ada1059bd547" Version="3">
+		<TreeItemBase Version="4">
+			<Name>Tinted</Name>
+			<Node Version="1">
+			</Node>
+			<Data ObjectRef="58"/>
+			<Locked>false</Locked>
+		</TreeItemBase>
+	</TreeItem>
+	<PointComponentParam ObjectID="60" ClassID="ca81d347-309b-44d2-acc7-1c572efb973c" Version="10">
+		<Name>Anchor Point</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>6</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,0.5:0.5,0,2,0.,0.166667,0.,0.166667,5,4,0.,0.,0.,0.</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</PointComponentParam>
+	<PointComponentParam ObjectID="61" ClassID="ca81d347-309b-44d2-acc7-1c572efb973c" Version="10">
+		<Name>Position</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>6</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,0.4:0.5,0,2,0.,0.166667,0.,0.166667,5,4,0.,0.,0.,0.</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</PointComponentParam>
+	<VideoFilterComponent ObjectID="62" ClassID="d10da199-beea-4dd1-b941-ed3a78766d50" Version="9">
+		<Component Version="7">
+			<Node Version="1">
+				<Children Version="1">
+					<Child Index="0" ObjectRef="60"/>
+					<Child Index="1" ObjectRef="61"/>
+				</Children>
+			</Node>
+			<DisplayName>Transform</DisplayName>
+			<Params Version="1">
+				<Param Index="0" ObjectRef="60"/>
+				<Param Index="1" ObjectRef="61"/>
+			</Params>
+			<Intrinsic>false</Intrinsic>
+		</Component>
+		<MatchName>AE.ADBE Geometry</MatchName>
+		<VideoFilterType>2</VideoFilterType>
+	</VideoFilterComponent>
+	<FilterPreset ObjectID="63" ClassID="ee52a7d2-069e-47f7-aa30-e3e3286b65a3" Version="3">
+		<Component ObjectRef="62"/>
+		<MediaType>228cda18-3625-4d2d-951e-348879e4ed93</MediaType>
+		<Node Version="1">
+		</Node>
+		<Description></Description>
+		<Type>0</Type>
+		<FilterMatchName>AE.ADBE Geometry</FilterMatchName>
+		<AnchorInPoint>0</AnchorInPoint>
+		<AnchorOutPoint>254016000000</AnchorOutPoint>
+		<Speed>1.</Speed>
+	</FilterPreset>
+	<FilterPresetItem ObjectID="64" ClassID="e56c9ba0-91cb-4f21-9174-c1b52448c6c9" Version="2">
+		<EffectItem Version="1">
+			<EffectFlavor>5</EffectFlavor>
+			<EffectIsShorcut>false</EffectIsShorcut>
+		</EffectItem>
+		<FilterPresets Version="1">
+			<FilterPreset Index="0" ObjectRef="63"/>
+		</FilterPresets>
+	</FilterPresetItem>
+	<TreeItem ObjectID="65" ClassID="025f59ac-1f29-42c0-9897-ada1059bd547" Version="3">
+		<TreeItemBase Version="4">
+			<Name>Old Transform</Name>
+			<Node Version="1">
+			</Node>
+			<Data ObjectRef="64"/>
+			<Locked>false</Locked>
+		</TreeItemBase>
+	</TreeItem>
+	<VideoComponentParam ObjectID="66" ClassID="fe47129e-6c94-4fc0-95d5-c056a517aaf3" Version="10">
+		<Name>Blurriness</Name>
+		<Node Version="1">
+		</Node>
+		<ParameterControlType>2</ParameterControlType>
+		<Keyframes></Keyframes>
+		<IsTimeVarying>false</IsTimeVarying>
+		<StartKeyframe>-91445760000000000,5.,0,2,0.,0.166667,0.,0.166667</StartKeyframe>
+		<CurrentValue>0</CurrentValue>
+		<ParameterID>-1</ParameterID>
+	</VideoComponentParam>
+	<VideoFilterComponent ObjectID="67" ClassID="d10da199-beea-4dd1-b941-ed3a78766d50" Version="9">
+		<Component Version="7">
+			<Node Version="1">
+				<Children Version="1">
+					<Child Index="0" ObjectRef="66"/>
+				</Children>
+			</Node>
+			<DisplayName>Gaussian Blur</DisplayName>
+			<Params Version="1">
+				<Param Index="0" ObjectRef="66"/>
+			</Params>
+			<Intrinsic>false</Intrinsic>
+		</Component>
+		<MatchName>AE.ADBE Gaussian Blur 2</MatchName>
+		<VideoFilterType>2</VideoFilterType>
+	</VideoFilterComponent>
+	<FilterPreset ObjectID="68" ClassID="ee52a7d2-069e-47f7-aa30-e3e3286b65a3" Version="3">
+		<Component ObjectRef="67"/>
+		<MediaType>228cda18-3625-4d2d-951e-348879e4ed93</MediaType>
+		<Node Version="1">
+		</Node>
+		<Description></Description>
+		<Type>0</Type>
+		<FilterMatchName>AE.ADBE Gaussian Blur 2</FilterMatchName>
+		<AnchorInPoint>0</AnchorInPoint>
+		<AnchorOutPoint>254016000000</AnchorOutPoint>
+		<Speed>1.</Speed>
+	</FilterPreset>
+	<FilterPresetItem ObjectID="69" ClassID="e56c9ba0-91cb-4f21-9174-c1b52448c6c9" Version="2">
+		<EffectItem Version="1">
+			<EffectFlavor>5</EffectFlavor>
+			<EffectIsShorcut>false</EffectIsShorcut>
+		</EffectItem>
+		<FilterPresets Version="1">
+			<FilterPreset Index="0" ObjectRef="68"/>
+		</FilterPresets>
+	</FilterPresetItem>
+	<TreeItem ObjectID="70" ClassID="025f59ac-1f29-42c0-9897-ada1059bd547" Version="3">
+		<TreeItemBase Version="4">
+			<Name>Blur In</Name>
+			<Node Version="1">
+			</Node>
+			<Data ObjectRef="69"/>
+			<Locked>false</Locked>
+		</TreeItemBase>
+	</TreeItem>
+	<BinTreeItem ObjectID="71" ClassID="5e0f46fa-384f-4c09-bc53-0b8e2b7005b5" Version="4">
+		<TreeItemBase Version="4">
+			<Name>Blurs</Name>
+			<Node Version="1">
+			</Node>
+			<Locked>false</Locked>
+		</TreeItemBase>
+		<Items Version="1">
+			<Item Index="0" ObjectRef="8"/>
+			<Item Index="1" ObjectRef="16"/>
+			<Item Index="2" ObjectRef="25"/>
+			<Item Index="3" ObjectRef="30"/>
+		</Items>
+		<Expanded>true</Expanded>
+		<Sorted>true</Sorted>
+	</BinTreeItem>
+	<BinTreeItem ObjectID="72" ClassID="5e0f46fa-384f-4c09-bc53-0b8e2b7005b5" Version="4">
+		<TreeItemBase Version="4">
+			<Name>Moves</Name>
+			<Node Version="1">
+			</Node>
+			<Locked>false</Locked>
+		</TreeItemBase>
+		<Items Version="1">
+			<Item Index="0" ObjectRef="48"/>
+			<Item Index="1" ObjectRef="59"/>
+			<Item Index="2" ObjectRef="65"/>
+			<Item Index="3" ObjectRef="70"/>
+		</Items>
+		<Expanded>true</Expanded>
+		<Sorted>true</Sorted>
+	</BinTreeItem>
+	<BinTreeItem ObjectID="73" ClassID="5e0f46fa-384f-4c09-bc53-0b8e2b7005b5" Version="4">
+		<TreeItemBase Version="4">
+			<Name>Presets</Name>
+			<Node Version="1">
+			</Node>
+			<Locked>false</Locked>
+		</TreeItemBase>
+		<Items Version="1">
+			<Item Index="0" ObjectRef="71"/>
+			<Item Index="1" ObjectRef="72"/>
+		</Items>
+		<Expanded>true</Expanded>
+		<Sorted>true</Sorted>
+	</BinTreeItem>
+	<BinTreeItem ObjectID="74" ClassID="5e0f46fa-384f-4c09-bc53-0b8e2b7005b5" Version="4">
+		<TreeItemBase Version="4">
+			<Name>Root</Name>
+			<Node Version="1">
+			</Node>
+			<Locked>false</Locked>
+		</TreeItemBase>
+		<Items Version="1">
+			<Item Index="0" ObjectRef="73"/>
+		</Items>
+		<Expanded>true</Expanded>
+		<Sorted>true</Sorted>
+	</BinTreeItem>
+</PremiereData>

@@ -5,11 +5,31 @@ Adobe Premiere Pro session for **transcript-driven, closed-loop video editing** 
 built entirely on Premiere's official UXP APIs (GA since 25.6), with fully local
 Whisper transcription.
 
-> **Status: experimental (v0.5.1).** Tested on Premiere Pro 27.1 / Windows 11
+> **Status: experimental (v0.6.0).** Tested on Premiere Pro 27.1 / Windows 11
 > (earlier releases also ran on 26.x). macOS is not supported yet.
-> Twenty-one whitelisted panel operations, checked against one action spec, plus
+> Forty-two whitelisted panel operations, checked against one action spec, plus
 > a Python library and CLI on top (edit plans, contact sheets, effect-preserving
-> clip swaps), reviewable in one sitting.
+> clip swaps, razor-free cuts, a listening report), reviewable in one sitting.
+
+## Get started in 3 steps
+
+1. **Download** `ppro-agent-bridge-v0.6.0.zip` from
+   [Releases](../../releases), right-click it and choose
+   **Extract All**.
+2. **Install:** in the extracted folder, double-click **`1 Install Premiere Agent Bridge.bat`**.
+   A window checks your computer, fixes what is missing and puts a **Premiere Agent Bridge**
+   shortcut on your desktop and in the Start menu.
+3. **Start and edit:** double-click that shortcut (or **`2 Start Premiere Agent Bridge.bat`**),
+   open Premiere Pro and its panel (`Window → UXP Plugins → Agent Bridge`). The panel tells you
+   what to send your AI helper (Claude Code or Codex).
+
+**中文：** 1. 从 Releases 下载 zip，右键「全部解压缩」。2. 双击 `1 Install Premiere Agent Bridge.bat`：
+它会检查电脑、补齐缺的东西，并在桌面和开始菜单放一个 **Premiere Agent Bridge** 快捷方式。
+3. 双击这个快捷方式（或 `2 Start Premiere Agent Bridge.bat`），打开 Premiere 和面板
+（窗口 → UXP 增效工具 → Agent Bridge），面板会告诉你该对 AI 助手说什么。
+
+From a git clone, the same two steps are `setup_bridge.bat` and `start_bridge.bat` in the
+repository root; details are under [Install & run](#install--run).
 
 ## Why this exists
 
@@ -39,9 +59,9 @@ agent / terminal / Python
       |   python cli/transcribe.py        (local Whisper, no Premiere needed)
       |   from ppro_bridge import ops     (the same commands as functions)
       v
-broker/broker.py          WebSocket hub, binds 127.0.0.1:8017 ONLY
+broker/broker.py          WebSocket hub, binds 127.0.0.1 and ::1 (port 8017) ONLY
       ^
-      |   UXP panels cannot listen on sockets, so the panel dials OUT
+      |   UXP panels cannot listen on sockets, so the panel dials OUT (ws://localhost:8017)
       v
 plugin/                   UXP panel inside Premiere (whitelisted executor)
       v
@@ -53,9 +73,12 @@ Premiere Pro project      every write is a named entry in Undo history
   `actions.json`, the action spec. `cli/*.py` are thin wrappers, so
   `cd cli && python ppro.py …` keeps working.
 - `plugin/` — `main.js` loads small modules from `plugin/lib/` (core, timeline,
-  project, effects, capabilities, handlers); `lib/spec.js` is generated from the
-  action spec, so the panel refuses unknown actions and bad params itself.
-- `broker/fake_panel.py` — an in-memory stand-in that answers all 21 actions.
+  project, effects, capabilities, export jobs, handlers, the Start bridge
+  launcher); `lib/spec.js` is generated from the action spec, so the panel refuses
+  unknown actions and bad params itself. `lib/build.js` says which build it is: a
+  dev build (`true`) also registers `api_smoke`, the test cases that change
+  Premiere; this repository, its release zips and `.ccx` packages say `dev: false`.
+- `broker/fake_panel.py` — an in-memory stand-in that answers every action.
 
 ## Requirements
 
@@ -76,8 +99,9 @@ Premiere Pro project      every write is a named entry in Undo history
    (Edge app mode: no address bar or tabs) and goes through the machine step by
    step: Python, the Python packages, Premiere (at least the panel manifest's
    minimum, 26.3), UXP Developer Tool and developer mode, then the optional
-   ffmpeg, Pillow and faster-whisper, and last a desktop shortcut, starting the
-   bridge with Windows and starting it now. Fixes are buttons, and it checks again
+   ffmpeg, Pillow and faster-whisper, and last a **Premiere Agent Bridge**
+   shortcut with the bridge's icon on the desktop and in the Start menu (type the
+   name in Start to find it), starting the bridge with Windows and starting it now. Fixes are buttons, and it checks again
    whenever you come back to the window. Without Python it opens a page that
    explains how to install it. `setup_bridge.bat --console` is the text version
    with y/n questions (`python -m ppro_bridge.doctor`; without `--interactive` it
@@ -89,7 +113,9 @@ Premiere Pro project      every write is a named entry in Undo history
    connects to it — at start-up, after a Premiere restart, after UXP Developer Tool
    restarts. No clicking **Load**. Open the panel in Premiere via
    `Window → UXP Plugins → Agent Bridge`; the status dot turns green when it is
-   connected to the broker.
+   connected to the broker. While no broker runs, the panel shows a **Start
+   bridge** button that opens `start_bridge.bat` for you (UXP asks once whether it
+   may). Closing the panel does not disconnect it: on 27.1 its code keeps running.
 
    Why UXP Developer Tool still has to run: Premiere only connects to a developer
    service that UXP Developer Tool announces through Adobe's own IPC; a look-alike
@@ -99,6 +125,11 @@ Premiere Pro project      every write is a named entry in Undo history
 
    By hand, as before: `python broker/broker.py` (without `--load-panel`), then UXP
    Developer Tool → **Add Plugin** → `plugin/manifest.json` → **Load**.
+
+   Without UXP Developer Tool (not tested yet): `python scripts/build_ccx.py`
+   packages the panel as a `.ccx` for Creative Cloud's plugin installer; it prints
+   the install command and runs nothing. See "Installing the panel as a .ccx" in
+   `SKILL.md`.
 3. Smoke test (with any project open):
    ```
    cd cli
@@ -153,11 +184,16 @@ only, nothing touches Premiere): `python -m unittest discover -s tests`.
 | `ping [--probe]` | Liveness check + version/protocol handshake (`compatible`, `actions`, `capabilities`, `denied`); `--probe` re-checks capabilities |
 | `get_project` | Active project / sequence name and guid |
 | `get_sequence` | Frame size, fps, duration, every track's name and clip count |
+| `set_active_sequence` | Open another sequence (by name or guid) for the next commands |
+| `select_items --track A1 --from 0 --to 60` | Select clips in the Timeline for what only Premiere's panels do (Properties › Enhance Audio); `--clear` |
 | `list_items [--track V3]` | Timeline clips as JSON (sequence start/end, source in/out, media path) — no OTIO round-trip |
 | `inspect_items [--track V5]` | Effect chains (params, keyframes in media time, added filters with `occurrence`) of timeline clips — what the editor changed |
-| `set_params --track V5 --at s --json fx.json` | Effect params and keyframes on one clip, with an explicit time base (`media`, `clip`, `sequence`); validated as a whole before anything changes. Audio tracks too (`A1`: the clip's own Volume) |
-| `set_volume --track A1 --at s --db -6` | Clip volume in dB as Premiere shows it, on one clip or every clip in `--from/--to`; verified |
+| `set_params --track V5 --at s --json fx.json` | Effect params and keyframes on one clip, with an explicit time base (`media`, `clip`, `sequence`), and keyframe interpolation (`"interpolation"`: new or existing keys); validated as a whole before anything changes. Audio tracks too (`A1`: the clip's own Volume) |
+| `set_volume --track A1 --at s --db -6` | Clip volume in dB as Premiere shows it, on one clip or the clips entirely inside `--from/--to` (`--mode overlap`: every clip touching it); verified |
 | `add_transition --track V5 --at s --match-name NAME --duration s --edge start\|end` | A video transition on a clip's start or end, read back from OTIO; refused where the edit point already has one (`TRANSITION_EXISTS`) |
+| `remove_transition --track V5 --at s --edge start\|end [--dry-run]` | Remove the video transition at a clip's start or end in one undo step; found in and verified against OTIO, saying which clip it lay on |
+| `remove_effect --track V5\|A1 --at s --match-name NAME [--occurrence n] [--dry-run]` | Remove one added effect (filter) from a clip in one undo step; built-in Motion / Opacity / volume are refused; the chain is read back |
+| `remove_keyframes --track V5\|A1 --at s --match-name NAME --param i (--all \| --from s --to s --time-base media\|clip\|sequence) [--keep-value]` | Remove one param's keyframes in a time range, or all of them (animation off, optionally keeping the clip's middle value); one undo step, read back |
 | `replace_clip --track V5 --at s --with "item" [--atrack A3] [--skip-effect NAME] [--dry-run]` | "Replace With Clip" that keeps effect params, keyframes, filters and the clip's own transitions without touching a neighbour's, verified by read-back; the new audio goes to a free track or the swap is refused, and so is a component the new clip cannot get |
 | `list_transition_names` | Video transition match names |
 | `list_project_items` | Project panel clips with bin and media path |
@@ -171,21 +207,36 @@ only, nothing touches Premiere): `python -m unittest discover -s tests`.
 | `probe_api [--output dump.json] [--diff old.json]` | This Premiere build's UXP API, with a watch list of the calls the UXP port needs |
 | `export_frame --dir d [--at sec] [--width W --height H]` | One frame of the program output (default: the sequence's frame size) |
 | `export_frames --dir d --at 4,18.5,31.6 [--sheet]` | Several frames, optionally a labelled contact sheet |
-| `import_media --path f [...] [--bin "Name"]` | Import media into the root or a bin (created if missing); returns the new item names |
+| `import_media --path f [...] [--bin "Name"] [--force]` | Import media into the root or a bin (created if missing); returns the new item names. Refuses codecs Premiere cannot read (VP9, AV1, Opus) with an ffmpeg command for each |
 | `insert_clip --item "name" [--at sec] [--vtrack N] [--atrack N] [--mode overwrite\|insert] [--in sec --out sec] [--label "text"]` | Place a clip — or, with `--in/--out`, just that source range ("cut by sentence") |
 | `apply_plan plan.json [--dry-run] [--notes-as-markers] [--any-sequence] [--report r.json]` | Execute a JSON edit plan: imports, frame-snapped placements, free audio-track routing, conflict check, verification of both legs |
 | `set_scale --track V3 --at sec (--fit \| --fill \| --value %)` | Motion › Scale, fit/fill computed per clip from the media size |
 | `set_fps --item "name" --fps 59.94 [--dry-run]` | Interpret footage (frame-rate override; affects every sequence) |
+| `subclip --item "name" --in s --out s --name "New" [--bin "Bin"] [--dry-run]` | A subclip of a project item (source seconds snapped to its frames) in a bin, read back; a name already in that bin is refused |
+| `relink --item "name" --to "<folder>/new.mov" [--force] [--dry-run]` | Point a project item at another media file once ffprobe finds it matches the old media (duration, fps, streams); lists every use, read back |
 | `add_marker --at sec --name "…" [--comment] [--color red]` | Sequence marker |
+| `list_markers` | The active sequence's markers: guid, name, comments, start, duration, type, colour |
+| `remove_marker (--guid g \| --name "…" [--at s]) [--dry-run]` | Remove one marker (a name several markers share needs `--at` or the guid); one undo step, read back |
+| `list_sequences` | Every sequence in the project: name, guid, active, and whether it is a bridge restore point |
+| `clone_sequence [--name "Seq"] [--keep 5] [--dry-run]` | Restore point before a risky edit: a tagged clone `"<name> [restore YYYY-MM-DD HH:MM]"` (not made active); the oldest restore points of that sequence beyond `--keep` are deleted |
+| `save_project` | Save the project and check that the project file's time stamp changed |
 | `remove_items --track V3 --from s --to s [--ripple --confirm-ripple] [--dry-run]` | Remove clips in a range (default: only those entirely inside) |
-| `split_clip --track V1 --at s [--dry-run]` | Split a clip without a razor (clone, trim, move); both halves keep volume, scaling and effects |
-| `cut_range --from s --to s [--track V1 …] [--captions V3 --srt f.srt] [--dry-run]` | Remove a time range from every track and close the gap on all of them in sync, in one undo step for the ripple; optionally conform a caption movie |
-| `extend_cut --at s [--out s] [--in s] [--extend V1 …] [--dry-run]` | Open up a cut (breathing room) with more of the clips' own source, everything after it moving right on all tracks in one step |
+| `split_clip --track V1 --at s [--render-check] [--dry-run]` | Split a clip without a razor (clone, trim, clone back; no clip is moved); both halves keep volume, scaling and effects |
+| `cut_range --from s --to s [--track V1 …] [--captions V3 --srt f.srt] [--render-check] [--dry-run]` | Remove a time range from every track and close the gap on all of them in sync, in one undo step for the ripple; optionally conform a caption movie |
+| `extend_cut --at s [--out s] [--in s] [--extend V1 …] [--render-check] [--dry-run]` | Open up a cut (breathing room) with more of the clips' own source, everything after it moving right on all tracks in one step |
+| `remove_project_items --bin "Bin" [--item "bin/name" …] [--dry-run]` | Remove bins and project items from the project in one undo step (media files stay on disk); refused while any sequence still uses an item |
+| `shift_items --from s --by s [--track V1 …] [--dry-run]` | Move everything at/after a time on all tracks (or the chosen ones) by whole frames in one undo step, keeping them in sync |
 | `snap_edges [--track V1 …] [--dry-run]` | Put clip edges that drifted microseconds off the frame grid back on it, so the picture cuts with the sound |
 | `conform_captions --track V3 --srt f.srt [--dry-run]` | Trim the pieces of a pre-rendered caption movie so no line flashes in at a cut |
 | `review_cuts [--track A1] [--render] [--words tr.json]` | **Listening report**: breathing room, clipped words, room-tone jumps and clicks at every cut, loudness with `--render`, plus the timeline lint |
 | `lint_timeline` | Slivers, cuts too close, gaps, overlaps, V/A cut mismatches, clips past the end, edges off the frame grid |
 | `export_audio --output f.wav [--render]` | The sequence's audio as a WAV (shadow mix of the sources, or Premiere's render) |
+| `list_presets [--format h264]` | Encoder presets (`.epr`) on disk, Premiere's own and yours, with the format each writes; no panel needed |
+| `export_video --preset NAME\|PATH --output f.mp4 [--overwrite] [--dry-run]` | Render the active sequence with a preset inside Premiere, then check the file with ffprobe: frame size, fps and length against the sequence |
+| `list_effects [--kind audio\|video]` | Effects Premiere can add: video filters (match + display name), audio filters (display name, in the UI language) |
+| `add_audio_effect --track A1 --at s --name "降噪" [--dry-run]` | Add an audio effect by its display name to the clip under a time: one undo step, verified; an unknown name lists the closest |
+| `list_effect_presets [--search text] [--file f.prfpset]` | Effect presets (`.prfpset`) on disk, Premiere's own and yours, with their effects, animation and how much `apply_preset` can replay; no panel needed |
+| `apply_preset --track V2 (--at s \| --from s --to s) --preset "name" [--dry-run]` | Apply an effect preset through `set_params`, keeping its timing anchor; what UXP cannot write (masks, colours, Lumetri curves) is skipped and reported; verified |
 
 Everything prints a single JSON object; failures carry a `code` and an `outcome`:
 `not_committed` (nothing changed), `committed` (the write ran but did not do what
@@ -233,7 +284,9 @@ each returns the command's data and raises `BridgeError` (`code`, `outcome`,
 accident. The guard (`project`, `projectPrefix`, `projectGuid`, `sequence`,
 `sequenceGuid`) is checked by the panel on the project and sequence it is about to
 touch; a mismatch is refused with `PROJECT_MISMATCH` / `SEQUENCE_MISMATCH` before
-anything changes.
+anything changes. `fingerprint` (get_sequence's) pins the timeline itself: the panel
+refuses a write that is not a dry run with `PRECONDITION_FAILED` once the timeline
+has changed.
 
 ## Protocol and capabilities
 
@@ -267,16 +320,22 @@ works around both without leaving Premiere's own edit model:
   cuts and gaps. `review.pad_cut_points` turns word timings into cut ranges with
   breathing room that never reach into a neighbouring word.
 - **Cutting** — `split_clip` and `cut_range` clone the clip (Premiere's track-item
-  clone keeps every attribute), trim the pieces and move them; the ripple after a
-  cut is one transaction across all chosen tracks, so tracks with gaps stay in sync
-  (Premiere's own ripple works per track). `extend_cut` does the opposite — it
-  opens a cut up with more of the clips' own source for breathing room. Every step
-  is read back; dry runs plan the exact steps without writing.
+  clone keeps every attribute), trim the pieces and clone the right piece into place;
+  the ripple after a cut is one transaction across all chosen tracks, so tracks with
+  gaps stay in sync (Premiere's own ripple works per track). `extend_cut` does the
+  opposite — it opens a cut up with more of the clips' own source for breathing room.
+  Every step is read back; dry runs plan the exact steps without writing. No command
+  moves a clip past another one on its track: on Premiere 27.1 such a move renders the
+  clip silent or blank while every read looks right (B1, below), so `trim_clip` refuses
+  it. `--render-check` proves an edit by render: one audio render of the sequence, each
+  audio piece compared with its own source's waveform (music over a silent piece cannot
+  hide it), and a frame in the middle of each video piece.
 - **Captions** — for a pre-rendered caption movie cut along with the A-roll,
   `conform_captions` reads the SRT it was rendered from and trims pieces that would
   flash a line for a few frames at a cut.
 - **Volume** — Volume › Level is linear in UXP (`dB = 20·log10(level) + 15`);
-  `set_volume` speaks dB. Track volume, pan and audio effects are out of UXP's reach.
+  `set_volume` speaks dB. Track volume and pan are out of UXP's reach; clip audio
+  effects are added by their display name (`add_audio_effect`).
 
 ## Transcription notes
 
@@ -330,11 +389,11 @@ against the spec. With `--write` it first copies the saved `.prproj` into its
 report folder, imports the test media into a new bin `PAB_SMOKE_<run id>`, works
 only in a scratch region after the end of the active sequence (top video track,
 a free audio track) — inserts, ranges, scale, effect params in all three time
-bases, a transition, `replace_clip`, a marker, transcript import and Speech-to-Text
-— then removes exactly the clips it placed (never ripple) and compares the
-timeline and project with how it found them. The bridge cannot remove project
-items or markers, so the `PAB_SMOKE_*` bins and markers stay (the report lists
-them); `--keep` also leaves the clips. Each check prints PASS, FAIL, SKIP or
+bases, a transition, `replace_clip`, a marker, transcript import, Speech-to-Text, a
+subclip placed whole and a relink round trip — then removes exactly the clips it placed (never ripple), removes its
+`PAB_SMOKE_*` bins with `remove_project_items` (after a dry run that finds them
+unused in every sequence) and compares the timeline and project with how it found
+them. Its markers stay (the report lists them); `--keep` leaves the clips and the bins too. Each check prints PASS, FAIL, SKIP or
 KNOWN_ISSUE (e.g. Premiere's empty transcript import); any FAIL exits 1.
 `tests/live/make_media.py <folder>` generates the media it expects with ffmpeg
 (`broll_audio.mp4`, `EN/title.mov`, `CN/title.mov`, optionally `speech_en.wav`).
@@ -351,12 +410,17 @@ pass, fail, absent, error or skipped; each case puts back what it changed and li
 anything it could not under `leftovers`. It also times a video export and
 `export_frame`, checks a phone clip for black frames (`--phone-media`) and, with
 `--watch-tracks`, times how long `get_sequence` takes to see a track you add. Reports:
-`report.json`, `api_smoke.md` and `probe_api.json` in `--out`.
+`report.json`, `api_smoke.md` and `probe_api.json` in `--out`. Only a dev build of
+the panel registers `api_smoke`; this repository and its release zips are release
+builds (`plugin/lib/build.js` says `dev: false`, ping reports `build.dev: false`), and
+the runner stops at once and says so. To run it, set that flag to `true` in your copy
+and Reload the panel in UXP Developer Tool.
 
 ## Security model
 
-- The broker binds **127.0.0.1 only**. No remote access, by design — do not
-  port-forward it.
+- The broker binds the loopback addresses **127.0.0.1 and ::1 only** (the panel's
+  `ws://localhost` arrives over ::1 on Windows). No remote access, by design — do
+  not port-forward it.
 - The broker accepts only two kinds of WebSocket handshake: none with an `Origin`
   header (the CLI) and `Origin: file://` (the UXP panel). Browsers let any page open
   a socket to localhost, but always send an Origin — the page's `http(s)` origin, or
@@ -365,9 +429,22 @@ anything it could not under `leftovers`. It also times a video export and
   from `%USERPROFILE%\.ppro-agent-bridge\token`, compared in constant time; a
   missing or wrong one gets `AUTH_FAILED` and the connection is closed before
   anything reaches Premiere. That keeps out local programs and other Windows users
-  that cannot read your profile. The panel may still register without the token (it
-  cannot read the file yet; a wrong one is refused), so a local program could stand
-  in for the panel while it is not connected — closing that is still to do.
+  that cannot read your profile.
+- The panel does not have the token yet (a wrong one is refused). Instead, a
+  connection must say hello within 10 s, a panel hello naming another plugin id is
+  refused (close 4403), and a registered panel is never replaced while its socket
+  is open — answering or busy, a newcomer is refused (4409). What is left: while no
+  panel is connected (Premiere closed, the broker just started), any local program —
+  another Windows user's too — can register as the panel and read the requests sent
+  to it (never reaching Premiere); and the panel trusts whatever answers on
+  `localhost:8017`: while no broker runs, a program listening there receives the
+  real panel and can send it whitelisted commands. The panel itself refuses network
+  (UNC) and device paths in every param it hands Premiere (the spec's `localPath`),
+  so such a program cannot make Premiere offer your credentials to another host. The
+  broker does not start beside such a program: when 127.0.0.1:8017 or `[::1]:8017`
+  (where the panel arrives first) is taken it exits and names the holder ("It is
+  held by PID n (name)"). On a machine you share, start the bridge before other
+  users' sessions.
 - The audit log records every request (action, shortened params, guard, outcome,
   queue and run time, the sequence and track counts Premiere reported), every
   refusal and every panel connection, so a session can be reconstructed afterwards.
@@ -381,10 +458,15 @@ anything it could not under `leftovers`. It also times a video export and
   a diff.
 - Requests can be pinned to a project and sequence (name, prefix or guid); the
   live smoke test uses this so it can only ever write into `PAB_TEST*` projects.
-- The panel manifest asks for `network: all` (UXP has been reported to reject
-  `localhost`/`127.0.0.1` as listed domains) and `localFileSystem: fullAccess`;
-  the code only dials the local broker and touches the paths it is given.
-  Tightening both needs a live test of a packaged panel and is planned for v0.5.
+- The panel manifest allows the network only to `ws://localhost/` (UXP takes no IP
+  address or port in that list; the panel dials `ws://localhost:8017`), may launch
+  only `.bat` and `.pyw` files (the Start bridge button; UXP asks the user first),
+  and asks for `localFileSystem: fullAccess`. The panel itself reads only its own
+  plugin folder (code hash, `launcher.json`) and lists the folder that should hold
+  `start_bridge.bat`; the media, frames, OTIO, renders and presets it is given
+  are opened by Premiere's own API calls with the paths in the request. Whether those
+  calls keep working under a lower level (`plugin`) is not measured, so
+  `fullAccess` stays until a live test shows it can go.
 - Every write operation lands in Premiere's Undo history under a caller-supplied
   label — the human always has a one-keystroke rollback.
 - Transcription is local; nothing is uploaded anywhere (Premiere's own
@@ -406,6 +488,7 @@ anything it could not under `leftovers`. It also times a video export and
 - Premiere 27.1.0 (builds 17 and 21) has no native razor (`capabilities.razor` is false);
   `split_clip` / `cut_range` split by clone + trim instead (more undo steps than a
   razor cut). Markers do not move with `cut_range`.
+- Timelines cut with `split_clip` / `cut_range` of bridge 0.4.0 to 0.5.1 can hold pieces that Premiere 27.1 renders silent or blank although every read looks right (B1, a clip moved past another on its track; fixed in 0.6.0). Find them with `review_cuts --render` and `export_frames`; SKILL.md "Cutting without a razor" says how to repair them.
 - The listening report's shadow mix ignores clip/track volume, effects and other
   tracks (`--render` hears Premiere's real mix). It hears sound, not meaning: a
   breath counts as sound, and picture problems show only in the lint. It also needs
@@ -413,19 +496,129 @@ anything it could not under `leftovers`. It also times a video export and
   media path, so the shadow mix refuses with `NO_MEDIA` — use `--render` there.
 - Speech-to-Text jobs are tracked by the panel and lost when it reloads.
 - UXP cannot add tracks, change speed, link/unlink clips or create captions; the
-  bridge refuses rather than working around these silently. It has no commands to
-  remove markers, transitions, keyframes or project items yet (the UXP calls exist;
-  `tests/live/api_smoke.py` checks them).
+  bridge refuses rather than working around these silently. Audio transitions are not
+  reachable at all, and neither is Enhance Audio (27.1): `select_items` selects the clips,
+  the user flips its toggle in the Properties panel once.
 - Frame export inherits a known Adobe double-extension quirk; the CLI resolves
   the real filename automatically (`resolvedPath`).
 - Placed media is not auto-scaled: a 4K clip in an HD-wide sequence lands as a
   2× crop. Use `set_scale --fit/--fill` (or `"scale"` in a plan).
 - Premiere 27.1 rejects `importFiles` without a real target bin; the bridge passes
   the root bin (or the named `--bin`).
+- The `.ccx` package is built and checked offline only: Creative Cloud's installer
+  on the test machine knows Premiere 26.5.2 but not the 27.1 Beta, so no install has
+  been tried yet.
 - Windows only; tested on Premiere 27.1 on one machine. Expect edges.
 
 ## Changelog
 
+- **0.6.0** — An icon: an L-cut (the picture cutting before the
+  sound) under an orange playhead on a deep purple tile (`ppro_bridge/bridge.svg`,
+  `bridge.ico` with every Windows size drawn on its own pixel grid by
+  `scripts/make_icon.py`). The setup's shortcut now carries it and goes in the Start
+  menu too; the setup window shows it. New since 0.5.1: `set_active_sequence` opens another
+  sequence for the next commands; `set_params` sets keyframe interpolation
+  (`"interpolation"`, on new or existing keys). New `remove_project_items` command:
+  bins and project items leave the project in one undo step, refused (`IN_USE`) while
+  any sequence in the project still uses one, read back afterwards. New `shift_items` command: everything
+  at/after a time on every track (or the chosen ones) moves by whole frames in one undo
+  step, with a dry run and a read-back, for room where `extend_cut` finds no edit point
+  (it now says so). Fixes from real jobs: `import_media` and `apply_plan` refuse files
+  Premiere cannot import (VP9, AV1, Opus — YouTube downloads hung the panel) before
+  sending anything, with an ffmpeg command for each (`--force` sends them anyway);
+  `apply_plan` and `replace_clip` read the video stream's own length, so a range past
+  the end of a picture that stops before its audio ends on the last frame
+  (`pictureEnds`) instead of landing frames short. **Changed behaviour:** `set_volume`
+  and `set_scale` with `--from/--to` now take only the clips entirely inside the range
+  (like `remove_items`); a neighbour that only touches it — ending where the range
+  starts, or starting where it ends — is left alone and listed in `skipped`.
+  `--mode overlap` gives the 0.5 behaviour. Hardening: `get_sequence` returns a timeline
+  **fingerprint**, and every write command takes `--expect-fingerprint` — the write is
+  refused (`PRECONDITION_FAILED`, nothing written) if the timeline changed since it was
+  read; paths Premiere would open are checked as typed, by the CLI and by the panel itself
+  (no UNC shares, which would offer the user's Windows credentials to that host, and no
+  Windows device paths, with no override: map a drive letter for a NAS; `\\?\<drive>:\`
+  long paths are fine; no NTFS data streams; exports keep `.png` / `.wav` / `.otio` /
+  `.epr`); the broker refuses writes
+  beyond 300 a minute (`WRITE_LIMIT`, a runaway-script guard; real jobs peaked at 118)
+  and can space writes out (`PPRO_WRITE_GAP_MS`, off by default).
+  New panel commands (phase 2): `list_markers` / `remove_marker` (by guid, or by name
+  with `--at`); `list_sequences` and `clone_sequence`, a restore point before a risky
+  edit (renamed "<name> [restore YYYY-MM-DD HH:MM]", tagged, not made active; `--keep 5`
+  deletes only the oldest untouched restore points of that sequence); `save_project`
+  (checks the file's time stamp); `remove_transition` (finds the transition in an OTIO
+  export, names its owner, verifies nothing else went), `remove_effect` (Motion, Opacity,
+  Time Remapping and the audio volume refused) and `remove_keyframes` (a range or all,
+  `--keep-value`), so extend_cut's KEYFRAMED refusal now hands over the exact
+  remove_keyframes command for each held key; `subclip` (snapped to the item's frames,
+  read back) and `relink` (refused unless ffprobe finds the new file matches the old
+  media; lists every use in every sequence); `list_presets` (Premiere's and the user's
+  .epr presets, format decoded) and `export_video` (renders through Premiere and checks
+  size, frame rate and length with ffprobe); `list_effects` and `add_audio_effect` (by
+  the localised display name, e.g. "降噪"); `select_items` selects clips in the Timeline
+  for what only Premiere's panels do — Enhance Audio cannot be added over UXP, but its
+  Properties toggle acts on every selected clip. Every write has a dry run, refuses before
+  changing anything, is one labelled undo step where Premiere allows, and is read back.
+  Panel hardening: a track or clip list that cannot be read is an error, not an empty
+  timeline; a `fingerprint` guard key the panel checks before any write
+  (`transport.make_rpc(guard={"fingerprint": fp})`; the same hash as get_sequence's,
+  pure-JS SHA-256); a 1000-action cap per undo step; `shift_items` checks room per track
+  in the panel too (ping `features`), so a left shift past a music bed is one step. The
+  live smoke runs remove their own test bins. Found in the live test: `set_params` sets a
+  static value on an audio-effect param Premiere left animated without keys (switching the
+  animation off in the same step); a subclip's range cannot be read back on 27.1
+  (`rangeVerified: false`); a clip list read right after a removal can hold a null for a
+  moment, so the panel reads it again.
+  Phase 2.5, ideas from other UXP plugins (khanjar, Kaltura, CorridorKey), each verified
+  on Premiere 27.1:
+  - **Connection.** The panel connects to `ws://localhost:8017`: the manifest's network
+    rule is `ws://localhost/`, because UXP accepts no IP address or port there. The broker
+    listens on 127.0.0.1 and ::1, and on Windows the panel arrives over ::1. The hello
+    carries the plugin id. A second panel is refused (4409) while the first is connected.
+    The panel's callbacks run inside an error guard. The broker does not start when another
+    program holds `[::1]:8017`: the panel would reach that program first (found in the
+    release review; only a machine without IPv6 gets a warning and 127.0.0.1 alone).
+  - **Start bridge.** With the broker down, the panel shows a **Start bridge** button that
+    opens `start_bridge.bat`; UXP asks once for consent. The broker's loader then leaves a
+    panel that already runs the same code alone, and starts UXP Developer Tool detached
+    from the broker's console, so closing the broker window no longer closes it.
+  - **Panel header.** The panel shows the bridge's icon above its log, in the website's
+    black-and-hairline look: the icon is in full colour while the broker is connected and
+    faded while it is not, so you can tell at a glance whether the bridge is running. Under
+    it, a first run gets two steps: open Claude Code or Codex in a folder for the job, then
+    paste a ready-made first message that names where this bridge is installed. The panel
+    speaks Chinese in a Chinese Premiere, English otherwise.
+  - **Effects on graphics.** `set_params` inserts new effects on a graphic before its text
+    layer; appended after it they did nothing. It waits for a new title's layers, which
+    arrive about a second after placement. The reply's `createdComponents` gives each new
+    effect's position.
+  - **Export as a job.** `export_video` renders with no fixed time limit (`--detach`,
+    `--job`), and a second render while one runs is refused (`EXPORT_RUNNING`). 27.1 fires
+    no encoder events, so a job ends when Premiere's export call returns. The stall check
+    counts the temporary files an H.264 render writes.
+  - **Effect presets.** `list_effect_presets` / `apply_preset` apply Premiere's `.prfpset`
+    effect presets (factory, Lumetri and your own) through `set_params`, keeping their
+    timing anchors. An added effect's param names are checked on the clip before anything
+    is written. Masks, colours and Lumetri curves are skipped and reported.
+  - **Packaging.** `scripts/build_ccx.py` builds a .ccx package (a release build, which
+    leaves out the `api_smoke` test action; the release zip is one too, its
+    `plugin/lib/build.js` saying `dev: false`), and `python -m ppro_bridge.doctor` adds a
+    read-only check of the installer. The installer on the test machine knows Premiere
+    26.5.2 but not the 27.1 Beta, so installing the package is not tested yet. ping
+    reports `build: {dev, packaged}`.
+  **Fixed (B1):** on Premiere 27.1 a clip moved past another clip on its track
+  (`createMoveAction`) renders silent (−180 dB) or blank (0 opaque pixels), and once the
+  clip it passed over went silent too, although `list_items` and `inspect_items` read
+  right. `split_clip` (and every split in `cut_range`) used that move for its last step
+  since 0.4.0; it now clones the parked copy straight to the cut and removes the parked
+  copy (5 undo steps instead of 4), measured clean by render on 3 Nov 2026. `trim_clip
+  moveTo` refuses a path that crosses or lands on another clip (`PRECONDITION_FAILED`),
+  and `cut_range` lost its per-clip move fallback for panels without `shift_items`. Timelines
+  cut with `split_clip` / `cut_range` before can hold such pieces: find them with
+  `review_cuts --render` and `export_frames`; re-place a silent audio piece with
+  `insert_clip` of the same source range (a nudge does not bring it back), nudge a blank
+  video piece a frame and back. New `--render-check` on `split_clip`, `cut_range` and
+  `extend_cut` (`RENDER_CHECK_FAILED` when a piece does not play).
 - **0.5.1** — The setup window (`setup_bridge.bat`) now matches the project page: pure
   black, black and white, a thin glass rim of light on its panels, serif step titles and
   white main buttons. The blurred background haze is gone (it banded on near-black), and
@@ -551,15 +744,13 @@ anything it could not under `leftovers`. It also times a video export and
 
 ## Roadmap
 
-- **v0.6 — MCP and more commands:** a stdio MCP server on the same `ppro_bridge`
-  library, `.ccx` packaging of the panel (no UXP Developer Tool needed), and new
-  commands on the calls `api_smoke` verified: removing markers, transitions,
-  effects and keyframes, sequence clones as restore points before risky edits,
-  subclips, relinking.
-- **Hardening still to do:** the panel sending the pairing token too, a write
-  guard and a sequence fingerprint as a precondition on writes, path checks,
-  tighter manifest permissions (`network`, `localFileSystem`), and failed reads
-  reported as failures rather than as an empty timeline.
+- **v0.7 — MCP:** a stdio MCP server on the same `ppro_bridge` library, with a
+  generic operation layer (`apply_ops` / `query`) next to the named commands.
+- **Hardening still to do:** the panel and the broker proving the pairing token to
+  each other (today a program that answers on `localhost:8017` while no broker
+  runs gets the panel); `localFileSystem` lowered from `fullAccess` once a live test shows
+  Premiere's import and export calls work without it; installing the `.ccx` on a
+  Premiere that Creative Cloud's installer knows.
 - Later: native razor once Premiere exposes it (fewer undo steps than clone + trim),
   range placement as one undo step via subclips, unique-ID clip addressing, sequence-level
   transcripts and SRT/caption export, a speaker diarization option in the Whisper

@@ -4,18 +4,53 @@ import struct
 import time
 from pathlib import Path
 
+from . import paths
+from .errors import BridgeError
+
 POLL = 0.05       # s between looks for the written file
+FRESH_SLACK = 2.0  # s: a file whose time stamp is this much older than the request still counts (coarse clocks)
 BLACK_MAX = 16    # 8-bit luma: a frame whose brightest pixel is no brighter than this is all black
 BLACK_WARNING = ("Premiere exported an all-black frame. On a real job some phone clips came out black here while "
                  "the Program monitor showed them fine (an export_frame problem, not the edit): look in Premiere "
                  "before acting on it.")
 
 
-def resolve_exported_frame(data: dict, *, wait: float = 5.0) -> dict:
+def check_times_inside(rpc, times: list) -> None:
+    """Refuse frame times the active sequence has no frame at (BAD_PARAMS, nothing exported): Premiere's
+    exportSequenceFrame answers a time at or past the sequence end with the frame at 0 s and says it exported.
+    Measured on 27.1 build 31 (3 Nov 2026, 253.41983 s = 15190 frames at 59.94): durationSeconds itself, +half a
+    frame, +1 frame and 300 s gave the 0 s picture (pixel-identical); half a frame and one frame before the end gave
+    the last frame (QA F-EF1 saw the same at 472.5 / 476 / 490 s on a 472.005 s sequence). One get_sequence call for
+    all of `times`; export_one_frame itself does not check (callers that know the duration skip the read)."""
+    if not times:
+        return
+    seq = rpc("get_sequence")
+    end = seq.get("durationSeconds")
+    if not isinstance(end, (int, float)):
+        return
+    outside = [t for t in times if t < 0 or t >= end]
+    if outside:
+        shown = ", ".join(f"{t:g}" for t in outside)
+        raise BridgeError(f'--at {shown}: "{seq.get("name")}" has frames from 0 to {end:.3f} s; Premiere would export '
+                          "the frame at 0 s for a time at or past the end. Nothing was exported.", code="BAD_PARAMS",
+                          outcome="not_committed", data={"outside": outside, "durationSeconds": end})
+
+
+def _fresh(p: Path, since: float | None) -> bool:
+    """`p` is a file written since `since` (time.time(), FRESH_SLACK of tolerance); any file when since is None."""
+    try:
+        return p.is_file() and (since is None or p.stat().st_mtime >= since - FRESH_SLACK)
+    except OSError:
+        return False
+
+
+def resolve_exported_frame(data: dict, *, wait: float = 5.0, since: float | None = None) -> dict:
     """Work around Adobe's double-extension bug and async file writes.
 
     Polls the candidate file names (export_frame's `candidates`) for up to `wait` seconds and sets `resolvedPath`
-    and `waitedSeconds`. If still missing, `resolvedPath` is None and `dirListing` shows what the directory holds.
+    and `waitedSeconds`. With `since` (time.time() before the request), only a file written since then counts: an
+    older frame of the same name (an earlier export into that folder) is not this export's. If still missing,
+    `resolvedPath` is None and `dirListing` shows what the directory holds (`staleFiles`: same-named older files).
     Returns `data`."""
     directory = data.get("dir")
     candidates = data.get("candidates") or []
@@ -24,17 +59,17 @@ def resolve_exported_frame(data: dict, *, wait: float = 5.0) -> dict:
 
     start = time.monotonic()
     deadline = start + wait
+    stem = candidates[0].split(".")[0] if candidates else ""
     while True:
         data["waitedSeconds"] = round(time.monotonic() - start, 3)
         for name in candidates:
             p = Path(directory) / name
-            if p.is_file():
+            if _fresh(p, since):
                 data["resolvedPath"] = str(p)
                 return data
         # fuzzy pass: anything sharing the stem (Premiere may rename)
-        stem = candidates[0].split(".")[0] if candidates else ""
         if stem:
-            stem_hits = [f.name for f in Path(directory).glob(f"{stem}*") if f.is_file()]
+            stem_hits = [f.name for f in Path(directory).glob(f"{stem}*") if _fresh(f, since)]
             if len(stem_hits) == 1:
                 data["resolvedPath"] = str(Path(directory) / stem_hits[0])
                 data["note"] = "Resolved by stem match; Premiere altered the filename."
@@ -48,8 +83,14 @@ def resolve_exported_frame(data: dict, *, wait: float = 5.0) -> dict:
         data["dirListing"] = sorted(f.name for f in Path(directory).iterdir() if f.is_file())[:50]
     except OSError:
         data["dirListing"] = None
-    data["note"] = (f"No matching file after {wait:g}s of polling. Check dirListing for the actual output name, "
-                    "or the sequence may be shorter than the requested --at time.")
+    stale = [n for n in candidates if (Path(directory) / n).is_file()]
+    if stale:
+        data["staleFiles"] = stale
+        data["note"] = (f"Premiere wrote no new frame within {wait:g}s: {', '.join(stale)} in that folder is older "
+                        "than this export (an earlier one), so it is not reported as the result.")
+    else:
+        data["note"] = (f"No matching file after {wait:g}s of polling. Check dirListing for the actual output name, "
+                        "or the sequence may be shorter than the requested --at time.")
     return data
 
 
@@ -83,15 +124,16 @@ def export_one_frame(rpc, directory, at: float | None = None, name: str | None =
     the PNG's size and `black` (with a `warning`). Raises BridgeError when the panel refuses."""
     if name is None:
         name = f"frame_{at:.3f}s.png" if at is not None else "frame_playhead.png"
+    name = paths.check_name(name, what="--name", ext=".png")  # a plain .png name inside `directory`
     params = {"dir": str(directory), "name": name}
     if width and height:
         params["width"], params["height"] = width, height
     if at is not None:
         params["atSeconds"] = at
-    start = time.monotonic()
+    start, since = time.monotonic(), time.time()
     data = rpc("export_frame", params)
     data["exportSeconds"] = round(time.monotonic() - start, 3)
-    resolve_exported_frame(data)
+    resolve_exported_frame(data, since=since)
     if data.get("resolvedPath"):
         data.update(frame_check(data["resolvedPath"]))
         if data.get("black"):

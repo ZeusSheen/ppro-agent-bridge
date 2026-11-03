@@ -2,7 +2,8 @@
 
 Imported by scripts/sync_version.py; also runnable on its own:  python scripts/panel_spec.py [--check]
 The panel uses it to refuse unknown actions and bad params before any handler runs, to know which actions may
-run while it is stuck or on a denied build, and which capability an action needs.
+run while it is stuck or on a denied build, which capability an action needs, and which actions are devOnly (tests
+that change Premiere: a release build, plugin/lib/build.js dev false, registers none of them).
 """
 
 import json
@@ -32,6 +33,7 @@ def panel_spec(spec: dict, version: str) -> dict:
         "actions": {a["name"]: {"kind": a["kind"], "capability": a["capability"],
                                 "allowedWhenStuck": a["allowedWhenStuck"], "allowedWhenDenied": a["allowedWhenDenied"],
                                 "timeoutSeconds": a["timeoutSeconds"], "requireOneOf": a.get("requireOneOf", []),
+                                "devOnly": a.get("devOnly", False),
                                 "params": _strip(a["params"])}
                     for a in spec["actions"]},
     }

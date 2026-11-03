@@ -190,11 +190,13 @@ module.exports = function (deps) {
     }
     if (sequence) {
       inst.editor = tryGetSync(() => ppro.SequenceEditor.getEditor(sequence));
-      const count = await timeline.trackCount(sequence, "video");
+      // Lenient on purpose: the probe only looks for sample instances, and an unreadable track leaves those
+      // flags "unknown" rather than failing ping (timeline reads are strict for edits and listings).
+      const count = await tryGet(() => timeline.trackCount(sequence, "video"), 0);
       for (let i = 0; i < count && !inst.trackItem; i++) {
         const track = await tryGet(() => sequence.getVideoTrack(i));
         if (i === 0) inst.videoTrack = track;
-        const clips = track ? await timeline.clipItems(track) : [];
+        const clips = track ? await tryGet(() => timeline.clipItems(track), []) : [];
         if (clips.length) inst.trackItem = clips[0];
       }
       if (inst.trackItem) {

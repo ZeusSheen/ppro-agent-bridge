@@ -72,6 +72,37 @@ module.exports = function (deps) {
     return out;
   }
 
+  // The components above a clip's effects: Opacity and Motion on every video clip, a graphic's Vector Motion
+  // (Graphic Group) and Time Remapping. A graphic or text clip's chain is [Opacity, Motion, Graphic Group, effects...,
+  // its Text / Shape layer components]: an effect after the layers does nothing to the graphic. Measured on 27.1 (2 Nov,
+  // Basic Title.mogrt: [Opacity, Motion, Graphic Group, Text]; a Gaussian Blur at 3 blurred the text, one after Text
+  // left the frame unchanged). Premiere adds the layers about a second after the graphic is placed (0.9 s).
+  const GRAPHIC_GROUP = "AE.ADBE Graphic Group";
+  const TOP_INTRINSICS = ["AE.ADBE Opacity", "AE.ADBE Motion", GRAPHIC_GROUP, "AE.ADBE Time Remapping"];
+  // Added by an editor but not creatable by VideoFilterFactory (Premiere 27's colour tools): placed like an effect.
+  const EFFECT_CONTAINERS = ["AE.ADBE CompoundComponent"];
+
+  /* A graphic's layer component: after its Graphic Group, neither a top intrinsic, an addable effect (`addable`: the
+   * match names VideoFilterFactory lists) nor an effect container. */
+  function isLayer(matchName, addable) {
+    return TOP_INTRINSICS.indexOf(matchName) < 0 && EFFECT_CONTAINERS.indexOf(matchName) < 0 && addable.indexOf(matchName) < 0;
+  }
+
+  /*
+   * Where new video effects go. On a graphic (a chain with a Graphic Group): right before its first layer component,
+   * where they act on it -> { index, tail: match names from index on, graphic: true, layers: count }; layers 0 (none
+   * yet, or the factory list `addable` unknown) -> the chain's length. Any other clip: an append, as before.
+   */
+  function insertionIndex(names, addable) {
+    const gg = names.indexOf(GRAPHIC_GROUP);
+    if (gg < 0) return { index: names.length, tail: [], graphic: false, layers: 0 };
+    const layers = addable ? names.slice(gg + 1).filter((m) => isLayer(m, addable)).length : 0;
+    for (let i = gg + 1; layers && i < names.length; i++) {
+      if (isLayer(names[i], addable)) return { index: i, tail: names.slice(i), graphic: true, layers };
+    }
+    return { index: names.length, tail: [], graphic: true, layers: 0 };
+  }
+
   /* The clip's effect chain: components (with occurrence) -> params -> value / keyframes (media time). */
   async function describeChain(trackItem, maxKf) {
     const chain = await tryGet(() => trackItem.getComponentChain());
@@ -151,8 +182,9 @@ module.exports = function (deps) {
    * One keyframe time -> media ticks.
    *   media: t;  clip: inPoint + t;  sequence: inPoint + (t - start)   (all in integer ticks)
    * clip / sequence need speed 1 (UNSUPPORTED otherwise); media time beyond 9 h -> BAD_PARAMS;
-   * outside [inPoint - half a sequence frame, outPoint + half a frame] -> KEYFRAME_OUT_OF_RANGE.
-   * o: { timeBase, t, start, inPoint, outPoint, speed, frameTicks }
+   * outside [inPoint - half a sequence frame, outPoint + half a frame] -> KEYFRAME_OUT_OF_RANGE, unless
+   * bounded is false (remove_keyframes: a trim can leave keyframes outside the clip).
+   * o: { timeBase, t, start, inPoint, outPoint, speed, frameTicks, bounded = true }
    */
   function convertKeyframeTime(o) {
     const where = o.where ? `${o.where}: ` : "";
@@ -180,7 +212,7 @@ module.exports = function (deps) {
       throw new BridgeError("BAD_PARAMS", `${where}keyframe at media ${media / TPS}s is beyond the 9 h limit`);
     }
     const half = isNum(o.frameTicks) && o.frameTicks > 0 ? Math.round(o.frameTicks / 2) : 0;
-    if (media < inT - half || media > outT + half) {
+    if (o.bounded !== false && (media < inT - half || media > outT + half)) {
       throw new BridgeError("KEYFRAME_OUT_OF_RANGE", `${where}keyframe ${o.timeBase} ${o.t}s is media ${media / TPS}s, ` +
         `outside the clip's [${o.inPoint}, ${o.outPoint}]s`);
     }
@@ -189,9 +221,46 @@ module.exports = function (deps) {
 
   const tickTimeFromTicks = core.tickTimeFromTicks;
 
+  /*
+   * Keyframe temporal interpolation: a name from Constants.InterpolationMode (27.1: LINEAR 0, HOLD 4, BEZIER 5,
+   * TIME 6, TIME_TRANSITION_START 7, TIME_TRANSITION_END 8), case and "-"/" " insensitive, or Premiere's own
+   * number 0-8 (1-3 are modes UXP does not name). -> { mode, name }
+   */
+  function interpolationMode(v, where) {
+    const modes = (ppro.Constants && ppro.Constants.InterpolationMode) || {};
+    if (typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 8) return { mode: v, name: interpolationName(v) };
+    if (typeof v === "string") {
+      const key = v.trim().toUpperCase().replace(/[\s-]+/g, "_");
+      if (core.hasOwn(modes, key)) return { mode: modes[key], name: key };
+    }
+    throw new BridgeError("BAD_PARAMS", `${where}: interpolation ${JSON.stringify(v)} is not one of ` +
+      `${Object.keys(modes).map((k) => k.toLowerCase()).join(", ")} (or Premiere's number 0-8)`);
+  }
+
+  function interpolationName(mode) {
+    const modes = (ppro.Constants && ppro.Constants.InterpolationMode) || {};
+    const hit = Object.keys(modes).filter((k) => modes[k] === mode)[0];
+    return hit || String(mode);
+  }
+
+  /* The param's value at 0, 25, 50, 75 and 100 % of the way from its first keyframe to its last: the curve an
+   * interpolation gives (linear moves a quarter of the way at 25 %). A key's mode itself is not read back:
+   * the panel reads keyframes with getKeyframeListAsTickTimes only (test_panel bans the per-key pointer call). */
+  async function curveSamples(param) {
+    const times = tryGetSync(() => param.getKeyframeListAsTickTimes(), []) || [];
+    if (times.length < 2) return [];
+    const a = core.ticksOf(times[0]);
+    const b = core.ticksOf(times[times.length - 1]);
+    const out = [];
+    for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+      out.push({ at: f, value: plainValue(await tryGet(() => param.getValueAtTime(tickTimeFromTicks(Math.round(a + (b - a) * f))))) });
+    }
+    return out;
+  }
+
   return {
-    MAX_MEDIA_SECONDS, TIME_BASES, SCALE_NAMES,
-    normalizeValue, toParamValue, plainValue, chainMatchNames, indexesOf, describeChain, findMotionScale,
-    speedIsOne, convertKeyframeTime, tickTimeFromTicks,
+    MAX_MEDIA_SECONDS, TIME_BASES, SCALE_NAMES, GRAPHIC_GROUP, TOP_INTRINSICS, EFFECT_CONTAINERS,
+    normalizeValue, toParamValue, plainValue, chainMatchNames, indexesOf, insertionIndex, describeChain, findMotionScale,
+    speedIsOne, convertKeyframeTime, tickTimeFromTicks, interpolationMode, interpolationName, curveSamples,
   };
 };

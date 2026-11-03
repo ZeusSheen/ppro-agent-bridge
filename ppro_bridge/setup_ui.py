@@ -222,8 +222,16 @@ class RealMachine:
         return True, "", str(doctor.make_shortcut(link.parent, minimized=minimized))
 
     def _shortcut_desktop(self):
+        """The desktop shortcut, and the same one in the Start menu (best effort: the desktop one is what counts)."""
         ok, message, output = self._shortcut("desktop", False)
-        return ok, message or "Created the 'Premiere Agent Bridge' shortcut on the desktop.", output
+        if not ok:
+            return ok, message, output
+        try:
+            menu = doctor.make_shortcut(doctor.start_menu_shortcut().parent, minimized=False)
+        except (OSError, subprocess.SubprocessError):
+            return True, "Created the 'Premiere Agent Bridge' shortcut on the desktop (not in the Start menu).", output
+        return True, "Created the 'Premiere Agent Bridge' shortcut on the desktop and in the Start menu.", \
+            f"{output}\n{menu}"
 
     def _autostart_on(self):
         ok, message, output = self._shortcut("autostart", True)
@@ -456,11 +464,13 @@ class _Handler(BaseHTTPRequestHandler):
         origin, site = self.headers.get("Origin"), self.headers.get("Sec-Fetch-Site")
         if (self.headers.get_all("Host") or []) != [app.host] or (origin is not None and origin != app.origin) \
                 or (site is not None and site not in ("same-origin", "none")):
+            self._discard_body()
             self._plain(403, "forbidden")
             return None
         path = urllib.parse.urlsplit(self.path).path
         secret, sep, route = path[1:].partition("/") if path.startswith("/") else ("", "", "")
         if not sep or not hmac.compare_digest(secret.encode("utf-8"), app.secret.encode("utf-8")):
+            self._discard_body()
             self._plain(404, "not found")
             return None
         app.touch()
@@ -477,11 +487,26 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         if length <= 0 or length > MAX_BODY:
             return None
+        raw = self.rfile.read(length)
+        self._body_read = True
         try:
-            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            body = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
             return None
         return body if isinstance(body, dict) else None
+
+    def _discard_body(self):
+        """Read and drop a refused request's body (up to MAX_BODY) before replying: Windows resets a socket closed
+        with unread data, and the client then gets ConnectionAbortedError instead of the 403 / 404."""
+        if getattr(self, "_body_read", False) or self.headers.get("Transfer-Encoding"):
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return
+        if 0 < length <= MAX_BODY:
+            self.rfile.read(length)
+            self._body_read = True
 
     # -- replies
 
@@ -525,14 +550,17 @@ class _Handler(BaseHTTPRequestHandler):
             self._plain(404, "not found")
 
     def do_POST(self):
+        self._body_read = False
         route = self._admit()
         if route is None:
             return
         if route not in POST_ROUTES:
+            self._discard_body()
             self._plain(405 if route in GET_ROUTES else 404, "use GET" if route in GET_ROUTES else "not found")
             return
         body = self._json_body()
         if body is None:
+            self._discard_body()
             self._plain(403, "forbidden")
             return
         app = self.server.app

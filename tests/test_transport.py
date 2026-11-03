@@ -137,6 +137,25 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(data["protocol"], 2)
         self.assertEqual(len(broker.received), 1)
 
+    def test_fingerprint_guard_needs_a_panel_that_checks_it(self):
+        guard = dict(self.GUARD, fingerprint="0123456789abcdef")
+
+        def reply(features):
+            return lambda m: {"ok": True, "data": {"protocol": 2, "features": features} if m["action"] == "ping"
+                              else {"placed": True}}
+        broker = ScriptedBroker(reply(["fingerprintGuard"]))
+        transport.make_rpc(url=broker.url, guard=guard)("add_marker", {"atSeconds": 1.0, "name": "x"})
+        self.assertEqual(broker.received[-1]["guard"], guard)
+        old = ScriptedBroker(reply([]))  # a 0.5 panel would refuse the unknown guard key; say why before that
+        with self.assertRaises(BridgeError) as cm:
+            transport.make_rpc(url=old.url, guard=guard)("add_marker", {"atSeconds": 1.0, "name": "x"})
+        self.assertEqual((cm.exception.code, cm.exception.data), ("PANEL_OUTDATED", {"missingFeature": "fingerprintGuard"}))
+        self.assertEqual([m["action"] for m in old.received], ["ping"])
+        for bad in ("ABCDEF0123456789", "0123", 12):
+            with self.subTest(fingerprint=bad), self.assertRaises(BridgeError) as cm:
+                transport.make_rpc(url=old.url, guard={"fingerprint": bad})
+            self.assertEqual(cm.exception.code, "BAD_PARAMS")
+
 
 class LostTest(unittest.TestCase):
     def test_lost_before_and_after_send(self):

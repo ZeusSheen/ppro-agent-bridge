@@ -7,10 +7,12 @@ import helpers  # noqa: F401  (first: points PPRO_BRIDGE_URL at a dead port)
 
 import json
 import math
+import os
 import random
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from array import array
 from pathlib import Path
@@ -607,6 +609,19 @@ class ReviewCutsTest(unittest.TestCase):
         with self.assertRaises(BridgeError) as cm:
             review.review_cuts(rpc, out_dir=self.dir / "none", render=True, preset=self.preset)
         self.assertEqual(cm.exception.code, "EXPORT_FAILED")
+
+    def test_an_earlier_render_of_the_same_name_is_not_this_render(self):
+        """Premiere writing nothing new must not make the last run's <name>_render.wav look like this run's mix."""
+        out = self.dir / "stale"
+        out.mkdir()
+        old = out / "review_render_render.wav"
+        review.write_wav(old, place(), RATE)
+        os.utime(old, (time.time() - 3600,) * 2)
+        rpc = self.rpc(export_sequence=lambda p: {"exported": True, "outputPath": p["outputPath"], "preset": "x"})
+        with self.assertRaises(BridgeError) as cm:
+            review.export_audio(rpc, output=out / "review_render.wav", render=True, preset=self.preset)
+        self.assertEqual((cm.exception.code, cm.exception.data["stale"]), ("EXPORT_FAILED", True))
+        self.assertIn("earlier render", str(cm.exception))
 
     def test_render_needs_a_preset_before_any_panel_call(self):
         rpc = stub_rpc({})

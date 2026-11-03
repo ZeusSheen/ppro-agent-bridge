@@ -16,22 +16,62 @@
  * callback form imports), stt-pending (Speech-to-Text never settles).
  * Knobs (options.mock): failTransactions [label substrings -> executeTransaction returns false],
  * exportFails, exportThrows, importFails, sttReject, timebase (ticks per frame as a string; default
- * "4237833600" = 59.94), noTimebase (getTimebase throws). Exporters also fail for paths containing /no/such/
+ * "4237833600" = 59.94), noTimebase (getTimebase throws), cloneLost (Sequence#createCloneAction adds no sequence),
+ * cloneTwice (it adds two), frameSizeIgnored (createSetSettingsAction keeps the frame size),
+ * deleteSequenceFails (Project#deleteSequence returns false and keeps the sequence), transitionSides (a clip's
+ * createRemoveVideoTransitionAction leaves a neighbour's single-sided fade at that edit point alone),
+ * noAudioFilters (no AudioFilterFactory), videoDisplayNames (what VideoFilterFactory.getDisplayNames returns),
+ * relinkFails (changeMediaFilePath returns false and changes nothing), noRelink (canChangeMediaPath answers false),
+ * subclipLandsInRoot (a new subclip goes to the root bin instead of its source's). Exporters also fail for paths
+ * containing /no/such/
  * (a missing folder); EncoderManager#exportSequence throws "Unable to initialize export!" for such a preset path.
+ * exportJob {progress: [values], stepMs, result: complete | error | cancel | silent | never, resolve (what the promise
+ * gives: true / false / "throw"), deliver: EventManager | encoder | both | none, projectState (an ExportMediaComplete
+ * event on the project with that state), extraEvents [{atMs, name, target: encoder | project, fields}] (events from
+ * something else, e.g. a frame export, at those times)} makes exportSequence a render that takes time (NOT measured: which events
+ * 27.1 fires, on which route, and their shape are what the live test finds out): a progress event every stepMs
+ * (default 50; values as given, e.g. 25 for 0-100 scales), then the result's event and the promise; silent fires
+ * nothing; never neither ends nor settles. Events are objects with prototype getters (type, plus progress or
+ * message), sent to listeners added through ppro.EventManager.addEventListener(target, name, fn) or the target's own
+ * addEventListener, as `deliver` says (default EventManager). record.listeners logs every add / remove.
+ * Failed reads (not measured: what a broken read looks like is the point): failTrackItems ["V2", ...] -> that
+ * track's getTrackItems throws; nullTrackItems [labels] -> it returns null; holeTrackItems {label: n} -> its first n
+ * clip lists carry a null where a clip was just removed (seen live on 27.1); selectionIgnored -> Sequence#setSelection
+ * returns false and keeps the old selection; failTrackCount ["video" | "audio"] ->
+ * get<Kind>TrackCount throws. seedItems [{track: "V3", name, start, end, inPoint, outPoint, speed?, disabled?,
+ * mediaPath? (absent / null: no project item), graphic? (a graphic's chain, see GRAPHIC_CHAIN), layersAfterMs? (a
+ * graphic's Text layer arrives that long after loading, as on 27.1 ~0.9 s after placing; -1: never), components?
+ * (match names of EFFECTS: the clip's whole chain)}] adds clips to the default sequence (fingerprint parity tests,
+ * effect order on graphics).
  *
  * Documented-only calls (api_smoke exercises them; semantics from Adobe's docs, NOT measured): marker setters /
  * move / remove, transition removal, component insert / remove, keyframe removal / interpolation (values interpolate
  * linearly between keys unless a key holds), sequence list / clone / activate / delete / settings / in-out /
  * selection / player position, work area, track rename, clip rename / disable, bin rename / colour / move / remove,
- * subclips, relinking, custom Properties, project save, FCP XML / AAF export, filter name lists, audio filters by
- * display name, MOGRT insertion, the Source monitor. Knob projectName renames the project.
+ * subclips (live: only the object form {takeVideo, takeAudio} of the last argument works, the positional booleans
+ * threw — the mock throws for them too; a subclip's own in/out via getInPoint / getOutPoint, the media length via
+ * getMedia().getDuration(), the subclip landing next to its source and a subclip placed whole giving its range are
+ * documented or assumed only), relinking (changeMediaFilePath(path, true) + refreshMedia live), custom Properties,
+ * project save, FCP XML / AAF export, the video filter name lists, MOGRT insertion, the Source monitor. Knob
+ * projectName renames the project. A sequence clone is named "<name> Copy" (live 27.1 on a Chinese UI:
+ * "<name> 副本"), is not made active, and here keeps a copy of the source's custom Properties (an assumption, not
+ * measured: it is the case clone_sequence must survive). Audio filters by display name were run live by api_smoke
+ * (27.1 b21: 55 localised names listed, "降噪" created, appended, read back, removed).
  * Track items follow the semantics measured on Premiere 27.1 build 17: createSetStartAction /
  * createSetInPointAction trim the head (start and in point move by the same delta, end stays),
  * createSetEndAction / createSetOutPointAction trim the tail, createMoveAction moves BY its time (relative).
  * SequenceEditor#createCloneTrackItemAction copies only the given item (effects included) offset later,
  * overwriting the destination. Like Premiere, sequence times are kept as given (never snapped to frames);
- * record.times lists the ticks every time-taking action received, edgeTicks() every item's edges in ticks. Audio clips carry the measured mono chain: one "Internal Volume Mono"
+ * record.times lists the ticks every time-taking action received, edgeTicks() every item's edges in ticks,
+ * record.componentActions every component append / insert created ({kind, matchName, index?}). Audio clips carry the measured mono chain: one "Internal Volume Mono"
  * component, param 0 bypass (boolean), param 1 Level (linear; 0 dB = 0.17782793939113617).
+ * The uxp module (documented, not measured): storage entries carry nativePath; localFileSystem.getPluginFolder()
+ * is options.pluginFolder (a folder to stand in for the plugin folder, e.g. one with a launcher.json) or the folder
+ * main.js came from; localFileSystem.getEntryWithUrl("file:/<drive>:/...") finds a real file or folder (raw or
+ * percent-encoded) and throws for a missing one; shell.openPath(path, developerText) is recorded in
+ * record.openPath and resolves to "" (started). Knobs: openPath (a string every call resolves to, or
+ * {".bat": ..., ".pyw": ...} by extension; "throw:<text>" throws), noShell (no uxp.shell), noEntryWithUrl (no
+ * getEntryWithUrl), uiLocale (uxp.host.uiLocale; default "en_US").
  */
 const fs = require("fs");
 const path = require("path");
@@ -39,6 +79,7 @@ const path = require("path");
 const TPS = 254016000000;
 const EPS = 1e-4; // seconds: overlap tolerance of the mock timeline
 const LEVEL_0DB = 0.17782793939113617; // Premiere's linear audio Level at 0 dB (measured, 27.1 b17)
+const DENOISE_GUID = "c6762838-e451-4d22-9c90-b0eaa734605a"; // match name of "降噪" (measured, 27.1 b21)
 const SCENARIOS = ["default", "no-project", "no-sequence", "26.4", "transcript-empty-import",
   "transcript-callback-import", "stt-pending"];
 const SPEAKER = "3f2b6c1e-8a4d-4c2e-9b7a-1d2e3f4a5b6c";
@@ -67,7 +108,8 @@ function createMocks(options) {
   const knobs = opts.mock || {};
   const record = {
     transactions: [], failedTransactions: [], actionsCreated: 0, violations: [], sttCalls: [],
-    exports: [], imports: [], textSegmentsCalls: 0, clones: [], times: [],
+    exports: [], imports: [], textSegmentsCalls: 0, clones: [], times: [], subclips: [], relinks: [], listeners: [],
+    componentActions: [],
   };
   let lockDepth = 0;
   let idCounter = 0;
@@ -101,10 +143,27 @@ function createMocks(options) {
   class PointF {
     constructor(x, y) { this.x = x; this.y = y; }
   }
+  // 27.1 keeps width / height as prototype accessors (JSON.stringify shows {}): so do the mocks
+  class RectF {
+    constructor() { this._w = 0; this._h = 0; }
+    get width() { return this._w; }
+    set width(v) { this._w = v; }
+    get height() { return this._h; }
+    set height(v) { this._h = v; }
+  }
   const copyValue = (v) => (v instanceof PointF ? new PointF(v.x, v.y) : v);
 
+  // Constants.InterpolationMode as Premiere 27.1 reports it (1-3 unnamed)
+  const INTERPOLATION = { LINEAR: 0, HOLD: 4, BEZIER: 5, TIME: 6, TIME_TRANSITION_START: 7, TIME_TRANSITION_END: 8 };
+
   class Keyframe {
-    constructor(value) { this.value = value; this.position = TickTime.createWithSeconds(0); }
+    constructor(value, mode) {
+      this.value = value;
+      this.position = TickTime.createWithSeconds(0);
+      this._mode = mode === undefined ? INTERPOLATION.LINEAR : mode;
+    }
+    getTemporalInterpolationMode() { return this._mode; }
+    setTemporalInterpolationMode(mode) { this._mode = mode; }
   }
 
   class MockParam {
@@ -117,7 +176,7 @@ function createMocks(options) {
     clone() {
       const p = new MockParam(this.displayName, copyValue(this._value));
       p._timeVarying = this._timeVarying;
-      p._keys = this._keys.map((k) => ({ ticks: k.ticks, value: copyValue(k.value) }));
+      p._keys = this._keys.map((k) => ({ ticks: k.ticks, value: copyValue(k.value), mode: k.mode }));
       return p;
     }
     isTimeVarying() { return this._timeVarying; }
@@ -131,7 +190,7 @@ function createMocks(options) {
           const a = keys[i];
           const b = keys[i + 1];
           if (t.ticksNumber < b.ticks) {
-            if (a.mode === "HOLD" || typeof a.value !== "number" || typeof b.value !== "number") return a.value;
+            if (a.mode === INTERPOLATION.HOLD || typeof a.value !== "number" || typeof b.value !== "number") return a.value;
             return a.value + (b.value - a.value) * (t.ticksNumber - a.ticks) / (b.ticks - a.ticks);
           }
         }
@@ -164,9 +223,10 @@ function createMocks(options) {
     createAddKeyframeAction(kf) {
       const ticks = kf.position.ticksNumber;
       const value = kf.value;
+      const mode = kf._mode;
       return makeAction("createAddKeyframeAction", () => {
         this._keys = this._keys.filter((k) => k.ticks !== ticks);
-        this._keys.push({ ticks, value });
+        this._keys.push({ ticks, value, mode });
         this._keys.sort((a, b) => a.ticks - b.ticks);
       });
     }
@@ -202,21 +262,40 @@ function createMocks(options) {
       new MockParam("Input LUT", 0), new MockParam("Exposure", 0), new MockParam("Contrast", 0), new MockParam("Saturation", 100)]),
     "AE.ADBE DeNoise": () => new MockComponent("AE.ADBE DeNoise", "DeNoise", [
       new MockParam("Bypass", false), new MockParam("Amount", 40)]),
+    // MEASURED (27.1 b21, Chinese UI, 22 Oct 2026): "降噪" added by display name has a GUID match name and six
+    // params that all report isTimeVarying right after adding (keyframe count unmeasured; none here)
+    [DENOISE_GUID]: () => new MockComponent(DENOISE_GUID, "降噪", [
+      ["旁路", false], ["数量", 0.4], ["补充增益", 0], ["自动增益", 0], ["搁架式", 0], ["输出差分信号", 0],
+    ].map(([n, v]) => { const p = new MockParam(n, v); p._timeVarying = true; return p; })),
     // audio: the chain measured on a mono clip (27.1 b17); stereo clips are unprobed
     "Internal Volume Mono": () => new MockComponent("Internal Volume Mono", "Volume", [
       new MockParam("Bypass", false), new MockParam("Level", LEVEL_0DB)]),
+    // a graphic's own components (not addable): its Vector Motion and a text layer ("AE.ADBE Text" is a stand-in;
+    // the layer's real match name is unmeasured)
+    "AE.ADBE Graphic Group": () => new MockComponent("AE.ADBE Graphic Group", "Vector Motion", [
+      new MockParam("Position", new PointF(540, 960)), new MockParam("Scale", 100), new MockParam("Rotation", 0)]),
+    "AE.ADBE Text": () => new MockComponent("AE.ADBE Text", "Text", [
+      new MockParam("Source Text", "Title"), new MockParam("Transform Position", new PointF(540, 960))]),
+    // an effect VideoFilterFactory does not list (third-party or obsolete): not addable, but no graphic layer either
+    "AE.Unlisted Effect": () => new MockComponent("AE.Unlisted Effect", "Unlisted", [new MockParam("Amount", 0)]),
   };
   const ADDABLE = ["AE.ADBE Gaussian Blur 2", "AE.ADBE Crop", "AE.ADBE Lumetri"];
-  const AUDIO_FILTERS = { "DeNoise": "AE.ADBE DeNoise" };
+  // A graphic or text clip's chain (27.1, 2 Nov, Basic Title.mogrt): Opacity, Motion, Graphic Group, the effects, the
+  // graphic's layer components last (an effect after them left the frame unchanged).
+  const GRAPHIC_CHAIN = () => ["AE.ADBE Opacity", "AE.ADBE Motion", "AE.ADBE Graphic Group", "AE.ADBE Text"].map((m) => EFFECTS[m]());
+  // display name -> match name (AudioFilterFactory lists display names only; the same two as broker/fake_panel.py)
+  const AUDIO_FILTERS = { "DeNoise": "AE.ADBE DeNoise", "降噪": DENOISE_GUID };
 
   class MockChain {
     constructor(components) { this._components = components; }
     getComponentCount() { return this._components.length; }
     getComponentAtIndex(i) { return this._components[i] || null; }
     createAppendComponentAction(comp) {
+      record.componentActions.push({ kind: "append", matchName: comp._matchName });
       return makeAction("createAppendComponentAction", () => { this._components.push(comp); });
     }
     createInsertComponentAction(comp, index) {
+      record.componentActions.push({ kind: "insert", matchName: comp._matchName, index });
       return makeAction("createInsertComponentAction", () => { this._components.splice(index, 0, comp); });
     }
     createRemoveComponentAction(comp) {
@@ -237,6 +316,7 @@ function createMocks(options) {
       this._hasAudio = o.hasAudio !== false;
       this._id = `pi-${++idCounter}`;
       this._range = null;
+      this._subRange = null; // a subclip's bounds in media time
       this._fps = null;
       this._transcript = o.transcript || null;
     }
@@ -244,11 +324,19 @@ function createMocks(options) {
     getParentBin() { return this._parent || null; }
     async getMediaFilePath() { return this._media; }
     async isSequence() { return this._isSequence; }
-    async canChangeMediaPath() { return true; }
-    async changeMediaFilePath(p) { this._media = p; return true; }
+    async canChangeMediaPath() { return !knobs.noRelink; }
+    async changeMediaFilePath(p, override) {
+      record.relinks.push({ item: this.name, path: p, override: override === undefined ? null : override });
+      if (knobs.relinkFails) return false;
+      this._media = p;
+      return true;
+    }
     async refreshMedia() { return true; }
     async isOffline() { return false; }
-    async getFootageInterpretation() { const fps = this._fps || 59.94; return { getFrameRate() { return fps; }, getPixelAspectRatio() { return 1; } }; }
+    async getFootageInterpretation() { const fps = this._fps || 60000 / 1001; return { getFrameRate() { return fps; }, getPixelAspectRatio() { return 1; } }; }
+    async getMedia() { const d = this._duration; return { getDuration() { return TickTime.createWithSeconds(d); } }; }
+    async getInPoint() { const r = this._range || this._subRange; return TickTime.createWithSeconds(r ? r.in : 0); }
+    async getOutPoint() { const r = this._range || this._subRange; return TickTime.createWithSeconds(r ? r.out : this._duration); }
     createSetNameAction(name) { return makeAction("createSetNameAction", () => { this.name = name; }); }
     createSetColorLabelAction(i) { return makeAction("createSetColorLabelAction", () => { this._label = i; }); }
     async getColorLabelIndex() { return this._label === undefined ? 0 : this._label; }
@@ -259,10 +347,21 @@ function createMocks(options) {
     }
     createClearInOutPointsAction() { return makeAction("createClearInOutPointsAction", () => { this._range = null; }); }
     createSetOverrideFrameRateAction(fps) { return makeAction("createSetOverrideFrameRateAction", () => { this._fps = fps; }); }
-    createSubClipAction(name, start, end) {
+    // (name, start, end, hasHardBoundaries, {takeVideo, takeAudio}): positional booleans threw on 27.1
+    createSubClipAction(name, start, end, hard, take) {
+      if (!take || typeof take !== "object" || typeof take.takeVideo !== "boolean" || typeof take.takeAudio !== "boolean") {
+        throw new Error("Illegal Parameter type");
+      }
+      noteTime("createSubClipAction", "in", start);
+      noteTime("createSubClipAction", "out", end);
       return makeAction("createSubClipAction", () => {
-        const sub = new MockClip({ name, mediaPath: this._media, duration: end.seconds - start.seconds });
-        (this._parent || root).adopt(sub);
+        record.subclips.push({ name, in: start.ticksNumber, out: end.ticksNumber, hard, takeVideo: take.takeVideo,
+          takeAudio: take.takeAudio });
+        const sub = new MockClip({ name, mediaPath: this._media, duration: this._duration,
+          hasAudio: this._hasAudio && take.takeAudio });
+        sub._subRange = { in: start.seconds, out: end.seconds };
+        sub._fps = this._fps;
+        (knobs.subclipLandsInRoot ? root : (this._parent || root)).adopt(sub);
       });
     }
   }
@@ -377,10 +476,15 @@ function createMocks(options) {
     }
     createSetDisabledAction(on) { return makeAction("createSetDisabledAction", () => { this._disabled = !!on; }); }
     createSetNameAction(name) { return makeAction("createSetNameAction", () => { this._name = name; }); }
+    // Removes the transition at that edit point, whichever side of the cut it lies on (documented; that a
+    // neighbour's single-sided fade counts as this clip's START / END is unmeasured: knob transitionSides makes it
+    // count only for the clip it lies on). Positions as live: START 1, END 2.
     createRemoveVideoTransitionAction(position) {
+      if (position !== 1 && position !== 2) throw new Error(`mock: bad TransitionPosition ${position}`);
       return makeAction("createRemoveVideoTransitionAction", () => {
-        const cut = position === 0 ? this._start : this._end;
-        this._track.transitions = this._track.transitions.filter((t) => !(t._start <= cut + EPS && t._end >= cut - EPS));
+        const cut = position === 1 ? this._start : this._end;
+        const mine = (t) => !knobs.transitionSides || (position === 1 ? t._end > cut + EPS : t._start < cut - EPS);
+        this._track.transitions = this._track.transitions.filter((t) => !(t._start <= cut + EPS && t._end >= cut - EPS && mine(t)));
       });
     }
   }
@@ -393,7 +497,17 @@ function createMocks(options) {
       this.items = [];
       this.transitions = [];
     }
-    async getTrackItems(type) { return type === 2 ? this.transitions.slice() : this.items.slice(); }
+    async getTrackItems(type) {
+      const label = (this.kind === "video" ? "V" : "A") + (this.index + 1);
+      if ((knobs.failTrackItems || []).indexOf(label) >= 0) throw new Error(`mock: the items on ${label} are unreadable`);
+      if ((knobs.nullTrackItems || []).indexOf(label) >= 0) return null;
+      const holes = knobs.holeTrackItems || {};
+      if (type !== 2 && holes[label] > 0) {
+        holes[label] -= 1;
+        return [null].concat(this.items.slice());
+      }
+      return type === 2 ? this.transitions.slice() : this.items.slice();
+    }
     async setMute(on) { this.muted = !!on; return true; }
     async isMuted() { return !!this.muted; }
     createSetNameAction(name) { return makeAction("createSetNameAction", () => { this.name = name; }); }
@@ -470,6 +584,7 @@ function createMocks(options) {
     async getSelection() { const items = this._selection.slice(); return { async getTrackItems() { return items; } }; }
     setSelection(sel) {
       if (!sel || !sel._valid) throw violation("selection used outside its createEmptySelection callback");
+      if (knobs.selectionIgnored) return false;
       this._selection = sel._items.slice();
       return true;
     }
@@ -477,16 +592,24 @@ function createMocks(options) {
     async getProjectItem() { return this._item; }
     async getSettings() {
       const size = { width: this._size.width, height: this._size.height };
+      const flags = { maxRenderQuality: !!this._maxRenderQuality };
       return {
         _size: size,
-        getVideoFrameRect() { return { width: size.width, height: size.height }; },
+        _flags: flags,
+        getVideoFrameRect() { const r = new RectF(); r.width = size.width; r.height = size.height; return r; },
         setVideoFrameRect(r) { size.width = r.width; size.height = r.height; return true; },
         getVideoFrameRate() { return 59.94; },
         getAudioSampleRate() { return 48000; },
+        getMaxRenderQuality() { return flags.maxRenderQuality; },
+        setMaxRenderQuality(v) { flags.maxRenderQuality = !!v; return true; },
       };
     }
     createSetSettingsAction(s) {
-      return makeAction("createSetSettingsAction", () => { this._size = { width: s._size.width, height: s._size.height }; });
+      return makeAction("createSetSettingsAction", () => {
+        // frameSizeIgnored: what 27.1 build 21 did on a populated clone (22 Oct): the frame size stays
+        if (!knobs.frameSizeIgnored) this._size = { width: s._size.width, height: s._size.height };
+        if (s._flags) this._maxRenderQuality = s._flags.maxRenderQuality;
+      });
     }
     async getTimebase() { // ticks per frame: 59.94 fps unless a knob says otherwise
       if (knobs.noTimebase) throw new Error("mock: no timebase");
@@ -497,17 +620,27 @@ function createMocks(options) {
       for (const t of this._video.concat(this._audio)) for (const it of t.items) end = Math.max(end, it._end);
       return TickTime.createWithSeconds(end);
     }
-    async getVideoTrackCount() { return this._video.length; }
-    async getAudioTrackCount() { return this._audio.length; }
+    async getVideoTrackCount() {
+      if ((knobs.failTrackCount || []).indexOf("video") >= 0) throw new Error("mock: the video track count is unreadable");
+      return this._video.length;
+    }
+    async getAudioTrackCount() {
+      if ((knobs.failTrackCount || []).indexOf("audio") >= 0) throw new Error("mock: the audio track count is unreadable");
+      return this._audio.length;
+    }
     async getVideoTrack(i) { return this._video[i]; }
     async getAudioTrack(i) { return this._audio[i]; }
     async getCaptionTrackCount() { return 0; }
     createCloneAction() {
       return makeAction("createCloneAction", () => {
-        const copy = new MockSequence(`${this.name} Copy`, `${this.guid}-copy-${++idCounter}`);
-        copy._item = root.adopt(new MockClip({ name: copy.name, mediaPath: "", duration: 60, isSequence: true }));
-        copy._item._sequence = copy;
-        sequences.push(copy);
+        if (knobs.cloneLost) return;
+        for (let n = knobs.cloneTwice ? 2 : 1; n > 0; n--) {
+          const copy = new MockSequence(`${this.name} Copy`, `${this.guid}-copy-${++idCounter}`);
+          if (this._props) copy._props = Object.assign({}, this._props);
+          copy._item = root.adopt(new MockClip({ name: copy.name, mediaPath: "", duration: 60, isSequence: true }));
+          copy._item._sequence = copy;
+          sequences.push(copy);
+        }
       });
     }
   }
@@ -539,11 +672,28 @@ function createMocks(options) {
   sequence._video[1].add({ name: "broll_city.mp4", start: 10, end: 15, inPoint: 2, outPoint: 7, projectItem: broll,
     components: [EFFECTS["AE.ADBE Motion"]([{ t: 3, value: 0 }, { t: 5, value: 90 }]), EFFECTS["AE.ADBE Opacity"]()] });
   sequence._markers.push(new MockMarker("harness marker", "Comment", 1, 0, ""));
+  for (const o of knobs.seedItems || []) {  // extra clips with chosen values (names, odd times, no media)
+    const kind = o.track[0] === "V" ? "_video" : "_audio";
+    const media = typeof o.mediaPath === "string" ? new MockClip({ name: o.name, mediaPath: o.mediaPath, duration: 60 }) : null;
+    const it = sequence[kind][Number(o.track.slice(1)) - 1].add({ name: o.name, start: o.start, end: o.end,
+      inPoint: o.inPoint, outPoint: o.outPoint, speed: o.speed, projectItem: media,
+      components: o.components ? o.components.map((m) => EFFECTS[m]()) : (o.graphic ? GRAPHIC_CHAIN() : undefined) });
+    if (o.graphic && typeof o.layersAfterMs === "number") {  // the layer arrives later, right after Graphic Group
+      const comps = it._chain._components;
+      const text = comps.splice(3, 1)[0];
+      if (o.layersAfterMs >= 0) {
+        const timer = setTimeout(() => comps.splice(comps.indexOf(comps.find((c) => c._matchName === "AE.ADBE Graphic Group")) + 1, 0, text),
+          o.layersAfterMs);
+        if (timer && typeof timer.unref === "function") timer.unref();
+      }
+    }
+    it._disabled = !!o.disabled;
+  }
   if (scenario === "no-sequence") { sequence = null; sequences.length = 0; }
 
   function place(seq, item, at, v, a) {
     const clip = item;
-    const range = clip._range || { in: 0, out: clip._duration };
+    const range = clip._range || clip._subRange || { in: 0, out: clip._duration };
     const start = at.seconds;
     const end = start + (range.out - range.in);
     if (!seq._video[v] || !seq._audio[a]) throw new Error("mock: track index out of range");
@@ -648,7 +798,7 @@ function createMocks(options) {
     async setActiveSequence(seq) { if (sequences.indexOf(seq) < 0) return false; sequence = seq; return true; },
     async deleteSequence(seq) {
       const i = sequences.indexOf(seq);
-      if (i < 0) return false;
+      if (i < 0 || knobs.deleteSequenceFails) return false;
       sequences.splice(i, 1);
       if (seq._item && seq._item._parent) seq._item._parent._items.splice(seq._item._parent._items.indexOf(seq._item), 1);
       return true;
@@ -707,6 +857,84 @@ function createMocks(options) {
     },
   };
 
+  /* ---------- event targets and the encoder (export jobs) ---------- */
+
+  /* Listeners per target, by route ("EventManager" or "own"): {route, name, fn}. */
+  const listenersOf = (target) => target.__listeners || (target.__listeners = []);
+  function addListener(target, route, name, fn) {
+    if (typeof name !== "string" || typeof fn !== "function") throw new Error("mock: addEventListener(name, fn)");
+    listenersOf(target).push({ route, name, fn });
+    record.listeners.push({ op: "add", route, name });
+  }
+  function removeListener(target, route, name, fn) {
+    const list = listenersOf(target);
+    const i = list.findIndex((l) => l.route === route && l.name === name && l.fn === fn);
+    if (i >= 0) list.splice(i, 1);
+    record.listeners.push({ op: "remove", route, name, found: i >= 0 });
+  }
+  function renderEvent(type, fields) {
+    const proto = {};
+    Object.defineProperty(proto, "type", { get() { return type; } });
+    for (const k of Object.keys(fields || {})) Object.defineProperty(proto, k, { get() { return fields[k]; } });
+    return Object.create(proto);
+  }
+  /* Deliver an event to the target's listeners on the routes `deliver` names (a listener's throw stops nothing). */
+  function fire(target, name, event, deliver) {
+    const routes = deliver === "both" ? ["EventManager", "own"] : deliver === "encoder" ? ["own"]
+      : deliver === "none" ? [] : ["EventManager"];
+    for (const l of listenersOf(target).slice()) {
+      if (l.name === name && routes.indexOf(l.route) >= 0) {
+        try { l.fn(event); } catch (e) { record.violations.push(`a listener threw: ${e && e.message}`); }
+      }
+    }
+  }
+  project.addEventListener = function (name, fn) { addListener(project, "own", name, fn); };
+  project.removeEventListener = function (name, fn) { removeListener(project, "own", name, fn); };
+
+  const encoder = {
+    addEventListener(name, fn) { addListener(encoder, "own", name, fn); },
+    removeEventListener(name, fn) { removeListener(encoder, "own", name, fn); },
+    async exportSequence(seq, type, outputFile, presetFile, exportFull) {
+      record.exports.push({ kind: "sequence", type, outputPath: outputFile, preset: presetFile, exportFull });
+      if (knobs.exportThrows || missingFolder(presetFile)) throw new Error("Unable to initialize export!");
+      const ok = !knobs.exportFails && !missingFolder(outputFile);
+      const job = knobs.exportJob;
+      if (!job || !ok) return ok;
+      return renderJob(job);
+    },
+  };
+
+  /* A render that takes time (knob exportJob): progress events, then the result's event and the promise. */
+  function renderJob(job) {
+    const step = job.stepMs || 50;
+    const deliver = job.deliver || "EventManager";
+    const result = job.result || "complete";
+    const silent = result === "silent";
+    const values = job.progress || [];
+    for (const x of job.extraEvents || []) {
+      setTimeout(() => fire(x.target === "project" ? project : encoder, x.name, renderEvent(x.name, x.fields || {}),
+        deliver), x.atMs);
+    }
+    values.forEach((v, i) => setTimeout(() => {
+      if (!silent) fire(encoder, "RenderProgressEvent", renderEvent("RenderProgressEvent", { progress: v }), deliver);
+    }, step * (i + 1)));
+    if (result === "never") return new Promise(() => {});
+    return new Promise((resolve, reject) => setTimeout(() => {
+      if (result === "complete") fire(encoder, "RenderCompleteEvent", renderEvent("RenderCompleteEvent", {}), deliver);
+      if (result === "error") {
+        fire(encoder, "RenderErrorEvent", renderEvent("RenderErrorEvent", { message: "Encoding failed (mock)" }), deliver);
+      }
+      if (result === "cancel") fire(encoder, "RenderCancelEvent", renderEvent("RenderCancelEvent", {}), deliver);
+      if (job.projectState !== undefined) {
+        fire(project, "OperationCompleteEvent.ExportMediaComplete",
+          renderEvent("OperationCompleteEvent.ExportMediaComplete", { state: job.projectState }), deliver);
+      }
+      const value = job.resolve !== undefined ? job.resolve : result === "complete" || silent;
+      if (value === "throw") reject(new Error("Encoding failed (mock throw)"));
+      else resolve(value);
+    }, step * (values.length + 1)));
+  }
+
   /* ---------- the ppro module ---------- */
 
   const ppro = {
@@ -752,16 +980,15 @@ function createMocks(options) {
     },
     EncoderManager: {
       EXPORT_IMMEDIATELY: "IMMEDIATELY",
-      getManager() {
-        return {
-          async exportSequence(seq, type, outputFile, presetFile, exportFull) {
-            record.exports.push({ kind: "sequence", type, outputPath: outputFile, preset: presetFile, exportFull });
-            if (knobs.exportThrows || missingFolder(presetFile)) throw new Error("Unable to initialize export!");
-            return !knobs.exportFails && !missingFolder(outputFile);
-          },
-        };
-      },
+      EVENT_RENDER_PROGRESS: "RenderProgressEvent", EVENT_RENDER_COMPLETE: "RenderCompleteEvent",
+      EVENT_RENDER_ERROR: "RenderErrorEvent", EVENT_RENDER_CANCEL: "RenderCancelEvent", EVENT_RENDER_QUEUE: "RenderQueueEvent",
+      getManager() { return encoder; },
     },
+    EventManager: {
+      addEventListener(target, name, fn) { addListener(target, "EventManager", name, fn); },
+      removeEventListener(target, name, fn) { removeListener(target, "EventManager", name, fn); },
+    },
+    OperationCompleteEvent: { EVENT_EXPORT_MEDIA_COMPLETE: "OperationCompleteEvent.ExportMediaComplete" },
     ProjectConverter: {
       async exportAsFinalCutProXML(seq, outputPath) { record.exports.push({ kind: "fcpxml", outputPath }); return !missingFolder(outputPath); },
       async exportAAF(seq, outputPath) { record.exports.push({ kind: "aaf", outputPath }); return !missingFolder(outputPath); },
@@ -816,17 +1043,21 @@ function createMocks(options) {
     FolderItem: { cast(it) { return it && it.__kind === "folder" ? it : null; } },
     TickTime,
     PointF,
+    RectF,
     Constants: {
       TrackItemType: { EMPTY: 0, CLIP: 1, TRANSITION: 2 },
       MediaType: { ANY: "ANY", VIDEO: "VIDEO", AUDIO: "AUDIO" },
       ExportType: { QUEUE_TO_AME: "QUEUE_TO_AME", QUEUE_TO_APP: "QUEUE_TO_APP", IMMEDIATELY: "IMMEDIATELY" },
-      TransitionPosition: { START: 0, END: 1 },
-      InterpolationMode: { LINEAR: "LINEAR", HOLD: "HOLD", BEZIER: "BEZIER" },
+      OperationCompleteState: { SUCCESS: 1, CANCELLED: 2, FAILED: 3 },  // 27.1 (api dump, 2 Nov 2026)
+      TransitionPosition: { START: 1, END: 2 },  // live 27.1 b21 (api_smoke, 22 Oct 2026)
+      InterpolationMode: INTERPOLATION,
       PropertyType: { NON_PERSISTENT: 0, PERSISTENT: 1 },
     },
     Transcript,
     TextSegments,
   };
+  if (knobs.noAudioFilters) delete ppro.AudioFilterFactory;
+  if (knobs.videoDisplayNames) ppro.VideoFilterFactory.getDisplayNames = async () => knobs.videoDisplayNames.slice();
   if (!old) {
     ppro.MogrtText = class MogrtText {};
     const area = { in: 0, out: 0 };
@@ -843,14 +1074,14 @@ function createMocks(options) {
   const host = {
     name: "premierepro",
     version: opts.hostVersion || (old ? "26.4.0" : "27.1.0"),
-    uiLocale: "en_US",
+    uiLocale: knobs.uiLocale || "en_US",
     applicationPath: "/fake/Adobe Premiere Pro", // must never reach a reply
   };
   if (opts.buildNumber !== undefined && opts.buildNumber !== null) host.buildNumber = opts.buildNumber;
 
   function fileEntry(p) {
     return {
-      name: path.basename(p), isFile: true, isFolder: false,
+      name: path.basename(p), nativePath: p, isFile: true, isFolder: false,
       async read(o) {
         const buf = fs.readFileSync(p);
         if (o && o.format === "binary") return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length);
@@ -860,7 +1091,7 @@ function createMocks(options) {
   }
   function folderEntry(dir) {
     return {
-      name: path.basename(dir), isFile: false, isFolder: true,
+      name: path.basename(dir), nativePath: dir, isFile: false, isFolder: true,
       async getEntries() {
         return fs.readdirSync(dir).map((n) => {
           const p = path.join(dir, n);
@@ -870,18 +1101,38 @@ function createMocks(options) {
     };
   }
 
+  record.openPath = [];  // uxp.shell.openPath calls: {path, developerText, result}
   const uxp = {
     host,
     storage: {
       formats: { binary: "binary", utf8: "utf8" },
       localFileSystem: {
         async getPluginFolder() {
-          if (!opts.pluginDir || !fs.existsSync(opts.pluginDir)) throw new Error("mock: no plugin folder");
-          return folderEntry(opts.pluginDir);
+          const dir = opts.pluginFolder || opts.pluginDir;
+          if (!dir || !fs.existsSync(dir)) throw new Error("mock: no plugin folder");
+          return folderEntry(dir);
+        },
+        async getEntryWithUrl(url) {
+          let p = decodeURIComponent(String(url).replace(/^file:\/*/, ""));
+          if (!/^[A-Za-z]:/.test(p)) p = "/" + p;
+          if (!fs.existsSync(p)) throw new Error(`mock: no such file or folder: ${url}`);
+          return fs.statSync(p).isDirectory() ? folderEntry(p) : fileEntry(p);
         },
       },
     },
+    shell: {
+      async openPath(target, developerText) {
+        const knob = knobs.openPath;
+        const ext = path.extname(String(target)).toLowerCase();
+        const result = knob && typeof knob === "object" ? (knob[ext] !== undefined ? knob[ext] : "") : (knob || "");
+        record.openPath.push({ path: target, developerText, result });
+        if (String(result).indexOf("throw:") === 0) throw new Error(String(result).slice(6));
+        return result;
+      },
+    },
   };
+  if (knobs.noShell) delete uxp.shell;
+  if (knobs.noEntryWithUrl) delete uxp.storage.localFileSystem.getEntryWithUrl;
 
   /* Every track item's edges in ticks (seconds are kept as float sums of exact tick times: rounding recovers them). */
   function edgeTicks() {

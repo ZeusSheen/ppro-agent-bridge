@@ -39,7 +39,11 @@ ERRORS = SPEC["errors"]
 OUTCOMES = list(SPEC["outcomes"])
 TYPES = {"string", "number", "integer", "boolean", "array", "object", "any"}
 SCHEMA_KEYS = {"type", "required", "default", "enum", "minimum", "maximum", "minItems", "items", "properties",
-               "additionalProperties", "pairedWith", "deprecated", "doc"}
+               "additionalProperties", "pairedWith", "deprecated", "doc", "localPath", "fileName"}
+# Params Premiere opens as files or folders: each must be a `localPath` (no network, device or stream path), so the
+# panel refuses them itself. A new param with a name like these is a deliberate choice: mark it, or list it here.
+PATH_PARAM = re.compile(r"(?:[Pp]ath|[Dd]ir)$|^paths$")
+NOT_FILE_PATHS = {"binPath"}  # a bin inside the project, not a file
 ACTION_KEYS = {"name", "kind", "since", "timeoutSeconds", "capability", "allowedWhenStuck", "allowedWhenDenied",
                "readOnly", "destructive", "idempotent", "doc", "params", "reply", "replyOptional", "fakeOnlyReply",
                "errors", "example", "errorExamples"}
@@ -126,10 +130,19 @@ class SpecShapeTest(unittest.TestCase):
                 self.assertIn(c["probe"], ("static", "instance"))
                 self.assertTrue(c["doc"])
 
+    def test_features(self):
+        """Panel behaviours a client branches on (ping's features); the panel and the fake send exactly these."""
+        for name, f in SPEC["features"].items():
+            with self.subTest(feature=name):
+                self.assertRegex(name, r"^[a-z][A-Za-z]+$")
+                self.assertEqual(set(f), {"since", "doc"})
+                self.assertGreaterEqual(len(f["doc"]), MIN_DOC)
+        self.assertEqual(fake_panel.dispatch({"id": "f", "action": "ping"})["data"]["features"], list(SPEC["features"]))
+
     def test_actions(self):
         for a in ACTIONS:
             with self.subTest(action=a["name"]):
-                self.assertEqual(set(a) - ACTION_KEYS - {"requireOneOf", "vectors"}, set())
+                self.assertEqual(set(a) - ACTION_KEYS - {"requireOneOf", "vectors", "devOnly"}, set())
                 self.assertLessEqual(ACTION_KEYS, set(a))
                 self.assertIn(a["kind"], ("read", "write"))
                 self.assertEqual(a["readOnly"], a["kind"] == "read")
@@ -154,6 +167,74 @@ class SpecShapeTest(unittest.TestCase):
                 for code in a["errors"]:
                     self.assertIn(code, ERRORS)
                     self.assertIn("panel", ERRORS[code]["source"], code)
+                if "devOnly" in a:  # a test that changes Premiere: release builds keep only read diagnostics
+                    self.assertIs(a["devOnly"], True)
+                    self.assertEqual(a["kind"], "write")
+
+    def test_every_file_path_param_is_a_local_path(self):
+        """The panel refuses network (UNC), device and stream paths in the spec check, before any handler: that works
+        only for params marked localPath (import_media's paths, export_frame's dir, export_otio / export_sequence's
+        outputPath and presetPath, relink's newPath, api_smoke's files)."""
+        marked = []
+
+        def walk(params, where):
+            for name, s in params.items():
+                target = s.get("items", {}) if s.get("type") == "array" else s
+                if PATH_PARAM.search(name) and name not in NOT_FILE_PATHS:
+                    self.assertTrue(target.get("localPath"), f"{where}.{name} takes a path but is not a localPath")
+                if target.get("localPath") or target.get("fileName"):
+                    self.assertEqual(target.get("type"), "string", f"{where}.{name}")
+                    marked.append(f"{where}.{name}")
+                for sub in (s.get("properties"), target.get("properties")):
+                    if isinstance(sub, dict):
+                        walk(sub, f"{where}.{name}")
+
+        for a in ACTIONS:
+            walk(a["params"], a["name"])
+        self.assertEqual(sorted(marked), sorted([
+            "import_media.paths", "export_frame.dir", "export_frame.name", "export_otio.outputPath",
+            "relink.newPath", "export_sequence.outputPath", "export_sequence.presetPath",
+            "api_smoke.copyPath", "api_smoke.outputDir", "api_smoke.mogrtPath"]))
+
+    def test_local_path_rule(self):
+        b = "\\"
+        refused = {
+            "import_media": {"paths": ["media/ok.mp4", b * 2 + "nas" + b + "share" + b + "a.mp4"]},
+            "export_frame": {"dir": "//host/share"},
+            "export_otio": {"outputPath": b * 2 + "?" + b + "UNC" + b + "h" + b + "s" + b + "t.otio"},
+            "relink": {"itemName": "a", "newPath": b * 2 + "." + b + "pipe" + b + "x"},
+            "export_sequence": {"outputPath": "out/mix.wav:hidden", "presetPath": "p.epr"},
+        }
+        for action, params in refused.items():
+            with self.subTest(action=action):
+                problems = spec.check_params(action, params)
+                self.assertEqual(len(problems), 1, problems)
+        self.assertIn("params.paths[1]: a network (UNC) path", spec.check_params("import_media", refused["import_media"])[0])
+        fine = [b * 2 + "?" + b + "D:" + b + "Job" + b + "a.mp4", "D:" + b + "media" + b + "a.mp4", "media/a.mp4",
+                "/tmp/a.mp4", "Z:" + b + "NAS" + b + "a.mp4"]  # a local long path (as Premiere reports project paths)
+        self.assertEqual(spec.check_params("import_media", {"paths": fine}), [])
+        self.assertEqual(spec.check_params("export_frame", {"dir": "frames", "name": "f_1.png"}), [])
+        for name in ("../x.png", "a" + b + "b.png", "x.png:s", ".."):
+            self.assertEqual(spec.check_params("export_frame", {"dir": "frames", "name": name}),
+                             ["params.name: must be a plain file name (no folder, drive or stream)"], name)
+        # the fake panel refuses them the same way, before any handler and without touching its project
+        fake_panel.reset()
+        before = json.dumps(fake_panel.STATE, sort_keys=True, default=str)
+        for action, params in refused.items():
+            with self.subTest(fake=action):
+                reply = fake_panel.dispatch({"id": "p", "action": action, "params": params})
+                self.assertEqual((reply["ok"], reply["code"], reply["outcome"]), (False, "BAD_PARAMS", "not_committed"))
+                self.assertEqual(reply["data"]["problems"], spec.check_params(action, params))
+        self.assertEqual(json.dumps(fake_panel.STATE, sort_keys=True, default=str), before)
+
+    def test_dev_only_actions(self):
+        """Only dev builds register them, so no CLI command may depend on one, and ping must say the flavour."""
+        dev_only = [a["name"] for a in ACTIONS if a.get("devOnly")]
+        self.assertEqual(dev_only, ["api_smoke"])
+        self.assertEqual(spec.panel_action_names(), NAMES)
+        self.assertEqual(spec.panel_action_names(dev=False), [n for n in NAMES if n not in dev_only])
+        self.assertEqual([c["name"] for c in SPEC["commands"] if set(c["calls"]) & set(dev_only)], [])
+        self.assertIn("build", BY_NAME["ping"]["reply"])
 
     def test_only_ping_runs_when_stuck_or_denied(self):
         self.assertEqual([a["name"] for a in ACTIONS if a["allowedWhenStuck"]], ["ping"])
@@ -188,13 +269,14 @@ class SpecShapeTest(unittest.TestCase):
             with self.subTest(command=c["name"]):
                 self.assertEqual(set(c), {"name", "kind", "calls", "requirePanel", "minProtocol", "dryRun", "doc"})
                 self.assertIn(c["kind"], ("read", "write"))
-                self.assertTrue(c["calls"])
                 self.assertLessEqual(set(c["calls"]), set(NAMES))
                 self.assertIsInstance(c["requirePanel"], bool)
                 self.assertIsInstance(c["dryRun"], bool)
                 self.assertIn(c["minProtocol"], range(1, SPEC["protocol"] + 1))
                 self.assertGreaterEqual(len(c["doc"]), MIN_DOC, c["doc"])
-                if c["kind"] == "read":
+                if not c["calls"]:  # Python only (list_presets): a read that needs no panel
+                    self.assertEqual((c["kind"], c["requirePanel"], c["minProtocol"]), ("read", False, 1))
+                elif c["kind"] == "read":
                     self.assertEqual({kinds[x] for x in c["calls"]}, {"read"})
                 else:
                     self.assertIn("write", {kinds[x] for x in c["calls"]})
@@ -241,6 +323,19 @@ class FakeVsSpecTest(unittest.TestCase):
         self.assertEqual(data["protocol"], spec.protocol())
         self.assertEqual(data["modules"], "fake")
         self.assertEqual(set(data["capabilities"]), set(SPEC["capabilities"]))
+        self.assertEqual(data["build"], {"dev": True, "packaged": False})
+
+    def test_release_build(self):
+        """PPRO_FAKE_RELEASE=1 answers like a release panel: no devOnly action in ping's actions, UNKNOWN_ACTION for one."""
+        os.environ["PPRO_FAKE_RELEASE"] = "1"
+        os.environ["PPRO_FAKE_PACKAGED"] = "1"
+        data = self.call("ping", {})["data"]
+        self.assertEqual(data["actions"], spec.panel_action_names(dev=False))
+        self.assertEqual(data["build"], {"dev": False, "packaged": True})
+        reply = self.call("api_smoke", BY_NAME["api_smoke"]["example"]["params"])
+        self.assertEqual((reply["ok"], reply["code"], reply["outcome"]), (False, "UNKNOWN_ACTION", "not_committed"))
+        self.assertIn("release build", reply["error"])
+        self.assertTrue(self.call("probe_api", BY_NAME["probe_api"]["example"]["params"])["ok"])
 
     def test_every_action_has_an_example(self):
         self.assertEqual([a["name"] for a in ACTIONS if not a["example"]], [])
@@ -312,6 +407,10 @@ class PanelVsSpecTest(unittest.TestCase):
         self.assertEqual(d["handlers"], NAMES)
         self.assertEqual(d["specActions"], NAMES)
         self.assertEqual(d["protocol"], spec.protocol())
+        release = self.harness("describe", {"dev": False})  # plugin/lib/build.js as a release carries it
+        self.assertEqual(release["handlers"], spec.panel_action_names(dev=False))
+        self.assertEqual(release["specActions"], NAMES)
+        self.assertIsNone(release["specMismatch"])
 
     def test_timebase_vectors(self):
         vectors = BY_NAME["set_params"]["vectors"]

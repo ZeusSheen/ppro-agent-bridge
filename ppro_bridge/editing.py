@@ -9,7 +9,8 @@ of a clip IS the clip, with all its attributes:
   * trim_clip  — a new start / end (sequence seconds), or a move to an absolute new start.
 
 split_clip        clone the clip into free timeline after the sequence end, trim the original's tail to the cut,
-                  trim the copy's head to its own equivalent of the cut, move the copy to the cut.
+                  trim the copy's head to its own equivalent of the cut, clone that copy to the cut and remove it
+                  (5 steps). No clip is ever MOVED past another: on 27.1 that renders it silent / blank (B1).
 cut_range         remove [start, end) from the chosen tracks (default all) and keep them in sync: a clip crossing
                   both edges is split at `end` (its left part trimmed to `start`), a clip crossing one edge is
                   trimmed, clips inside are removed (remove_items, mode inside, no ripple); then every clip at/after
@@ -19,8 +20,13 @@ cut_range         remove [start, end) from the chosen tracks (default all) and k
 extend_cut        the opposite of cut_range: open the edit point at `at` up by out_by / in_by seconds of the clips'
                   own source (breathing room): everything after it moves right in one shift_items step, then the
                   clip ending there gets a longer tail and the clip starting there a longer head.
+shift_items       move everything at/after a time on the chosen tracks by whole frames in one step (room before a
+                  clip that has no edit point to open, or a gap closed), with a dry run and a read-back.
 conform_captions  a pre-rendered caption movie cut into pieces, its lines from an SRT: trim heads and tails so a
                   line never flashes for a few frames at a cut.
+
+render_check (split_clip / cut_range / extend_cut): a callable (ops binds rendercheck.check) that renders the result
+and checks every piece the run made, trimmed or moved really plays; RENDER_CHECK_FAILED (committed) when one does not.
 
 All times are snapped to the sequence frame grid (fps from get_sequence's timebase). Every write carries an undo
 label ("<label>: <step>"). Every step is read back and checked to half a frame, and after each phase the whole
@@ -33,13 +39,14 @@ import math
 import re
 from pathlib import Path
 
-from . import framegrid, items
+from . import framegrid, items, rendercheck
 from .errors import BridgeError
 
 CLONE_MARGIN = 10.0      # s of empty timeline between the sequence end and a parked copy
 HEAD_GRACE_FRAMES = 2    # a caption piece may start this many frames into a cue and still count as a clean start
 TAIL_FLASH = 0.5         # a line shown for less than this at a piece's start or end is a flash
 VERIFY_CODE = "VERIFY_FAILED"  # a read-back after a write did not match (actions.json errors)
+RENDER_CHECK_CODE = "RENDER_CHECK_FAILED"  # the edit landed, but Premiere's render does not play a piece of it
 FIELDS = ("start", "end", "inPoint", "outPoint")
 
 
@@ -56,6 +63,8 @@ FIELDS = ("start", "end", "inPoint", "outPoint")
 #   A3 trim_clip end=e: tail trim — end becomes e, outPoint moves by the same delta, start/inPoint stay.    (confirmed)
 #   A4 trim_clip moveTo=m: m is the ABSOLUTE new start, length and in/out kept (the panel converts it to the delta
 #      Premiere's createMoveAction wants and refuses moveTo combined with other fields).      (confirmed via panel)
+#      A move past another clip on the track renders the moved clip silent / blank (B1, 3 Nov 2026): the panel
+#      refuses it, and _trim never plans one. Only snap_edges still moves (by less than half a frame).
 #   A5 trim_clip inPoint/outPoint: NOT used here (inPoint turned out to be a head trim too, not "keep start").
 #   A6 the clip under atSeconds: start <= at < end. This module always addresses a clip by its midpoint.
 #   A7 speed 1 only: source and sequence deltas are equal. Speed-changed clips are refused before any write.
@@ -185,7 +194,7 @@ def _mid(clip: dict) -> float:
 def _clip(it: dict) -> dict:
     return {"name": it.get("name"), "start": it.get("start"), "end": it.get("end"),
             "inPoint": it.get("inPoint"), "outPoint": it.get("outPoint"), "speed": it.get("speed", 1),
-            "mediaPath": it.get("mediaPath")}
+            "mediaPath": it.get("mediaPath"), "disabled": it.get("disabled")}
 
 
 def _speed_changed(clip: dict) -> bool:
@@ -249,6 +258,21 @@ class _Run:
         self.steps: list[dict] = []      # every write attempted (planned, in a dry run)
         self.completed: list[str] = []   # undo labels of the writes that landed
         self.parked: list[tuple] = []    # (track key, clip) copies sitting in the parking area
+        self.touched: list[tuple] = []   # (track key, clip) every clip a write made, trimmed or moved
+
+    def touch(self, key, clip: dict):
+        if not any(c is clip for _, c in self.touched):
+            self.touched.append((key, clip))
+
+    def pieces(self) -> list[dict]:
+        """The clips this run made, trimmed or moved that are still on the timeline (parked copies are gone), for
+        the render check: {track, name, start, end, inPoint, outPoint, mediaPath, disabled}."""
+        out = []
+        for key, c in self.touched:
+            if any(c is m for m in self.model.clips(key)):
+                out.append(dict(track=_label(*key), **{k: c.get(k) for k in ("name", "mediaPath", "disabled",
+                                                                             *FIELDS)}))
+        return sorted(out, key=lambda p: (p["start"], p["track"]))
 
     def write(self, action: str, params: dict, what: str) -> dict:
         undo = f"{self.label}: {what}"
@@ -308,6 +332,29 @@ def _partial(command: str, error: Exception, run: _Run, report: dict) -> BridgeE
                        hint=getattr(error, "hint", None))
 
 
+def _render_check(run: _Run, report: dict, check, command: str):
+    """After a verified real run: `check(rpc, pieces) -> dict` (rendercheck.check with its options bound) renders and
+    measures every piece this run made, trimmed or moved, into report["renderCheck"]. A piece that is silent,
+    missing, blank or not rendered - or a render that cannot run - raises RENDER_CHECK_FAILED with outcome
+    committed: the edit is in Premiere (report["steps"] are its undo steps) and data is the whole report."""
+    if check is None:
+        return
+    if run.dry:
+        report["renderCheck"] = {"skipped": "dry run: nothing was rendered"}
+        return
+    try:
+        rc = check(run.rpc, run.pieces())
+    except BridgeError as e:
+        report["renderCheck"] = {"ok": None, "error": {"code": e.code, "message": str(e)}}
+        raise BridgeError(f"[render check] {command} is done and verified, but the render check could not run: {e}",
+                          code=RENDER_CHECK_CODE, outcome="committed", data=report, hint=e.hint) from e
+    report["renderCheck"] = rc
+    if not rc.get("ok"):
+        raise BridgeError(f"[render check] {command} is done and verified, but Premiere's render does not play "
+                          f"{len(rc['problems'])} piece(s): " + "; ".join(rc["problems"][:4]),
+                          code=RENDER_CHECK_CODE, outcome="committed", data=report, hint=rendercheck.repair_hint())
+
+
 def _refuse_speed(entries, what: str):
     bad = [f"{_label(*key)} {c['name']} ({c['speed']:g}x)" for key, c in entries if _speed_changed(c)]
     if bad:
@@ -319,38 +366,77 @@ def _refuse_speed(entries, what: str):
 
 def _trim(run: _Run, key, clip: dict, op: str, value: float, what: str):
     want = predict_trim(clip, op, value)
+    if op == MOVE:  # B1: never move a clip past or onto another one on its track (the panel refuses it too)
+        lo, hi = min(clip["start"], want["start"]), max(clip["end"], want["end"])
+        in_way = [c for c in run.model.clips(key) if c is not clip and c["start"] < hi - run.grid.tol
+                  and c["end"] > lo + run.grid.tol]
+        if in_way:
+            raise BridgeError(f"[plan] moving {_span(clip)} on {_label(*key)} to {_t(value)}s would pass over or onto "
+                              f"{'; '.join(_span(c) for c in in_way)}: Premiere 27.1 renders such a move silent or "
+                              "blank (B1).", code="PRECONDITION_FAILED", outcome="not_committed")
     reply = run.write("trim_clip", dict({"kind": key[0], "track": key[1], "atSeconds": _mid(clip)},
                                         **trim_fields(op, value)), what)
     run.verify(key, dict(want, name=clip["name"]), reply.get("after"))
     clip.update(want)
     run.model.resort(key)
+    run.touch(key, clip)
 
 
-def _clone(run: _Run, key, clip: dict, offset: float, what: str) -> dict:
+def _clone(run: _Run, key, clip: dict, offset: float, what: str, parked: bool = True) -> dict:
     run.write("clone_clip", {"kind": key[0], "track": key[1], "atSeconds": _mid(clip), "offsetSeconds": offset},
               what)
     copy = dict(clip, **predict_clone(clip, offset))
     run.model.tracks[key].append(copy)
     run.model.resort(key)
-    run.parked.append((key, copy))
+    if parked:
+        run.parked.append((key, copy))
+    else:
+        run.touch(key, copy)
     run.verify(key, copy)  # clone replies are computed, not read back: always re-list
     return copy
 
 
+def _unpark(run: _Run, key, clip: dict, what: str):
+    """Remove the one clip `clip` (a parked copy, alone in the parking area) from its track. A remove_items dry run
+    first must hit exactly that clip: with no hit the panel would write nothing (and the step would be listed as
+    completed although Premiere has no such undo step), with more it would take a neighbour too."""
+    vt, at = ([key[1]], []) if key[0] == "video" else ([], [key[1]])
+    span = {"videoTracks": vt, "audioTracks": at, "mode": "inside", "fromSeconds": clip["start"] - run.grid.tol,
+            "toSeconds": clip["end"] + run.grid.tol}
+    if not run.dry:
+        hit = run.rpc("remove_items", dict(span, dryRun=True)).get("removed") or []
+        if len(hit) != 1 or not run.grid.same(hit[0].get("start"), clip["start"]):
+            raise BridgeError(f"[verify] removing the parked copy {_span(clip)} on {_label(*key)} would take "
+                              f"{[(h.get('track'), h.get('name'), _r(h.get('start'))) for h in hit]}, not that one "
+                              "clip — not removing anything.", code="PRECONDITION_FAILED", outcome="not_committed",
+                              data={"wouldRemove": hit})
+    reply = run.write("remove_items", span, what)
+    if not run.dry and len(reply.get("removed") or []) != 1:
+        raise BridgeError(f"[verify] removing the parked copy {_span(clip)} on {_label(*key)} took "
+                          f"{len(reply.get('removed') or [])} clip(s), expected 1.", code=VERIFY_CODE,
+                          data={"removed": reply.get("removed")})
+    run.model.tracks[key].remove(clip)
+
+
 def _split(run: _Run, key, clip: dict, at: float, left_end: float | None = None) -> tuple[dict, dict]:
     """Split the model's `clip` at `at` (a frame on the grid, strictly inside it) -> (left, right).
-    left_end: trim the left part to this instead of `at` (cut_range drops what lies between)."""
+    left_end: trim the left part to this instead of `at` (cut_range drops what lies between).
+    The right piece is a clone of a parked, head-trimmed copy placed straight at `at`, never a moved copy: a
+    createMoveAction that passes over other clips on its track left the moved clip (and the clips it passed)
+    silent or blank in Premiere's renders, although list_items showed them right (27.1, measured 3 Nov 2026 -
+    the B1 bug). A clone placed across clips renders."""
     grid, s0 = run.grid, clip["start"]
     left_end = at if left_end is None else left_end
     park = grid.ceil(max(run.model.end(), run.seq_end or 0.0) + CLONE_MARGIN)
     tag = f"split {_label(*key)} {clip['name']} at {_t(at)}s"
-    copy = _clone(run, key, clip, park - s0, f"{tag} [1/4] clone to {_t(park)}s")
-    _trim(run, key, clip, TAIL, left_end, f"{tag} [2/4] trim end to {_t(left_end)}s")
-    _trim(run, key, copy, HEAD, copy["start"] + (at - s0), f"{tag} [3/4] trim head of the copy")
-    _trim(run, key, copy, MOVE, at, f"{tag} [4/4] move the copy to {_t(at)}s")
+    copy = _clone(run, key, clip, park - s0, f"{tag} [1/5] clone to {_t(park)}s")
+    _trim(run, key, clip, TAIL, left_end, f"{tag} [2/5] trim end to {_t(left_end)}s")
+    _trim(run, key, copy, HEAD, copy["start"] + (at - s0), f"{tag} [3/5] trim head of the copy")
+    right = _clone(run, key, copy, at - copy["start"], f"{tag} [4/5] clone the copy to {_t(at)}s", parked=False)
+    _unpark(run, key, copy, f"{tag} [5/5] remove the parked copy")
     run.parked.remove((key, copy))
     run.check_all(tag)
-    return clip, copy
+    return clip, right
 
 
 def _clip_at(clips: list[dict], at: float, grid: _Grid):
@@ -381,9 +467,10 @@ def _notes(run: _Run) -> list[str]:
 
 # ================================================================ split_clip
 
-def split_clip(rpc, *, kind=None, track, at, label, dry_run=False) -> dict:
+def split_clip(rpc, *, kind=None, track, at, label, dry_run=False, render_check=None) -> dict:
     """Split the clip under `at` (sequence s, snapped to the frame grid) on one track, keeping every attribute.
-    `track`: "V1" / "A2", or a 0-based index with `kind` ("video" / "audio"). At a clip edge it is a no-op."""
+    `track`: "V1" / "A2", or a 0-based index with `kind` ("video" / "audio"). At a clip edge it is a no-op.
+    `render_check(rpc, pieces) -> dict`: render-check both pieces afterwards (see _render_check)."""
     key = _track_key(track, kind)
     run = _start(rpc, label, dry_run)
     at_s = run.grid.snap(at)
@@ -409,16 +496,19 @@ def split_clip(rpc, *, kind=None, track, at, label, dry_run=False) -> dict:
                   steps=[s["undoLabel"] for s in run.steps], undoSteps=len(run.steps))
     if not run.dry:
         report["verified"] = True
+    _render_check(run, report, render_check, "split_clip")
     return report
 
 
 # ================================================================ cut_range
 
-def cut_range(rpc, *, start, end, tracks=None, ripple=True, captions=None, label, dry_run=False) -> dict:
+def cut_range(rpc, *, start, end, tracks=None, ripple=True, captions=None, label, dry_run=False,
+              render_check=None) -> dict:
     """Remove [start, end) (sequence s, snapped) from `tracks` ("V1", "A2", … or (kind, index); default every
     track) keeping them in sync; with ripple, everything at/after `end` on those tracks moves left by end − start.
     `captions`: {"track": "V3", "srt_path": "...", "offset": 0.0} conforms that caption track afterwards
-    (see conform_captions)."""
+    (see conform_captions). `render_check(rpc, pieces) -> dict`: render-check every piece it split, trimmed or moved
+    afterwards (see _render_check)."""
     run = _start(rpc, label, dry_run)
     grid, model = run.grid, run.model
     a, b = grid.snap(start), grid.snap(end)
@@ -498,6 +588,7 @@ def cut_range(rpc, *, start, end, tracks=None, ripple=True, captions=None, label
     report["undoSteps"] = len(run.steps)
     if not run.dry:
         report["verified"] = True
+    _render_check(run, report, render_check, "cut_range")
     return report
 
 
@@ -516,8 +607,9 @@ def held_keyframes(rpc, grid: _Grid, todo: list) -> list[dict]:
     """Keyframed Volume > Level and Opacity on the clips extend_cut is about to make longer. `todo`: [(key, clip,
     edge)] with edge "tail" or "head". Keyframes are media time and stay where they are, so source added after the
     last keyframe (tail) or before the first (head) holds that keyframe's value: a 2-frame fade-out to 0 at the old
-    end leaves the whole extension silent (seen on a real job). One entry per such param; `silent` when the held
-    value is silence (Level <= SILENT_DB) or invisible (Opacity <= INVISIBLE_OPACITY)."""
+    end leaves the whole extension silent (seen on a real job). One entry per such param, addressed the way
+    remove_keyframes takes it (matchName, occurrence, index, `at` inside the clip); `silent` when the held value is
+    silence (Level <= SILENT_DB) or invisible (Opacity <= INVISIBLE_OPACITY)."""
     if not todo:
         return []
     params = {"fromSeconds": min(c["start"] for _, c, _ in todo), "toSeconds": max(c["end"] for _, c, _ in todo),
@@ -548,7 +640,10 @@ def held_keyframes(rpc, grid: _Grid, todo: list) -> list[dict]:
                          key=lambda k: k["t"])
             if not (p or {}).get("keyframed") or not kfs:
                 continue
-            entry = {"track": _label(*key), "name": c["name"], "edge": edge, "param": what}
+            # matchName / occurrence / index / at: what remove_keyframes needs to take the keyframe off
+            entry = {"track": _label(*key), "name": c["name"], "edge": edge, "param": what, "matchName": match,
+                     "occurrence": comp.get("occurrence") or 1, "index": p.get("index"),
+                     "at": _r((c["start"] + c["end"]) / 2)}
             if p.get("keyframesTruncated"):
                 out.append(dict(entry, silent=None, reason=f"{p['keyframesTruncated']} keyframes; not checked"))
                 continue
@@ -571,8 +666,20 @@ def held_keyframes(rpc, grid: _Grid, todo: list) -> list[dict]:
     return out
 
 
+def _held_keyframes_hint(held: list[dict]) -> str:
+    """The remove_keyframes commands that take each held keyframe off (just that key: a fade at the other end of the
+    clip stays), and the alternative that clears the param."""
+    cmds = []
+    for h in held:
+        occ = f" --occurrence {h['occurrence']}" if (h.get("occurrence") or 1) > 1 else ""
+        cmds.append(f'remove_keyframes --track {h["track"]} --at {h["at"]} --match-name "{h["matchName"]}"{occ} '
+                    f'--param {h["index"]} --from {h["keyframe"]} --to {h["keyframe"]} --time-base media')
+    return ("Take the held keyframe off, then run extend_cut again: " + "; ".join(cmds) + ". Or clear the param with "
+            "--all --keep-value instead of --from/--to (keeps the clip's middle value, drops every fade on it).")
+
+
 def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, tracks=None, extend=None, captions=None, label, dry_run=False,
-               media_seconds=None, allow_silent=False) -> dict:
+               media_seconds=None, allow_silent=False, render_check=None) -> dict:
     """Open up the edit point at `at` (sequence s, snapped) — breathing room, the opposite of cut_range.
 
     Everything at/after `at` on `tracks` (default every track) moves right by out_by + in_by in one shift_items
@@ -583,7 +690,8 @@ def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, tracks=None, extend=None, capt
     Clips crossing `at` (music under the cut, a title) are not touched. `media_seconds(clip) -> float | None`
     gives a clip's media length for the out-point check (None: Premiere checks it). Values snap to whole frames.
     An extension that would hold a keyframed Level at silence or an Opacity at 0 (see held_keyframes) is listed
-    under `heldKeyframes` and refused, before anything is written, unless allow_silent."""
+    under `heldKeyframes` and refused, before anything is written, unless allow_silent. `render_check(rpc, pieces)
+    -> dict`: render-check every clip it extended or moved afterwards (see _render_check)."""
     run = _start(rpc, label, dry_run)
     grid, model = run.grid, run.model
     t0 = grid.snap(at)
@@ -616,7 +724,9 @@ def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, tracks=None, extend=None, capt
                 crossing.append((key, c))
     if not left and not right:
         raise BridgeError(f"No clip starts or ends at {_t(t0)}s on {', '.join(_label(*k) for k in keys)}: not an "
-                          "edit point.", code="NOT_FOUND", outcome="not_committed")
+                          "edit point.", code="NOT_FOUND", outcome="not_committed",
+                          hint=f"To open room there anyway (a gap, no longer clips), move everything after it: "
+                               f"shift_items --from {_t(t0)} --by <seconds>.")
     if named:
         missing = [_label(*k) for k in named if not ((out_s and k in left) or (in_s and k in right))]
         if missing:
@@ -657,9 +767,10 @@ def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, tracks=None, extend=None, capt
         what = "; ".join(f"{h['track']} {h['name']} ({h['edge']}): {h['param']} holds its keyframe at "
                          f"{h['keyframe']}s" for h in silent)
         raise BridgeError(f"The extension would be silent or invisible: {what}. Keyframes stay at their media time, "
-                          "so the added source holds the fade's last value. Move or delete those keyframes in "
-                          "Premiere first, or pass --allow-silent; nothing was changed.", code="KEYFRAMED",
-                          outcome="not_committed", data={"heldKeyframes": held})
+                          "so the added source holds the fade's last value. Remove those keyframes first "
+                          "(remove_keyframes, see hint), or pass --allow-silent; nothing was changed.",
+                          code="KEYFRAMED", outcome="not_committed", data={"heldKeyframes": held},
+                          hint=_held_keyframes_hint(silent))
     for key in keys:
         if key in pool:
             continue
@@ -683,7 +794,8 @@ def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, tracks=None, extend=None, capt
     if silent:
         report["notes"].append(f"{len(silent)} extension(s) hold a fade's keyframe at silence or 0 opacity (see "
                                "heldKeyframes)" + (": allowed by --allow-silent." if allow_silent else
-                                                   "; a real run refuses unless --allow-silent."))
+                                                   "; a real run refuses unless --allow-silent (remove_keyframes takes "
+                                                   "them off first)."))
     selected = set(keys)
     not_moved = [{"track": _label(*key), "name": c["name"], "start": _r(c["start"])}
                  for key in sorted(model.tracks, key=_order) if key not in selected
@@ -720,6 +832,7 @@ def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, tracks=None, extend=None, capt
     report["undoSteps"] = len(run.steps)
     if not run.dry:
         report["verified"] = True
+    _render_check(run, report, render_check, "extend_cut")
     return report
 
 
@@ -787,43 +900,115 @@ def snap_edges(rpc, *, tracks=None, label, dry_run=False) -> dict:
     return report
 
 
+# ================================================================ shift_items
+
+def shift_items(rpc, *, at, by, tracks=None, label, dry_run=False, precise=None) -> dict:
+    """Move every clip that starts at/after `at` (sequence s, snapped) on `tracks` (default every track) by `by`
+    seconds (whole frames; negative = left), keeping those tracks in sync. It opens room before a clip where there is
+    no edit point for extend_cut to open (or closes a gap). Clips crossing `at` stay put (music under it).
+    Moving left is refused when a clip that stays would be run into by the clips moving on its own track, or a clip
+    would start before 0. Tracks with nothing to move are not sent. It is ONE shift_items step when the panel checks
+    the room the same way (ping feature "shiftItemsPrecise", 0.6+; `precise` None asks the panel, True / False
+    says it). An older panel's check is coarser: it counts every clip staying on a sent track that ends after `at` +
+    `by` — so for it a track whose staying clip ends between there and its own first moving clip (an SFX just
+    before the cut) moves in a step of its own, from that clip."""
+    if precise is None:
+        precise = items.has_feature(rpc("ping"), "shiftItemsPrecise")
+    run = _start(rpc, label, dry_run)
+    grid = run.grid
+    t0, delta = grid.snap(at), grid.snap(by)
+    if abs(delta) < grid.tol:
+        raise _bad(f"by must be at least one frame ({_t(grid.frame)}s), not {by}")
+    keys = _selected(run.model, tracks)
+    report = {"at": _r(t0), "by": _r(delta), "tracks": [_label(*k) for k in keys], "dryRun": run.dry,
+              "notes": _notes(run) + ["Markers do not move."]}
+    moving, stays, blocking, firsts = [], [], [], {}
+    for key in keys:
+        mine = [c for c in run.model.clips(key) if c["start"] >= t0 - grid.tol]
+        staying = [c for c in run.model.clips(key) if c["start"] < t0 - grid.tol]
+        if mine:
+            firsts[key] = min(c["start"] for c in mine)
+            moving += [(key, c) for c in mine]
+            if delta < 0:  # a clip that stays and ends after where this track's first moving clip lands
+                blocking += [f"{_label(*key)} {_span(c)}" for c in staying if c["end"] > firsts[key] + delta + grid.tol]
+        stays += [{"track": _label(*key), "name": c["name"], "start": _r(c["start"]), "end": _r(c["end"])}
+                  for c in staying if c["end"] > t0 + grid.tol]
+    if blocking:
+        raise BridgeError(f"Clips that stay are in the way of a {_t(delta)}s shift from {_t(t0)}s: "
+                          + "; ".join(blocking), code="PRECONDITION_FAILED", outcome="not_committed",
+                          data={"blocking": blocking})
+    first = min((c["start"] for _, c in moving), default=None)
+    if first is not None and first + delta < -grid.tol:
+        raise BridgeError(f"The first clip that moves would start at {_t(first + delta)}s, before 0s.",
+                          code="PRECONDITION_FAILED", outcome="not_committed")
+    report["moves"] = [{"track": _label(*k), "name": c["name"], "from": _r(c["start"]), "to": _r(c["start"] + delta)}
+                       for k, c in moving]
+    report["stays"] = stays
+    report["notMoved"] = [{"track": _label(*k), "clips": len([c for c in run.model.clips(k)
+                                                               if c["start"] >= t0 - grid.tol])}
+                          for k in sorted(set(run.model.tracks) - set(keys), key=_order)
+                          if any(c["start"] >= t0 - grid.tol for c in run.model.clips(k))]
+    if not moving:
+        report.update(shifted=False, noop=True, reason=f"No clip starts at or after {_t(t0)}s on those tracks.")
+        return report
+    # One step for every track the panel lets through from the earliest moving clip. A precise panel checks each track
+    # from its own first moving clip, as above; for an older one's coarse check, a track it would refuse although
+    # nothing is really in its way gets its own step from its own first moving clip.
+    frm = min(firsts.values())
+    alone = [k for k in firsts if delta < 0 and not precise and any(
+        c["end"] > frm + delta + grid.tol for c in run.model.clips(k) if c["start"] < t0 - grid.tol)]
+    groups = [([k for k in firsts if k not in alone], frm)] + [([k], firsts[k]) for k in sorted(alone, key=_order)]
+    if alone:
+        report["notes"].append(f"{', '.join(_label(*k) for k in alone)} moved in a step of its own: a clip staying "
+                               "there ends after where the earliest moved clip lands, which this (older) panel's own "
+                               "check would refuse, though nothing is in the way on that track.")
+    try:
+        for group, start in groups:
+            if group:
+                tag = f" on {', '.join(_label(*k) for k in sorted(group, key=_order))}" if alone else ""
+                _shift(run, group, [(k, c) for k, c in moving if k in group], start, delta, tag)
+        run.check_all("shift")
+    except Exception as e:
+        if run.dry or not run.completed:
+            raise
+        raise _partial("shift_items", e, run, report) from e
+    report.update(shifted=not run.dry, noop=False, steps=[s["undoLabel"] for s in run.steps],
+                  undoSteps=len(run.steps))
+    if not run.dry:
+        report["verified"] = True
+    return report
+
+
 def _num_edge(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
-def _shift(run: _Run, keys, ordered, frm: float, delta: float):
+def _shift(run: _Run, keys, ordered, frm: float, delta: float, tag: str = ""):
     """One shift_items step: every clip at/after `frm` on the selected tracks moves by `delta` (the model follows)."""
     grid = run.grid
     vt = sorted(k[1] for k in keys if k[0] == "video")
     at = sorted(k[1] for k in keys if k[0] == "audio")
     run.write("shift_items", {"fromSeconds": frm, "deltaSeconds": delta, "videoTracks": vt, "audioTracks": at},
-              f"move {len(ordered)} clip(s) {'right' if delta > 0 else 'left'} {_t(abs(delta))}s")
+              f"move {len(ordered)} clip(s) {'right' if delta > 0 else 'left'} {_t(abs(delta))}s{tag}")
     for key, c in ordered:
         c.update(start=grid.snap(c["start"] + delta), end=grid.snap(c["end"] + delta))
+        run.touch(key, c)
     for key in {k for k, _ in ordered}:
         run.model.resort(key)
 
 
 def _ripple(run: _Run, keys, ordered, b: float, shift: float):
     """Move every clip at/after `b` on the selected tracks left by `shift`: one shift_items transaction (one undo
-    step); a panel without shift_items gets one trim_clip moveTo per clip, earliest first."""
+    step). The panel must have shift_items (actions.json: cut_range calls it, so ops.cut_range refuses an older panel
+    with PANEL_OUTDATED); there is no per-clip trim_clip moveTo fallback any more."""
     grid = run.grid
     vt = sorted(k[1] for k in keys if k[0] == "video")
     at = sorted(k[1] for k in keys if k[0] == "audio")
-    try:
-        run.write("shift_items", {"fromSeconds": b, "deltaSeconds": -shift, "videoTracks": vt, "audioTracks": at},
-                  f"ripple {len(ordered)} clip(s) left {_t(shift)}s")
-    except BridgeError as e:
-        if e.code != "UNKNOWN_ACTION":
-            raise
-        run.steps.pop()  # not sent: fall back to per-clip moves
-        for key, c in ordered:
-            old = c["start"]
-            _trim(run, key, c, MOVE, grid.snap(old - shift), f"ripple {_label(*key)} {c['name']} {_t(old)}s to "
-                                                             f"{_t(grid.snap(old - shift))}s")
-        return
+    run.write("shift_items", {"fromSeconds": b, "deltaSeconds": -shift, "videoTracks": vt, "audioTracks": at},
+              f"ripple {len(ordered)} clip(s) left {_t(shift)}s")
     for key, c in ordered:
         c.update(start=grid.snap(c["start"] - shift), end=grid.snap(c["end"] - shift))
+        run.touch(key, c)
     for key in {k for k, _ in ordered}:
         run.model.resort(key)
 

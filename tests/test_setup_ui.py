@@ -343,18 +343,31 @@ class RealMachineTest(unittest.TestCase):
 
     def setUp(self):
         self.machine = setup_ui.RealMachine()
-        for name, folder in (("desktop_shortcut", "Desk"), ("autostart_shortcut", "Startup")):
+        for name, folder in (("desktop_shortcut", "Desk"), ("autostart_shortcut", "Startup"),
+                             ("start_menu_shortcut", "Programs")):
             patch = mock.patch.object(doctor, name, return_value=Path(folder) / doctor.SHORTCUT_NAME)
             patch.start()
             self.addCleanup(patch.stop)
 
-    def test_shortcut_desktop_uses_the_desktop_folder(self):
+    def test_shortcut_desktop_also_goes_in_the_start_menu(self):
         with mock.patch.object(doctor, "make_shortcut", side_effect=lambda folder, minimized=False:
                                Path(folder) / doctor.SHORTCUT_NAME) as make:
             ok, message, output = self.machine.run("shortcut-desktop")
         self.assertTrue(ok, message)
-        make.assert_called_once_with(Path("Desk"), minimized=False)
-        self.assertEqual(output, str(Path("Desk") / doctor.SHORTCUT_NAME))
+        self.assertEqual(make.call_args_list, [mock.call(Path("Desk"), minimized=False),
+                                               mock.call(Path("Programs"), minimized=False)])
+        self.assertIn("Start menu", message)
+        self.assertEqual(output.splitlines(), [str(Path(f) / doctor.SHORTCUT_NAME) for f in ("Desk", "Programs")])
+
+    def test_a_failed_start_menu_shortcut_still_leaves_the_desktop_one(self):
+        def make(folder, minimized=False):
+            if Path(folder) == Path("Programs"):
+                raise OSError("no Start menu")
+            return Path(folder) / doctor.SHORTCUT_NAME
+        with mock.patch.object(doctor, "make_shortcut", side_effect=make):
+            ok, message, _ = self.machine.run("shortcut-desktop")
+        self.assertTrue(ok)
+        self.assertIn("not in the Start menu", message)
 
     def test_autostart_on_is_a_minimized_startup_shortcut(self):
         with mock.patch.object(doctor, "make_shortcut", return_value=Path("Startup") / doctor.SHORTCUT_NAME) as make:

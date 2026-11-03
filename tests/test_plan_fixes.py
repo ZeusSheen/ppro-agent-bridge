@@ -72,6 +72,46 @@ class WholeMediaTest(unittest.TestCase):
         self.assertIn("endClampRisk", step)
         self.assertIn("inSeconds", inserts(calls)[0])
 
+    def test_range_past_a_short_picture_stops_at_its_last_frame(self):
+        # a news download: 9.5 s of picture in a 10 s file (the audio runs on); the plan asks for the whole file
+        rpc, fake, calls = fake_rpc()
+        report = run_plan([{"command": "insert_clip", "id": "n01", "track": "V3", "timeline_at": 2.01,
+                            "src": "n01.mp4", "src_in": 0, "src_out": 10.0}],
+                          rpc, probe_for(hasAudio=True, duration=10.0, videoDuration=9.5, frames=285, fps=30.0),
+                          dry_run=True)
+        step = report["steps"][0]
+        self.assertEqual(step["pictureEnds"], 9.5)
+        self.assertNotIn("placedWhole", step)
+        self.assertLessEqual(step["_out"] if "_out" in step else step["srcOut"], 9.5 + 1e-9)
+        self.assertTrue(any("picture ends at 9.500s" in w for w in report["warnings"]), report["warnings"])
+
+    def test_range_starting_after_the_picture_is_an_error(self):
+        rpc, _, calls = fake_rpc()
+        report = run_plan([{"command": "insert_clip", "id": "n01", "track": "V3", "timeline_at": 2.0,
+                            "src": "n01.mp4", "src_in": 9.8, "src_out": 10.0}],
+                          rpc, probe_for(hasAudio=True, duration=10.0, videoDuration=9.5, frames=285, fps=30.0))
+        self.assertEqual(report["steps"][0]["status"], "error")
+        self.assertFalse(inserts(calls))
+
+    def test_a_codec_premiere_cannot_import_is_an_error_before_anything_is_sent(self):
+        rpc, _, calls = fake_rpc()
+        report = run_plan([{"command": "insert_clip", "id": "yt", "track": "V3", "timeline_at": 2.0,
+                            "src": "yt.mp4", "src_in": 0, "src_out": 3.0}],
+                          rpc, probe_for(hasAudio=True, duration=10.0, videoCodec="av1", audioCodecs=["opus"]))
+        step = report["steps"][0]
+        self.assertEqual(step["status"], "error")
+        self.assertIn("av1, opus", step["why"])
+        self.assertIn("ffmpeg", step["transcode"])
+        self.assertFalse({"import_media", "insert_clip"} & {a for a, _ in calls})
+
+    def test_picture_a_frame_short_still_counts_as_the_whole_file(self):
+        rpc, _, calls = fake_rpc()
+        report = run_plan([{"command": "insert_clip", "id": "g01", "track": "V3", "timeline_at": 2.0,
+                            "src": "g01.mov", "src_in": 0, "src_out": 5.005}],
+                          rpc, probe_for(hasAudio=False, duration=5.005, videoDuration=5.005 - 1 / SEQ_FPS,
+                                         frames=299, fps=SEQ_FPS), dry_run=True)
+        self.assertNotIn("pictureEnds", report["steps"][0])
+
 
 class SequenceGuardTest(unittest.TestCase):
     CMD = [{"command": "insert_clip", "id": "b01", "track": "V3", "timeline_at": 2.0, "src": "b01.mp4",

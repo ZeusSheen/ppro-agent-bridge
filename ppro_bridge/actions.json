@@ -2,7 +2,7 @@
  "specVersion": 1,
  "protocol": 2,
  "defaultTimeoutSeconds": 30,
- "doc": "The bridge's action contract. Single source of truth: the panel (plugin/lib/spec.js is generated from it), the fake panel and the CLI are tested against it. Params are a JSON-Schema subset: type, required, default (documentation; handlers apply defaults), enum, minimum, maximum, minItems, items, properties (objects reject unknown keys), pairedWith, deprecated; requireOneOf at action level means at least one of the names is present (non-empty for arrays).",
+ "doc": "The bridge's action contract. Single source of truth: the panel (plugin/lib/spec.js is generated from it), the fake panel and the CLI are tested against it. Params are a JSON-Schema subset: type, required, default (documentation; handlers apply defaults), enum, minimum, maximum, minItems, items, properties (objects reject unknown keys), pairedWith, deprecated; requireOneOf at action level means at least one of the names is present (non-empty for arrays). An action with devOnly: true is a test that changes Premiere: only a dev build of the panel registers it (plugin/lib/build.js says dev: true in the repository, false in release exports and .ccx packages); a release build leaves it out of ping's actions and answers UNKNOWN_ACTION. No CLI command calls one.",
  "outcomes": [
   "not_committed",
   "committed",
@@ -23,7 +23,8 @@
    "projectPrefix": "project name prefix, e.g. PAB_TEST",
    "projectGuid": "Project.guid",
    "sequence": "exact sequence name",
-   "sequenceGuid": "Sequence.guid"
+   "sequenceGuid": "Sequence.guid",
+   "fingerprint": "the timeline fingerprint get_sequence reports (items.fingerprint, 16 hex digits): checked on writes that are not dry runs, PRECONDITION_FAILED when the active sequence no longer has it; reads ignore it"
   },
   "replyOk": {
    "id": "string",
@@ -47,7 +48,8 @@
   "HOST_DENIED",
   "INTERNAL",
   "PROJECT_MISMATCH",
-  "SEQUENCE_MISMATCH"
+  "SEQUENCE_MISMATCH",
+  "PRECONDITION_FAILED"
  ],
  "errors": {
   "UNKNOWN_ACTION": {
@@ -55,7 +57,7 @@
    "source": [
     "panel"
    ],
-   "doc": "The action is not in the panel's whitelist."
+   "doc": "The action is not in the panel's whitelist (a devOnly action counts as unknown on a release build)."
   },
   "BAD_PARAMS": {
    "outcome": "not_committed",
@@ -63,7 +65,7 @@
     "panel",
     "cli"
    ],
-   "doc": "Missing, unknown or invalid params (checked against this spec before any handler runs)."
+   "doc": "Missing, unknown or invalid params (checked against this spec before any handler runs), or a request that would put more than 1000 actions into one transaction (the panel's runaway guard; nothing is changed)."
   },
   "NO_PROJECT": {
    "outcome": "not_committed",
@@ -187,9 +189,10 @@
   "EXPORT_FAILED": {
    "outcome": "not_committed",
    "source": [
-    "panel"
+    "panel",
+    "cli"
    ],
-   "doc": "Premiere's exporter returned false."
+   "doc": "Premiere's exporter returned false or threw, or (CLI) it reported success but no file appeared."
   },
   "IMPORT_FAILED": {
    "outcome": "varies",
@@ -203,7 +206,7 @@
    "source": [
     "panel"
    ],
-   "doc": "executeTransaction returned false (outcome by the side-effect rule)."
+   "doc": "executeTransaction (or Project#save) returned false (outcome by the side-effect rule)."
   },
   "INTERNAL": {
    "outcome": "varies",
@@ -232,6 +235,13 @@
     "broker"
    ],
    "doc": "The panel stayed busy past the queue timeout; the request was not sent. Safe to retry."
+  },
+  "WRITE_LIMIT": {
+   "outcome": "not_committed",
+   "source": [
+    "broker"
+   ],
+   "doc": "More writes in the broker's window than its limit allows (default 300 per 60 s, a guard against a runaway script); the request was not sent. Retry later, or raise PPRO_WRITE_LIMIT."
   },
   "PANEL_TIMEOUT": {
    "outcome": "unknown",
@@ -387,7 +397,7 @@
     "panel",
     "cli"
    ],
-   "doc": "A read-back before writing did not match what the command expected."
+   "doc": "A read-back before writing did not match what the command expected, or the timeline no longer has the fingerprint the request was pinned to (guard.fingerprint, --expect-fingerprint), or a move would cross a clip: trim_clip moveTo passing over or onto another clip of its track (B1), shift_items running into a clip that stays."
   },
   "CLIENT_GONE": {
    "outcome": "not_committed",
@@ -399,16 +409,52 @@
   "VERIFY_FAILED": {
    "outcome": "varies",
    "source": [
+    "panel",
     "cli"
    ],
-   "doc": "A read-back after a write did not match what the command expected (partial when earlier steps landed)."
+   "doc": "A read-back after a write did not match what the command expected (partial when earlier steps landed; the panel reports it for remove_marker and clone_sequence)."
   },
   "TRANSITION_EXISTS": {
    "outcome": "not_committed",
    "source": [
     "cli"
    ],
-   "doc": "The edit point already has a transition: Premiere would keep it and change nothing, and the bridge cannot delete transitions. data.existing names it; delete it in Premiere first."
+   "doc": "The edit point already has a transition: Premiere would keep it and change nothing. data.existing names it; remove it first (remove_transition, or in Premiere), then add the new one."
+  },
+  "IN_USE": {
+   "outcome": "not_committed",
+   "source": [
+    "panel"
+   ],
+   "doc": "A project item to remove is still used in a sequence (Premiere would take those clips out of the sequence too); data.inUse lists where. Nothing was removed."
+  },
+  "EXPORT_STALLED": {
+   "outcome": "unknown",
+   "source": [
+    "cli"
+   ],
+   "doc": "export_video saw no progress, no new panel event and no growth of the output file for --stall-seconds (default 180) and the file does not hold the whole sequence: the render may still finish (the project is untouched; the file may still be written). export_video --job <data.jobId> waits for it again."
+  },
+  "EXPORT_RUNNING": {
+   "outcome": "not_committed",
+   "source": [
+    "panel"
+   ],
+   "doc": "export_sequence while an export job of this panel is still rendering (or its exportSequence has not returned): one render at a time. data.jobId names it; wait for it (export_status, export_video --job), or Reload the panel if Premiere is no longer rendering."
+  },
+  "EXPORT_LOST": {
+   "outcome": "unknown",
+   "source": [
+    "cli"
+   ],
+   "doc": "The export job vanished from the panel's job table while export_video waited (the panel was reloaded): Premiere may still be rendering to data.output; check the file before rendering again."
+  },
+  "RENDER_CHECK_FAILED": {
+   "outcome": "committed",
+   "source": [
+    "cli"
+   ],
+   "doc": "--render-check (split_clip, cut_range, extend_cut): the edit landed and was verified by list_items, but Premiere's render does not play a piece of it (silent, missing from the mix, a blank frame, or past the sequence end Premiere reports: the B1 symptoms), or the render could not run. data.renderCheck lists every piece; the hint says how to repair one."
   }
  },
  "capabilities": {
@@ -508,6 +554,20 @@
    "doc": "Component#getInstanceName"
   }
  },
+ "features": {
+  "fingerprintGuard": {
+   "since": "0.6.0",
+   "doc": "The panel checks the guard key fingerprint (items.fingerprint of the active sequence) before a write that is not a dry run; transport.make_rpc refuses a fingerprint guard for a panel without it."
+  },
+  "shiftItemsPrecise": {
+   "since": "0.6.0",
+   "doc": "shift_items checks the room per track from where that track's first moving clip lands, and skips tracks with nothing to move (0.5 refused any staying clip ending after fromSeconds + deltaSeconds); editing.shift_items then sends one step instead of splitting tracks."
+  },
+  "exportJobs": {
+   "since": "0.6.0",
+   "doc": "export_sequence takes wait: false and returns a job at once (jobId, state); export_status reports it (state, progress, the encoder events that fired; only exportSequence's promise ends it). ops.export_video waits on the job without a time limit (stall detection only) when the panel advertises this, else renders in one request (600 s at most)."
+  }
+ },
  "actions": [
   {
    "name": "ping",
@@ -520,7 +580,7 @@
    "readOnly": true,
    "destructive": false,
    "idempotent": true,
-   "doc": "Liveness, version/protocol handshake, capabilities, stuck/denied state.",
+   "doc": "Liveness, version/protocol handshake, capabilities, features (panel behaviours a client may branch on, see features), stuck/denied state, build flavour (build.dev: false in a release or .ccx package, which registers no devOnly action).",
    "params": {
     "probe": {
      "type": "boolean",
@@ -540,7 +600,9 @@
     "stuck",
     "denied",
     "capabilities",
-    "loadedAt"
+    "features",
+    "loadedAt",
+    "build"
    ],
    "replyOptional": [
     "capabilitiesProbedAt",
@@ -663,6 +725,263 @@
      "code": "BAD_PARAMS",
      "outcome": "not_committed",
      "doc": "unknown params are refused"
+    }
+   ]
+  },
+  {
+   "name": "set_active_sequence",
+   "kind": "write",
+   "since": "0.5.1",
+   "timeoutSeconds": 30,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": false,
+   "idempotent": true,
+   "doc": "Make another sequence of the active project the active one (opened in the Timeline), by exact name or guid, so the next requests work on it. Nothing in the project changes; read back after the switch.",
+   "params": {
+    "name": {
+     "type": "string",
+     "doc": "Exact sequence name (a name two sequences share is refused: AMBIGUOUS)"
+    },
+    "guid": {
+     "type": "string",
+     "doc": "Sequence.guid, where the build has one"
+    }
+   },
+   "requireOneOf": [
+    [
+     "name",
+     "guid"
+    ]
+   ],
+   "reply": [
+    "switched",
+    "activeSequence",
+    "previous"
+   ],
+   "replyOptional": [
+    "guid"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NOT_FOUND",
+    "AMBIGUOUS",
+    "UNSUPPORTED",
+    "TRANSACTION_FAILED"
+   ],
+   "example": {
+    "params": {
+     "name": "Sequence 01"
+    },
+    "reply": {
+     "switched": false,
+     "activeSequence": "Sequence 01",
+     "previous": "Sequence 01"
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "name": "No Such Sequence"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {},
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "name or guid is required"
+    }
+   ]
+  },
+  {
+   "name": "select_items",
+   "kind": "write",
+   "since": "0.6.0",
+   "timeoutSeconds": 30,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": false,
+   "idempotent": true,
+   "doc": "Select clips in the Timeline (Sequence#setSelection), replacing the selection: on the given tracks, the clip under atSeconds, or the clips in [fromSeconds, toSeconds] (mode inside, the default: entirely inside; overlap: touching it). Only those clips: Premiere's linked partners are not added. clear: true empties the selection instead. For what only Premiere's own panels do (Properties > Enhance Audio applies to every selected clip); nothing in the project changes and it is not an undo step. Read back (after, verified).",
+   "params": {
+    "videoTracks": {
+     "type": "array",
+     "items": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "default": []
+    },
+    "audioTracks": {
+     "type": "array",
+     "items": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "default": []
+    },
+    "atSeconds": {
+     "type": "number",
+     "doc": "Sequence seconds: the one clip under this time on each track"
+    },
+    "fromSeconds": {
+     "type": "number",
+     "pairedWith": "toSeconds",
+     "doc": "Range start, sequence seconds"
+    },
+    "toSeconds": {
+     "type": "number",
+     "pairedWith": "fromSeconds",
+     "doc": "Range end, sequence seconds"
+    },
+    "mode": {
+     "type": "string",
+     "enum": [
+      "inside",
+      "overlap"
+     ],
+     "default": "inside",
+     "doc": "For a range: inside = clips entirely in it; overlap = every clip touching it"
+    },
+    "clear": {
+     "type": "boolean",
+     "default": false,
+     "doc": "Empty the selection (no tracks or times with it)"
+    },
+    "dryRun": {
+     "type": "boolean",
+     "default": false,
+     "doc": "List the clips that would be selected; change nothing"
+    }
+   },
+   "requireOneOf": [
+    [
+     "videoTracks",
+     "audioTracks",
+     "clear"
+    ]
+   ],
+   "reply": [
+    "dryRun",
+    "mode",
+    "selected",
+    "before"
+   ],
+   "replyOptional": [
+    "after",
+    "verified"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NO_SEQUENCE",
+    "NOT_FOUND",
+    "AMBIGUOUS",
+    "UNSUPPORTED",
+    "VERIFY_FAILED"
+   ],
+   "example": {
+    "params": {
+     "videoTracks": [
+      0
+     ],
+     "audioTracks": [
+      0
+     ],
+     "atSeconds": 5.0
+    },
+    "reply": {
+     "dryRun": false,
+     "mode": "at",
+     "before": 0,
+     "after": 2,
+     "verified": true
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "fromSeconds": 0.0,
+      "toSeconds": 5.0
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "needs videoTracks and/or audioTracks (or clear)"
+    },
+    {
+     "params": {
+      "audioTracks": [
+       0
+      ]
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "needs atSeconds or fromSeconds + toSeconds"
+    },
+    {
+     "params": {
+      "audioTracks": [
+       0
+      ],
+      "atSeconds": 1.0,
+      "fromSeconds": 0.0,
+      "toSeconds": 2.0
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "atSeconds or a range, not both"
+    },
+    {
+     "params": {
+      "audioTracks": [
+       0
+      ],
+      "fromSeconds": 0.0
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "fromSeconds comes with toSeconds"
+    },
+    {
+     "params": {
+      "audioTracks": [
+       0
+      ],
+      "atSeconds": 1.0,
+      "clear": true
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "clear takes no tracks or times"
+    },
+    {
+     "params": {
+      "audioTracks": [
+       9
+      ],
+      "atSeconds": 1.0
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "audioTracks": [
+       0
+      ],
+      "fromSeconds": 10.0,
+      "toSeconds": 20.0
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "no clip entirely inside the range (mode overlap would take the one crossing it)"
     }
    ]
   },
@@ -892,10 +1211,12 @@
    "params": {
     "dir": {
      "type": "string",
+     "localPath": true,
      "required": true
     },
     "name": {
      "type": "string",
+     "fileName": true,
      "default": "frame.png"
     },
     "atSeconds": {
@@ -973,6 +1294,23 @@
      },
      "code": "BAD_PARAMS",
      "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "dir": "//evil-host/share"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "a network path as a folder"
+    },
+    {
+     "params": {
+      "dir": "/fake/frames",
+      "name": "../x.png"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "name is a plain file name: no folder"
     }
    ]
   },
@@ -991,6 +1329,7 @@
    "params": {
     "outputPath": {
      "type": "string",
+     "localPath": true,
      "required": true
     }
    },
@@ -1033,6 +1372,14 @@
      "code": "BAD_PARAMS",
      "outcome": "not_committed",
      "doc": "required strings must not be empty"
+    },
+    {
+     "params": {
+      "outputPath": "\\\\?\\UNC\\host\\share\\t.otio"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "\\\\?\\UNC\\ is a network path too (\\\\?\\<drive>:\\ is a local long path and is fine)"
     }
    ]
   },
@@ -1409,7 +1756,8 @@
     "paths": {
      "type": "array",
      "items": {
-      "type": "string"
+      "type": "string",
+      "localPath": true
      },
      "minItems": 1,
      "required": true
@@ -1462,6 +1810,16 @@
      },
      "code": "BAD_PARAMS",
      "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "paths": [
+       "\\\\nas\\media\\b01.mp4"
+      ]
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "a network (UNC) path: Windows would offer the user's credentials to that host"
     }
    ]
   },
@@ -1749,7 +2107,7 @@
    "readOnly": false,
    "destructive": false,
    "idempotent": false,
-   "doc": "Write effect params on the one clip under atSeconds (video, or audio for existing components such as Volume); everything is validated before the first transaction.",
+   "doc": "Write effect params on the one clip under atSeconds (video, or audio for existing components such as Volume); everything is validated before the first transaction. Missing video effects are added in request order: appended, or on a graphic (a chain with AE.ADBE Graphic Group) right before its first layer component (Text, Shape: neither a top intrinsic, an addable filter nor an effect container), since an effect after the layers does nothing; a graphic just placed gets up to 2 s for its layers (layerWait; still none: appended, with a warning).",
    "params": {
     "videoTrack": {
      "type": "integer",
@@ -1777,7 +2135,7 @@
         "type": "integer",
         "default": 1,
         "minimum": 1,
-        "doc": "n-th instance in chain order; missing instances are appended"
+        "doc": "n-th instance in chain order; missing instances are appended (on a graphic: before its layer components)"
        },
        "params": {
         "type": "array",
@@ -1817,6 +2175,10 @@
              }
             }
            }
+          },
+          "interpolation": {
+           "type": "any",
+           "doc": "Temporal interpolation of the keyframes given, or alone, of every keyframe the param already has: linear, hold, bezier, time... (Constants.InterpolationMode) or Premiere's number 0-8; read back per key"
           }
          }
         },
@@ -1834,17 +2196,21 @@
     "dryRun": {
      "type": "boolean",
      "default": false,
-     "doc": "Validate the whole request (missing effects are created as factory components, nothing is appended) and commit nothing; replace_clip asks this before removing a clip"
+     "doc": "Validate the whole request (missing effects are created as factory components, nothing is added; createdComponents gives their planned indexes) and commit nothing; replace_clip asks this before removing a clip"
     }
    },
    "reply": [
     "set",
     "createdEffects",
+    "createdComponents",
     "keyframes",
     "undoLabel"
    ],
    "replyOptional": [
-    "dryRun"
+    "dryRun",
+    "interpolation",
+    "layerWait",
+    "warning"
    ],
    "fakeOnlyReply": [],
    "errors": [
@@ -1898,6 +2264,18 @@
      "createdEffects": [
       "AE.ADBE Gaussian Blur 2",
       "AE.ADBE Gaussian Blur 2"
+     ],
+     "createdComponents": [
+      {
+       "matchName": "AE.ADBE Gaussian Blur 2",
+       "occurrence": 1,
+       "index": 2
+      },
+      {
+       "matchName": "AE.ADBE Gaussian Blur 2",
+       "occurrence": 2,
+       "index": 3
+      }
      ],
      "keyframes": [
       {
@@ -2601,6 +2979,593 @@
    ]
   },
   {
+   "name": "remove_transition",
+   "kind": "write",
+   "since": "0.6.0",
+   "timeoutSeconds": 30,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": true,
+   "idempotent": false,
+   "doc": "Remove the video transition at the start or end edge of the clip under atSeconds (one undo step). Transition items expose no times over UXP, so the panel reads the track's transition count, strictly, before and after: a track without transitions is NOT_FOUND before anything changes, and a removal that leaves the count unchanged is NOT_FOUND too (not_committed). When the clip's own call removes nothing and one clip touches that edge, the neighbour's opposite edge is asked (via: neighbour, one more undo step). ops.remove_transition finds the transition in an OTIO export first and verifies it is gone.",
+   "params": {
+    "videoTrack": {
+     "type": "integer",
+     "minimum": 0,
+     "required": true
+    },
+    "atSeconds": {
+     "type": "number",
+     "required": true
+    },
+    "edge": {
+     "type": "string",
+     "enum": [
+      "start",
+      "end"
+     ],
+     "required": true,
+     "doc": "The edit point at the clip's start or end"
+    },
+    "dryRun": {
+     "type": "boolean",
+     "default": false,
+     "doc": "Find the clip, its neighbour at that edge and the track's transition count; change nothing (wouldRefuse: NOT_FOUND when the track has no transitions)"
+    },
+    "undoLabel": {
+     "type": "string",
+     "doc": "Label for Premiere's undo history"
+    }
+   },
+   "reply": [
+    "dryRun",
+    "track",
+    "edge",
+    "cut",
+    "clip",
+    "neighbour",
+    "removed",
+    "via",
+    "transitionCount"
+   ],
+   "replyOptional": [
+    "undoLabel",
+    "wouldRefuse",
+    "reason"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NO_SEQUENCE",
+    "NOT_FOUND",
+    "AMBIGUOUS",
+    "UNSUPPORTED",
+    "TRANSACTION_FAILED"
+   ],
+   "example": {
+    "params": {
+     "videoTrack": 0,
+     "atSeconds": 5.0,
+     "edge": "start",
+     "dryRun": true
+    },
+    "reply": {
+     "dryRun": true,
+     "edge": "start",
+     "cut": 0.0,
+     "removed": false,
+     "via": null,
+     "transitionCount": {
+      "before": 0
+     },
+     "wouldRefuse": "NOT_FOUND"
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "edge": "start"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "V1 has no transitions"
+    },
+    {
+     "params": {
+      "videoTrack": 1,
+      "atSeconds": 5.0,
+      "edge": "end"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "no clip on V2 there"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "edge": "middle"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "edge is required"
+    }
+   ]
+  },
+  {
+   "name": "remove_effect",
+   "kind": "write",
+   "since": "0.6.0",
+   "timeoutSeconds": 30,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": true,
+   "idempotent": false,
+   "doc": "Remove one added component (filter) from the chain of the clip under atSeconds (one undo step), addressed by match name and occurrence like set_params. The components built into every clip (Motion, Opacity, Time Remapping, an audio clip's Internal volume components) are refused (UNSUPPORTED). Read back: chain must be chainBefore without exactly that instance (verified).",
+   "params": {
+    "videoTrack": {
+     "type": "integer",
+     "minimum": 0,
+     "doc": "Video track (exactly one of videoTrack / audioTrack)"
+    },
+    "audioTrack": {
+     "type": "integer",
+     "minimum": 0,
+     "doc": "Audio track (exactly one of videoTrack / audioTrack)"
+    },
+    "atSeconds": {
+     "type": "number",
+     "required": true
+    },
+    "matchName": {
+     "type": "string",
+     "required": true
+    },
+    "occurrence": {
+     "type": "integer",
+     "default": 1,
+     "minimum": 1,
+     "doc": "n-th instance of matchName in chain order (inspect_items lists it)"
+    },
+    "dryRun": {
+     "type": "boolean",
+     "default": false,
+     "doc": "Find the component and change nothing (wouldRefuse: NOT_FOUND when the clip lacks it)"
+    },
+    "undoLabel": {
+     "type": "string",
+     "doc": "Label for Premiere's undo history"
+    }
+   },
+   "requireOneOf": [
+    [
+     "videoTrack",
+     "audioTrack"
+    ]
+   ],
+   "reply": [
+    "dryRun",
+    "track",
+    "clip",
+    "matchName",
+    "occurrence",
+    "chainBefore"
+   ],
+   "replyOptional": [
+    "index",
+    "displayName",
+    "chain",
+    "verified",
+    "undoLabel",
+    "wouldRefuse",
+    "reason"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NO_SEQUENCE",
+    "NOT_FOUND",
+    "AMBIGUOUS",
+    "UNSUPPORTED",
+    "TRANSACTION_FAILED"
+   ],
+   "example": {
+    "params": {
+     "videoTrack": 0,
+     "atSeconds": 5.0,
+     "matchName": "AE.ADBE Gaussian Blur 2",
+     "dryRun": true
+    },
+    "reply": {
+     "dryRun": true,
+     "matchName": "AE.ADBE Gaussian Blur 2",
+     "occurrence": 1,
+     "wouldRefuse": "NOT_FOUND"
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Gaussian Blur 2"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "the interview has no blur"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Motion"
+     },
+     "code": "UNSUPPORTED",
+     "outcome": "not_committed",
+     "doc": "built into every clip"
+    },
+    {
+     "params": {
+      "audioTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "Internal Volume Mono"
+     },
+     "code": "UNSUPPORTED",
+     "outcome": "not_committed",
+     "doc": "the audio clip's own volume"
+    },
+    {
+     "params": {
+      "videoTrack": 2,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Gaussian Blur 2"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "no clip under atSeconds"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "audioTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Gaussian Blur 2"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "exactly one of videoTrack / audioTrack"
+    },
+    {
+     "params": {
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Gaussian Blur 2"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "needs videoTrack or audioTrack"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": ""
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "required strings must not be empty"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Crop",
+      "occurrence": 0
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    }
+   ]
+  },
+  {
+   "name": "remove_keyframes",
+   "kind": "write",
+   "since": "0.6.0",
+   "timeoutSeconds": 30,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": true,
+   "idempotent": false,
+   "doc": "Remove keyframes of one param of the clip under atSeconds (one undo step): all of them, or those between fromSeconds and toSeconds in a timeBase (converted like set_params' keyframes; the range may reach past the clip). When every keyframe goes, animation is switched off (animationOff) and valueAfter says which value Premiere kept; keepValue sets the value the param had at the middle of the clip instead. No keyframes there is NOT_FOUND before anything changes. Read back: remaining (and the kept value) -> verified.",
+   "params": {
+    "videoTrack": {
+     "type": "integer",
+     "minimum": 0,
+     "doc": "Video track (exactly one of videoTrack / audioTrack)"
+    },
+    "audioTrack": {
+     "type": "integer",
+     "minimum": 0,
+     "doc": "Audio track (exactly one of videoTrack / audioTrack)"
+    },
+    "atSeconds": {
+     "type": "number",
+     "required": true
+    },
+    "matchName": {
+     "type": "string",
+     "required": true
+    },
+    "occurrence": {
+     "type": "integer",
+     "default": 1,
+     "minimum": 1,
+     "doc": "n-th instance of matchName in chain order"
+    },
+    "paramIndex": {
+     "type": "integer",
+     "minimum": 0,
+     "required": true,
+     "doc": "The param's index (inspect_items)"
+    },
+    "all": {
+     "type": "boolean",
+     "doc": "Every keyframe (animation off); or give fromSeconds / toSeconds"
+    },
+    "fromSeconds": {
+     "type": "number",
+     "pairedWith": "toSeconds",
+     "doc": "Range start in timeBase (inclusive, 1 us of slack)"
+    },
+    "toSeconds": {
+     "type": "number",
+     "pairedWith": "fromSeconds",
+     "doc": "Range end in timeBase (inclusive, 1 us of slack)"
+    },
+    "timeBase": {
+     "type": "string",
+     "enum": [
+      "media",
+      "clip",
+      "sequence"
+     ],
+     "doc": "Required with fromSeconds / toSeconds: media (what inspect_items reports), clip, sequence"
+    },
+    "keepValue": {
+     "type": "boolean",
+     "default": false,
+     "doc": "When every keyframe goes: keep the value the param had at the middle of the clip"
+    },
+    "dryRun": {
+     "type": "boolean",
+     "default": false,
+     "doc": "List the keyframes that would go and stay; change nothing (wouldRefuse: NOT_FOUND when there are none)"
+    },
+    "undoLabel": {
+     "type": "string",
+     "doc": "Label for Premiere's undo history"
+    }
+   },
+   "requireOneOf": [
+    [
+     "videoTrack",
+     "audioTrack"
+    ],
+    [
+     "all",
+     "fromSeconds"
+    ]
+   ],
+   "reply": [
+    "dryRun",
+    "track",
+    "clip",
+    "matchName",
+    "occurrence",
+    "index",
+    "mode",
+    "removed",
+    "remaining",
+    "animationOff"
+   ],
+   "replyOptional": [
+    "name",
+    "range",
+    "keptValue",
+    "valueAfter",
+    "verified",
+    "undoLabel",
+    "wouldRefuse",
+    "reason"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NO_SEQUENCE",
+    "NOT_FOUND",
+    "AMBIGUOUS",
+    "UNSUPPORTED",
+    "TRANSACTION_FAILED"
+   ],
+   "example": {
+    "params": {
+     "videoTrack": 0,
+     "atSeconds": 5.0,
+     "matchName": "AE.ADBE Opacity",
+     "paramIndex": 0,
+     "all": true,
+     "dryRun": true
+    },
+    "reply": {
+     "dryRun": true,
+     "mode": "all",
+     "index": 0,
+     "removed": [],
+     "remaining": [],
+     "animationOff": false,
+     "wouldRefuse": "NOT_FOUND"
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Opacity",
+      "paramIndex": 0,
+      "all": true
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "Opacity is not keyframed"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Opacity",
+      "paramIndex": 9,
+      "all": true
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "Opacity has params 0 and 1"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Gaussian Blur 2",
+      "paramIndex": 0,
+      "all": true
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "no such component"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Opacity",
+      "paramIndex": 0
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "needs all or a range"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Opacity",
+      "paramIndex": 0,
+      "all": true,
+      "fromSeconds": 0.0,
+      "toSeconds": 1.0,
+      "timeBase": "clip"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "all and a range"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Opacity",
+      "paramIndex": 0,
+      "fromSeconds": 0.0,
+      "toSeconds": 1.0
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "a range needs a timeBase"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Opacity",
+      "paramIndex": 0,
+      "fromSeconds": 2.0,
+      "toSeconds": 1.0,
+      "timeBase": "clip"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "the range runs backwards"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Opacity",
+      "paramIndex": 0,
+      "fromSeconds": 0.0,
+      "timeBase": "clip"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "fromSeconds needs toSeconds"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Opacity",
+      "paramIndex": 0,
+      "fromSeconds": 0.0,
+      "toSeconds": 40000.0,
+      "timeBase": "media"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "media time past 9 h is a unit mistake"
+    },
+    {
+     "params": {
+      "videoTrack": 0,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Opacity",
+      "paramIndex": 0,
+      "fromSeconds": 0.0,
+      "toSeconds": 1.0,
+      "timeBase": "frames"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "videoTrack": 2,
+      "atSeconds": 5.0,
+      "matchName": "AE.ADBE Opacity",
+      "paramIndex": 0,
+      "all": true
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "no clip under atSeconds"
+    }
+   ]
+  },
+  {
    "name": "set_fps",
    "kind": "write",
    "since": "0.3.0",
@@ -2750,6 +3715,332 @@
    ]
   },
   {
+   "name": "subclip",
+   "kind": "write",
+   "since": "0.6.0",
+   "timeoutSeconds": 60,
+   "capability": "subclip",
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": false,
+   "idempotent": false,
+   "doc": "A subclip of a project item (source in/out on the item's frames, hard boundaries, video and/or audio) in a bin: one undo step (a missing top-level bin is created in it), two when Premiere puts the subclip in another bin and it is moved. A clip of that name already in the target bin is refused (PRECONDITION_FAILED) unless allowDuplicateName. Read back: the new item, its bin and its own in/out point.",
+   "params": {
+    "itemName": {
+     "type": "string",
+     "required": true,
+     "doc": "The source project item"
+    },
+    "binPath": {
+     "type": "string",
+     "doc": "The source item's bin when names repeat (\"\" = root)"
+    },
+    "name": {
+     "type": "string",
+     "required": true,
+     "doc": "Name of the new subclip"
+    },
+    "inSeconds": {
+     "type": "number",
+     "minimum": 0,
+     "required": true,
+     "doc": "Source in point in seconds (the CLI snaps it to the item's frames)"
+    },
+    "outSeconds": {
+     "type": "number",
+     "minimum": 0,
+     "required": true,
+     "doc": "Source out point in seconds, after inSeconds and within the media"
+    },
+    "bin": {
+     "type": "string",
+     "doc": "Target bin path (default: the source item's bin; \"\" = root); a missing top-level bin is created in the same undo step"
+    },
+    "takeVideo": {
+     "type": "boolean",
+     "default": true
+    },
+    "takeAudio": {
+     "type": "boolean",
+     "default": true
+    },
+    "allowDuplicateName": {
+     "type": "boolean",
+     "default": false,
+     "doc": "Make it even when the target bin already has a clip of that name"
+    },
+    "dryRun": {
+     "type": "boolean",
+     "default": false,
+     "doc": "Check everything and say where it would land (frameRate, mediaSeconds); change nothing"
+    },
+    "undoLabel": {
+     "type": "string",
+     "doc": "Label for Premiere's undo history"
+    }
+   },
+   "reply": [
+    "dryRun",
+    "created",
+    "source",
+    "name",
+    "binPath",
+    "inSeconds",
+    "outSeconds",
+    "takeVideo",
+    "takeAudio",
+    "hardBoundaries",
+    "createsBin",
+    "sameNameElsewhere",
+    "frameRate",
+    "mediaSeconds"
+   ],
+   "replyOptional": [
+    "moved",
+    "item",
+    "readBack",
+    "newItems",
+    "undoLabel",
+    "undoSteps"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NOT_FOUND",
+    "AMBIGUOUS",
+    "UNSUPPORTED",
+    "PRECONDITION_FAILED",
+    "TRANSACTION_FAILED"
+   ],
+   "example": {
+    "params": {
+     "itemName": "broll_city.mp4",
+     "name": "broll city 2-5",
+     "inSeconds": 2,
+     "outSeconds": 5,
+     "undoLabel": "Agent: subclip"
+    },
+    "reply": {
+     "dryRun": false,
+     "created": true,
+     "item": "broll city 2-5",
+     "binPath": "",
+     "moved": false,
+     "undoSteps": [
+      "Agent: subclip"
+     ]
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "itemName": "title.mov",
+      "binPath": "EN",
+      "name": "title.mov",
+      "inSeconds": 0,
+      "outSeconds": 2
+     },
+     "code": "PRECONDITION_FAILED",
+     "outcome": "not_committed",
+     "doc": "a clip of that name is already in the target bin (the source's)"
+    },
+    {
+     "params": {
+      "itemName": "title.mov",
+      "name": "t",
+      "inSeconds": 0,
+      "outSeconds": 2
+     },
+     "code": "AMBIGUOUS",
+     "outcome": "not_committed",
+     "doc": "an EN and a CN item share the name"
+    },
+    {
+     "params": {
+      "itemName": "nope.mp4",
+      "name": "n",
+      "inSeconds": 0,
+      "outSeconds": 1
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "itemName": "broll_city.mp4",
+      "name": "b",
+      "inSeconds": 0,
+      "outSeconds": 1,
+      "bin": "EN/Deeper"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "only a missing top-level bin is created"
+    },
+    {
+     "params": {
+      "itemName": "broll_city.mp4",
+      "name": "b",
+      "inSeconds": 3,
+      "outSeconds": 2
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "itemName": "broll_city.mp4",
+      "name": "b",
+      "inSeconds": 0,
+      "outSeconds": 20
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "past the end of the 12 s media"
+    },
+    {
+     "params": {
+      "itemName": "broll_city.mp4",
+      "name": "b",
+      "inSeconds": 0,
+      "outSeconds": 1,
+      "takeVideo": false,
+      "takeAudio": false
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "itemName": "broll_city.mp4",
+      "inSeconds": 0,
+      "outSeconds": 1
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "needs a name"
+    }
+   ]
+  },
+  {
+   "name": "relink",
+   "kind": "write",
+   "since": "0.6.0",
+   "timeoutSeconds": 60,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": false,
+   "idempotent": true,
+   "doc": "Point a project item at another media file (changeMediaFilePath with the compatibility override, then refreshMedia) and read its media path back. Every sequence using the item follows (uses: clips per sequence; sameMedia: other items on the old file). Not an undo step: relink back to previousPath. Refused for sequences, ambiguous names, items Premiere cannot relink (canChangeMediaPath) and a running Speech-to-Text job; the CLI checks and compares the files first.",
+   "params": {
+    "itemName": {
+     "type": "string",
+     "required": true,
+     "doc": "The project item to relink"
+    },
+    "binPath": {
+     "type": "string",
+     "doc": "Its bin when names repeat (\"\" = root); any second item of that name needs it"
+    },
+    "newPath": {
+     "type": "string",
+     "localPath": true,
+     "required": true,
+     "doc": "Absolute path of the new media file (the CLI checks it exists, is no UNC path or data stream, and matches the old media)"
+    },
+    "dryRun": {
+     "type": "boolean",
+     "default": false,
+     "doc": "Report the item's current media facts, its uses and sameMedia; change nothing"
+    }
+   },
+   "reply": [
+    "dryRun",
+    "relinked",
+    "item",
+    "previousPath",
+    "newPath",
+    "current",
+    "uses",
+    "sameMedia"
+   ],
+   "replyOptional": [
+    "alreadyLinked",
+    "returned",
+    "refreshed",
+    "mediaPath",
+    "offline"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NOT_FOUND",
+    "AMBIGUOUS",
+    "UNSUPPORTED",
+    "TRANSCRIBE_RUNNING"
+   ],
+   "example": {
+    "params": {
+     "itemName": "broll_city.mp4",
+     "newPath": "/fake/media/broll_city_v2.mp4"
+    },
+    "reply": {
+     "dryRun": false,
+     "relinked": true,
+     "item": "broll_city.mp4",
+     "newPath": "/fake/media/broll_city_v2.mp4",
+     "mediaPath": "/fake/media/broll_city_v2.mp4"
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "itemName": "title.mov",
+      "newPath": "/fake/media/title_v2.mov"
+     },
+     "code": "AMBIGUOUS",
+     "outcome": "not_committed",
+     "doc": "relinking changes one item: name it with its bin"
+    },
+    {
+     "params": {
+      "itemName": "nope.mp4",
+      "newPath": "/fake/media/x.mp4"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "itemName": "broll_city.mp4",
+      "newPath": ""
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "itemName": "broll_city.mp4"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "needs newPath"
+    },
+    {
+     "params": {
+      "itemName": "broll_city.mp4",
+      "newPath": "\\\\.\\pipe\\x"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "a device path (\\\\.\\): no media lives there"
+    }
+   ]
+  },
+  {
    "name": "add_marker",
    "kind": "write",
    "since": "0.3.0",
@@ -2760,7 +4051,7 @@
    "readOnly": false,
    "destructive": false,
    "idempotent": false,
-   "doc": "Add a sequence marker (the bridge cannot remove markers).",
+   "doc": "Add a sequence marker (remove_marker takes one off again).",
    "params": {
     "atSeconds": {
      "type": "number",
@@ -2866,6 +4157,326 @@
      "code": "BAD_PARAMS",
      "outcome": "not_committed",
      "doc": "required strings must not be empty"
+    }
+   ]
+  },
+  {
+   "name": "list_markers",
+   "kind": "read",
+   "since": "0.6.0",
+   "timeoutSeconds": 30,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": true,
+   "destructive": false,
+   "idempotent": true,
+   "doc": "The active sequence's markers in start order: guid (26.3+), name, comments, start / duration / end (sequence s), type and colorIndex. A marker list that cannot be read is an error, never an empty list.",
+   "params": {},
+   "reply": [
+    "sequence",
+    "count",
+    "markers"
+   ],
+   "replyOptional": [],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NO_SEQUENCE"
+   ],
+   "example": {
+    "params": {},
+    "reply": {
+     "sequence": "Sequence 01",
+     "count": 1
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "name": "harness marker"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "unknown params are refused"
+    }
+   ]
+  },
+  {
+   "name": "remove_marker",
+   "kind": "write",
+   "since": "0.6.0",
+   "timeoutSeconds": 30,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": true,
+   "idempotent": false,
+   "doc": "Remove ONE sequence marker by guid, or by exact name (atSeconds narrows a name several markers share). No match (NOT_FOUND) or several (AMBIGUOUS) is refused before anything changes. One undo step; read back afterwards (still there: VERIFY_FAILED, committed).",
+   "params": {
+    "guid": {
+     "type": "string",
+     "doc": "Marker guid (list_markers; Marker.guid, 26.3+)"
+    },
+    "name": {
+     "type": "string",
+     "doc": "Exact marker name"
+    },
+    "atSeconds": {
+     "type": "number",
+     "doc": "The marker's start in sequence seconds (half a frame of tolerance), when several markers share the name"
+    },
+    "dryRun": {
+     "type": "boolean",
+     "default": false,
+     "doc": "Name the marker that would go; change nothing"
+    },
+    "undoLabel": {
+     "type": "string",
+     "doc": "Label for Premiere's undo history"
+    }
+   },
+   "requireOneOf": [
+    [
+     "guid",
+     "name"
+    ]
+   ],
+   "reply": [
+    "dryRun",
+    "removed",
+    "markerCount"
+   ],
+   "replyOptional": [
+    "verified",
+    "undoLabel"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NO_SEQUENCE",
+    "NOT_FOUND",
+    "AMBIGUOUS",
+    "TRANSACTION_FAILED",
+    "VERIFY_FAILED"
+   ],
+   "example": {
+    "params": {
+     "name": "harness marker",
+     "atSeconds": 1.0
+    },
+    "reply": {
+     "dryRun": false,
+     "verified": true
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "name": "No such marker"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "guid": "no-such-guid",
+      "dryRun": true
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "atSeconds": 1.0
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "guid or name is required"
+    },
+    {
+     "params": {
+      "name": ""
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "an empty name counts as none"
+    }
+   ]
+  },
+  {
+   "name": "list_sequences",
+   "kind": "read",
+   "since": "0.6.0",
+   "timeoutSeconds": 60,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": true,
+   "destructive": false,
+   "idempotent": true,
+   "doc": "Every sequence of the active project: name, guid, active, and restorePoint (the record clone_sequence tagged it with: sourceGuid, sourceName, created, renamed; null for any other sequence).",
+   "params": {},
+   "reply": [
+    "activeSequence",
+    "count",
+    "sequences"
+   ],
+   "replyOptional": [],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "UNSUPPORTED"
+   ],
+   "example": {
+    "params": {},
+    "reply": {
+     "activeSequence": "Sequence 01",
+     "count": 1
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "name": "Sequence 01"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "unknown params are refused"
+    }
+   ]
+  },
+  {
+   "name": "clone_sequence",
+   "kind": "write",
+   "since": "0.6.0",
+   "timeoutSeconds": 120,
+   "capability": "sequenceClone",
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": true,
+   "idempotent": false,
+   "doc": "A restore point before a risky edit: clone the active sequence (or the one named by guid / name), rename the clone \"<name> [restore YYYY-MM-DD HH:MM]\" and tag it with a sequence custom property (2 undo steps; not made active). Then delete the oldest restore points of the same source beyond keep (Project#deleteSequence; only tagged ones, never the active one or one the user renamed). A clone that cannot be found, named or tagged afterwards is VERIFY_FAILED (committed).",
+   "params": {
+    "name": {
+     "type": "string",
+     "doc": "Exact name of the sequence to clone (default: the active one)"
+    },
+    "guid": {
+     "type": "string",
+     "doc": "Guid of the sequence to clone (wins over name)"
+    },
+    "keep": {
+     "type": "integer",
+     "minimum": 1,
+     "default": 5,
+     "doc": "Restore points of that sequence to keep, the new one included; older ones are deleted"
+    },
+    "dryRun": {
+     "type": "boolean",
+     "default": false,
+     "doc": "The clone's name and what pruning would delete; change nothing"
+    },
+    "undoLabel": {
+     "type": "string",
+     "doc": "Label for Premiere's undo history"
+    }
+   },
+   "reply": [
+    "dryRun",
+    "source",
+    "cloneName",
+    "keep",
+    "prune",
+    "undoSteps"
+   ],
+   "replyOptional": [
+    "clone",
+    "verified",
+    "undoLabel",
+    "pruned",
+    "pruneFailed",
+    "warning",
+    "notes"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NO_SEQUENCE",
+    "NOT_FOUND",
+    "AMBIGUOUS",
+    "UNSUPPORTED",
+    "TRANSACTION_FAILED",
+    "VERIFY_FAILED"
+   ],
+   "example": {
+    "params": {},
+    "reply": {
+     "dryRun": false,
+     "verified": true,
+     "prune": [],
+     "pruned": []
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "name": "No Such Sequence"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "keep": 0
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "the new restore point always stays"
+    }
+   ]
+  },
+  {
+   "name": "save_project",
+   "kind": "write",
+   "since": "0.6.0",
+   "timeoutSeconds": 120,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": false,
+   "idempotent": true,
+   "doc": "Save the active project (Project#save, a direct call: not an undo step). Reports the project path; the CLI compares the file's time stamp before and after.",
+   "params": {},
+   "reply": [
+    "saved",
+    "name",
+    "path"
+   ],
+   "replyOptional": [],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "UNSUPPORTED",
+    "TRANSACTION_FAILED"
+   ],
+   "example": {
+    "params": {},
+    "reply": {
+     "saved": true
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "path": "/tmp/other.prproj"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "no Save As: unknown params are refused"
     }
    ]
   },
@@ -3007,6 +4618,147 @@
      },
      "code": "BAD_PARAMS",
      "outcome": "not_committed"
+    }
+   ]
+  },
+  {
+   "name": "remove_project_items",
+   "kind": "write",
+   "since": "0.6.0",
+   "timeoutSeconds": 60,
+   "capability": "removeProjectItem",
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": true,
+   "idempotent": false,
+   "doc": "Remove bins and/or project items from the project (one undo step; media files stay on disk). Refused when a sequence still uses an item (IN_USE) or a sequence would go with them (UNSUPPORTED); every sequence is read strictly first. Read back afterwards (remaining).",
+   "params": {
+    "bins": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "minItems": 1,
+     "doc": "Bin paths (\"Bin\" or \"Bin/Sub bin\"); everything inside goes too. The root bin cannot be removed"
+    },
+    "items": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "properties": {
+       "name": {
+        "type": "string",
+        "required": true
+       },
+       "binPath": {
+        "type": "string"
+       }
+      }
+     },
+     "minItems": 1,
+     "doc": "Project items (clips); a name that matches more than one item needs its binPath"
+    },
+    "dryRun": {
+     "type": "boolean",
+     "default": false,
+     "doc": "List what would go, where it is used, and wouldRefuse; change nothing"
+    },
+    "undoLabel": {
+     "type": "string",
+     "doc": "Label for Premiere's undo history"
+    }
+   },
+   "requireOneOf": [
+    [
+     "bins",
+     "items"
+    ]
+   ],
+   "reply": [
+    "dryRun",
+    "items",
+    "inUse",
+    "removed",
+    "remaining"
+   ],
+   "replyOptional": [
+    "wouldRefuse",
+    "undoLabel"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NOT_FOUND",
+    "AMBIGUOUS",
+    "IN_USE",
+    "UNSUPPORTED",
+    "TRANSACTION_FAILED"
+   ],
+   "example": {
+    "params": {
+     "bins": [
+      "EN"
+     ],
+     "dryRun": true
+    },
+    "reply": {
+     "dryRun": true,
+     "inUse": [],
+     "removed": []
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "items": [
+       {
+        "name": "interview.mp4"
+       }
+      ]
+     },
+     "code": "IN_USE",
+     "outcome": "not_committed",
+     "doc": "the interview runs on V1/A1"
+    },
+    {
+     "params": {
+      "bins": [
+       "Nope"
+      ]
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "items": [
+       {
+        "name": "title.mov"
+       }
+      ]
+     },
+     "code": "AMBIGUOUS",
+     "outcome": "not_committed",
+     "doc": "an EN and a CN item share the name"
+    },
+    {
+     "params": {
+      "bins": [
+       "/"
+      ]
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "the root bin"
+    },
+    {
+     "params": {
+      "dryRun": true
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "needs bins and/or items"
     }
    ]
   },
@@ -3159,7 +4911,7 @@
    "readOnly": false,
    "destructive": false,
    "idempotent": false,
-   "doc": "Trim or move the one clip under atSeconds: start / end (sequence s) and inPoint / outPoint (source s) are head / tail trims with the content anchored to the timeline (measured on 27.1); moveTo = absolute new start, alone; one undo step, read back.",
+   "doc": "Trim or move the one clip under atSeconds: start / end (sequence s) and inPoint / outPoint (source s) are head / tail trims with the content anchored to the timeline (measured on 27.1); moveTo = absolute new start, alone, refused when the move would pass over or land on another clip of the track (B1: such a move renders silent or blank); one undo step, read back.",
    "params": {
     "kind": {
      "type": "string",
@@ -3197,7 +4949,7 @@
     },
     "moveTo": {
      "type": "number",
-     "doc": "New sequence start, length and source range kept; not combinable with the other fields"
+     "doc": "New sequence start, length and source range kept; not combinable with the other fields; refused (PRECONDITION_FAILED) when the path from the old to the new place crosses another clip of the track by more than half a frame"
     },
     "undoLabel": {
      "type": "string",
@@ -3229,7 +4981,8 @@
     "NO_SEQUENCE",
     "NOT_FOUND",
     "AMBIGUOUS",
-    "TRANSACTION_FAILED"
+    "TRANSACTION_FAILED",
+    "PRECONDITION_FAILED"
    ],
    "example": {
     "params": {
@@ -3309,14 +5062,16 @@
    "readOnly": true,
    "destructive": false,
    "idempotent": true,
-   "doc": "Render the active sequence to a file inside Premiere with an encoder preset (e.g. Premiere's WAV preset: a 67 s sequence takes ~1.5 s); the project is not changed.",
+   "doc": "Render the active sequence to a file inside Premiere with an encoder preset (e.g. Premiere's WAV preset: a 67 s sequence takes ~1.5 s); the project is not changed. wait false: start an export job and reply once it ended, or after 1 s with state running (poll export_status); a job ends only when exportSequence's promise settles (false within that second is EXPORT_FAILED and no job); one render at a time.",
    "params": {
     "outputPath": {
      "type": "string",
+     "localPath": true,
      "required": true
     },
     "presetPath": {
      "type": "string",
+     "localPath": true,
      "required": true,
      "doc": "An .epr encoder preset, e.g. Premiere's own MediaIO/systempresets/3F3F3F3F_57415645/Waveform Audio 48kHz 16-bit.epr (the CLI finds it)"
     },
@@ -3324,6 +5079,11 @@
      "type": "boolean",
      "default": false,
      "doc": "Render only the work area (default: the whole sequence)"
+    },
+    "wait": {
+     "type": "boolean",
+     "default": true,
+     "doc": "true: the request lasts as long as the render (timeoutSeconds 600). false: an export job (feature exportJobs); the reply carries jobId and state"
     }
    },
    "reply": [
@@ -3331,12 +5091,17 @@
     "outputPath",
     "preset"
    ],
-   "replyOptional": [],
+   "replyOptional": [
+    "jobId",
+    "started",
+    "state"
+   ],
    "fakeOnlyReply": [],
    "errors": [
     "NO_PROJECT",
     "NO_SEQUENCE",
-    "EXPORT_FAILED"
+    "EXPORT_FAILED",
+    "EXPORT_RUNNING"
    ],
    "example": {
     "params": {
@@ -3382,6 +5147,268 @@
      "code": "EXPORT_FAILED",
      "outcome": "not_committed",
      "doc": "exportSequence threw (Unable to initialize export!)"
+    },
+    {
+     "params": {
+      "outputPath": "/tmp/review/mix.wav",
+      "presetPath": "/fake/presets/wav.epr",
+      "wait": "no"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "wait is a boolean"
+    },
+    {
+     "params": {
+      "outputPath": "/fake/no/such/folder/mix.wav",
+      "presetPath": "/fake/presets/wav.epr",
+      "wait": false
+     },
+     "code": "EXPORT_FAILED",
+     "outcome": "not_committed",
+     "doc": "a job refused at once (exportSequence returned false) is no job: EXPORT_FAILED as with wait"
+    },
+    {
+     "params": {
+      "outputPath": "/fake/out/mix.wav",
+      "presetPath": "//host/presets/wav.epr"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "the preset is opened by Premiere too"
+    }
+   ]
+  },
+  {
+   "name": "export_status",
+   "kind": "read",
+   "since": "0.6.0",
+   "timeoutSeconds": 30,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": true,
+   "destructive": false,
+   "idempotent": true,
+   "doc": "Export jobs of this panel (export_sequence wait false), each {jobId, state: running | done | failed | cancelled, progress (0-1 or null), progressRaw, elapsedSeconds, outputPath, preset, workAreaOnly, sequence, startedAt, finishedAt, lastEventAt, endEvent (the last complete / error / cancel / exportMediaComplete event: {type, at, message, state?}), error, settledBy (\"promise\": exportSequence's promise is the only thing that ends a job; the encoder and project events are not tied to one render), returned (what exportSequence returned: true, false, \"threw\", null while pending), pending, events (count per type: progress, complete, error, cancel, queue, exportMediaComplete), routes (events per listener route), eventKeys / eventSample (keys and primitive values of each type's first event), listeners, listenerErrors}. Makes no Premiere call and checks no guard (like ping: it touches no project or sequence); a panel reload forgets its jobs.",
+   "params": {
+    "jobId": {
+     "type": "string",
+     "doc": "Only this job (NOT_FOUND when the panel does not know it); omitted: every job"
+    }
+   },
+   "reply": [
+    "jobs"
+   ],
+   "replyOptional": [],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NOT_FOUND"
+   ],
+   "example": {
+    "params": {},
+    "reply": {
+     "jobs": []
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "jobId": "export-nope-1"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "unknown job (or the panel was reloaded since)"
+    },
+    {
+     "params": {
+      "jobId": 7
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    }
+   ]
+  },
+  {
+   "name": "list_effects",
+   "kind": "read",
+   "since": "0.6.0",
+   "timeoutSeconds": 30,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": true,
+   "destructive": false,
+   "idempotent": true,
+   "doc": "The effects Premiere can add: video filters with match name and display name (VideoFilterFactory; the pairing by list position is spot-checked by creating a few, which commits nothing) and audio filters by their localised display name only (AudioFilterFactory lists no match names; one shows in inspect_items once the effect is on a clip).",
+   "params": {
+    "kind": {
+     "type": "string",
+     "enum": [
+      "audio",
+      "video"
+     ],
+     "doc": "Only audio or only video effects (default both)"
+    }
+   },
+   "reply": [
+    "effects",
+    "counts"
+   ],
+   "replyOptional": [
+    "notes",
+    "videoDisplayNames"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "UNSUPPORTED"
+   ],
+   "example": {
+    "params": {
+     "kind": "audio"
+    },
+    "reply": {
+     "counts": {
+      "audio": 2
+     }
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "kind": "transition"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    }
+   ]
+  },
+  {
+   "name": "add_audio_effect",
+   "kind": "write",
+   "since": "0.6.0",
+   "timeoutSeconds": 60,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": false,
+   "idempotent": false,
+   "doc": "Append an audio effect to the one audio clip under atSeconds, by its display name as Premiere lists it (localised: the UI language) or by the match name of one; one undo step, read back (verified: the chain has one more component, with that name). An unknown name is refused with the closest names (data.closeNames) before anything changes.",
+   "params": {
+    "audioTrack": {
+     "type": "integer",
+     "minimum": 0,
+     "required": true
+    },
+    "atSeconds": {
+     "type": "number",
+     "required": true
+    },
+    "name": {
+     "type": "string",
+     "required": true,
+     "doc": "A display name from list_effects (exact; case is ignored when that is unambiguous), or a match name (a GUID or \"AE.ADBE ...\"), looked up by creating each listed effect (commits nothing)"
+    },
+    "dryRun": {
+     "type": "boolean",
+     "default": false,
+     "doc": "Resolve the name and the clip and report the chain; change nothing"
+    },
+    "undoLabel": {
+     "type": "string",
+     "doc": "Label for Premiere's undo history"
+    }
+   },
+   "reply": [
+    "dryRun",
+    "track",
+    "clip",
+    "displayName",
+    "matchedBy",
+    "matchName",
+    "before"
+   ],
+   "replyOptional": [
+    "after",
+    "component",
+    "verified",
+    "undoLabel"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NO_SEQUENCE",
+    "NOT_FOUND",
+    "AMBIGUOUS",
+    "UNSUPPORTED",
+    "TRANSACTION_FAILED"
+   ],
+   "example": {
+    "params": {
+     "audioTrack": 0,
+     "atSeconds": 5.0,
+     "name": "DeNoise",
+     "undoLabel": "Agent: denoise the interview"
+    },
+    "reply": {
+     "dryRun": false,
+     "track": "A1",
+     "displayName": "DeNoise",
+     "matchedBy": "displayName",
+     "verified": true,
+     "undoLabel": "Agent: denoise the interview"
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "audioTrack": 0,
+      "atSeconds": 5.0,
+      "name": "Reverb Deluxe"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "not an audio effect Premiere lists (data.closeNames)"
+    },
+    {
+     "params": {
+      "audioTrack": 1,
+      "atSeconds": 5.0,
+      "name": "DeNoise"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "no clip under atSeconds"
+    },
+    {
+     "params": {
+      "audioTrack": 9,
+      "atSeconds": 5.0,
+      "name": "DeNoise"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "track out of range"
+    },
+    {
+     "params": {
+      "audioTrack": 0,
+      "atSeconds": 5.0,
+      "name": ""
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "audioTrack": 0,
+      "atSeconds": 5.0
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "name is required"
     }
    ]
   },
@@ -3396,7 +5423,7 @@
    "readOnly": false,
    "destructive": false,
    "idempotent": false,
-   "doc": "Shift every clip starting at or after fromSeconds on the given tracks by deltaSeconds in one undo step (the sync-keeping ripple after a cut); a left shift needs the room free.",
+   "doc": "Shift every clip starting at or after fromSeconds on the given tracks by deltaSeconds in one undo step (the sync-keeping ripple after a cut); a left shift needs the room on each track: a clip that stays must end before where that track's first moving clip lands (tracks with nothing to move are left alone).",
    "params": {
     "fromSeconds": {
      "type": "number",
@@ -3477,7 +5504,7 @@
    "errorExamples": [
     {
      "params": {
-      "fromSeconds": 30.0,
+      "fromSeconds": 0.0,
       "deltaSeconds": -5.0,
       "videoTracks": [
        0
@@ -3488,7 +5515,7 @@
      },
      "code": "PRECONDITION_FAILED",
      "outcome": "not_committed",
-     "doc": "a left shift needs the room: the clip running 0-60 s stays and is in the way"
+     "doc": "the interview (0-60 s) would start at -5 s, before 0 s"
     },
     {
      "params": {
@@ -3597,7 +5624,7 @@
    "readOnly": false,
    "destructive": true,
    "idempotent": false,
-   "doc": "Test harness, not an editing command: one fixed case that exercises UXP calls Adobe documents but the bridge has never run (tests/live/api_smoke.py runs them all). Refused with PRECONDITION_FAILED unless the active project's name starts with PAB_TEST or equals allowProject (a project the user named for this run). Each step reports pass / fail / absent / error / skipped; the case puts back what it changed and lists what it could not in leftovers.",
+   "doc": "Test harness, not an editing command: one fixed case that exercises UXP calls Adobe documents but the bridge has never run (tests/live/api_smoke.py runs them all). Refused with PRECONDITION_FAILED unless the active project's name starts with PAB_TEST or equals allowProject (a project the user named for this run). Each step reports pass / fail / absent / error / skipped; the case puts back what it changed and lists what it could not in leftovers. Dev builds only (devOnly): a release panel does not register it.",
    "params": {
     "case": {
      "type": "string",
@@ -3611,6 +5638,7 @@
       "lumetri",
       "blend_mode",
       "sequences",
+      "sequence_settings",
       "sequence_points",
       "selection",
       "track",
@@ -3651,10 +5679,12 @@
     },
     "copyPath": {
      "type": "string",
+     "localPath": true,
      "doc": "relink: a copy of itemName's media file"
     },
     "outputDir": {
      "type": "string",
+     "localPath": true,
      "doc": "converter_exports: folder for the XML and AAF files"
     },
     "displayName": {
@@ -3672,7 +5702,13 @@
     },
     "mogrtPath": {
      "type": "string",
+     "localPath": true,
      "doc": "mogrt: a .mogrt file to insert"
+    },
+    "keepMogrt": {
+     "type": "boolean",
+     "default": false,
+     "doc": "mogrt: leave the inserted clips in place (a live test of effects on a graphic; take them off with remove_items)"
     },
     "allowTrackAdd": {
      "type": "boolean",
@@ -3741,7 +5777,8 @@
      "outcome": "not_committed",
      "doc": "the case needs the scratch clip (videoTrack, atSeconds)"
     }
-   ]
+   ],
+   "devOnly": true
   }
  ],
  "commands": [
@@ -3771,12 +5808,36 @@
    "name": "get_sequence",
    "kind": "read",
    "calls": [
-    "get_sequence"
+    "get_sequence",
+    "list_items"
    ],
    "requirePanel": false,
    "minProtocol": 1,
    "dryRun": false,
-   "doc": "Active sequence: frame size, fps, duration, tracks (name, clip count), player position, guid"
+   "doc": "Active sequence: frame size, fps, duration, tracks (name, clip count), player position, guid, and the timeline's fingerprint for --expect-fingerprint"
+  },
+  {
+   "name": "set_active_sequence",
+   "kind": "write",
+   "calls": [
+    "set_active_sequence"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": false,
+   "doc": "Switch the active sequence by name or guid (opens it in the Timeline) so later commands work on it; the project's content is unchanged"
+  },
+  {
+   "name": "select_items",
+   "kind": "write",
+   "calls": [
+    "get_sequence",
+    "select_items"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "Select clips in the Timeline (the clip under --at, or those in --from/--to) for Premiere's own panels, e.g. Properties > Enhance Audio on every selected clip; --clear empties it; read back"
   },
   {
    "name": "list_items",
@@ -3815,23 +5876,25 @@
    "name": "export_frame",
    "kind": "read",
    "calls": [
+    "get_sequence",
     "export_frame"
    ],
    "requirePanel": false,
    "minProtocol": 1,
    "dryRun": false,
-   "doc": "One frame of the program output as an image (default: the sequence frame size); the real path is in resolvedPath"
+   "doc": "One frame of the program output as an image (default: the sequence frame size); the real path is in resolvedPath. A time at or past the sequence end is refused (Premiere would export the 0 s frame)"
   },
   {
    "name": "export_frames",
    "kind": "read",
    "calls": [
+    "get_sequence",
     "export_frame"
    ],
    "requirePanel": false,
    "minProtocol": 1,
    "dryRun": false,
-   "doc": "Several frames, optionally a contact sheet (Pillow)"
+   "doc": "Several frames, optionally a contact sheet (Pillow); times at or past the sequence end are refused before any export"
   },
   {
    "name": "export_otio",
@@ -3927,6 +5990,63 @@
    "doc": "Sequence marker with name, comment, duration and colour (fact-check flags, notes for the editor)"
   },
   {
+   "name": "list_markers",
+   "kind": "read",
+   "calls": [
+    "list_markers"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": false,
+   "doc": "The active sequence's markers: guid, name, comments, start / duration (sequence s), type, colour index and colour name"
+  },
+  {
+   "name": "remove_marker",
+   "kind": "write",
+   "calls": [
+    "get_sequence",
+    "remove_marker"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "Remove one sequence marker by guid, or by name (+ --at when several share it); refused when none or several match; one undo step, read back"
+  },
+  {
+   "name": "list_sequences",
+   "kind": "read",
+   "calls": [
+    "list_sequences"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": false,
+   "doc": "Every sequence in the project: name, guid, active flag, and whether it is a bridge restore point"
+  },
+  {
+   "name": "clone_sequence",
+   "kind": "write",
+   "calls": [
+    "clone_sequence"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "A restore point before risky edits: clone a sequence, name and tag the clone, delete the oldest restore points of it beyond --keep"
+  },
+  {
+   "name": "save_project",
+   "kind": "write",
+   "calls": [
+    "get_project",
+    "save_project"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": false,
+   "doc": "Save the project (Project#save) and check that the project file's time stamp changed"
+  },
+  {
    "name": "insert_clip",
    "kind": "write",
    "calls": [
@@ -3944,12 +6064,13 @@
    "kind": "write",
    "calls": [
     "get_sequence",
+    "list_items",
     "set_scale"
    ],
    "requirePanel": false,
    "minProtocol": 1,
    "dryRun": true,
-   "doc": "Motion > Scale per clip: a percent, or fit/fill computed from the media size (ffprobe); keyframed Scale is refused"
+   "doc": "Motion > Scale per clip: a percent, or fit/fill computed from the media size (ffprobe); a range takes only clips entirely inside it unless --mode overlap; keyframed Scale is refused"
   },
   {
    "name": "set_fps",
@@ -3965,6 +6086,31 @@
    "doc": "Interpret footage: override items' frame rate (changes them in every sequence); --dry-run lists the uses"
   },
   {
+   "name": "subclip",
+   "kind": "write",
+   "calls": [
+    "get_sequence",
+    "list_project_items",
+    "subclip"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "A subclip of a project item (source seconds snapped to its frames) in a bin, read back; refuses a name already in that bin unless --allow-duplicate-name"
+  },
+  {
+   "name": "relink",
+   "kind": "write",
+   "calls": [
+    "list_project_items",
+    "relink"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "Point a project item at another media file after checking it matches the old one (ffprobe: duration, fps, streams; --force skips); read back, uses listed"
+  },
+  {
    "name": "remove_items",
    "kind": "write",
    "calls": [
@@ -3976,6 +6122,18 @@
    "minProtocol": 1,
    "dryRun": true,
    "doc": "Remove clips in a range (default: only clips entirely inside); --ripple closes the gap and reports what moved"
+  },
+  {
+   "name": "remove_project_items",
+   "kind": "write",
+   "calls": [
+    "list_project_items",
+    "remove_project_items"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "Remove bins and project items from the project in one undo step (media files stay on disk); refused while a sequence uses an item"
   },
   {
    "name": "apply_plan",
@@ -4037,7 +6195,7 @@
    "requirePanel": true,
    "minProtocol": 2,
    "dryRun": true,
-   "doc": "Clip volume in dB (Volume > Level, as Premiere shows it) on the audio clip under a time or every clip in a range; verified"
+   "doc": "Clip volume in dB (Volume > Level, as Premiere shows it) on the audio clip under a time, or on the clips entirely inside a range (--mode overlap: every clip touching it); verified"
   },
   {
    "name": "add_transition",
@@ -4054,18 +6212,59 @@
    "doc": "A video transition at the start or end of the clip under a time, snapped to whole frames; refused where the edit point already has one, read back from OTIO"
   },
   {
+   "name": "remove_transition",
+   "kind": "write",
+   "calls": [
+    "get_sequence",
+    "list_items",
+    "export_otio",
+    "remove_transition"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "Remove the video transition at the start or end of the clip under a time (one undo step): found in an OTIO export first (NOT_FOUND when none, owner = which clip it lies on), verified gone afterwards"
+  },
+  {
+   "name": "remove_effect",
+   "kind": "write",
+   "calls": [
+    "get_sequence",
+    "remove_effect"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "Remove one added effect (filter, by match name and occurrence) from the clip under a time, in one undo step; built-in components are refused; the chain is read back"
+  },
+  {
+   "name": "remove_keyframes",
+   "kind": "write",
+   "calls": [
+    "get_sequence",
+    "remove_keyframes"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "Remove keyframes of one effect param on the clip under a time: a time range (media, clip or sequence seconds) or all of them (animation off, optionally keeping the clip's middle value); read back"
+  },
+  {
    "name": "split_clip",
    "kind": "write",
    "calls": [
     "get_sequence",
     "list_items",
     "clone_clip",
-    "trim_clip"
+    "trim_clip",
+    "remove_items",
+    "export_sequence",
+    "export_frame"
    ],
    "requirePanel": true,
    "minProtocol": 2,
    "dryRun": true,
-   "doc": "Split the clip under a time without a razor (clone + trim + move); both halves keep every clip attribute"
+   "doc": "Split the clip under a time without a razor (clone + trim + clone back, no move across clips); both halves keep every clip attribute; --render-check renders afterwards and checks both pieces play"
   },
   {
    "name": "cut_range",
@@ -4076,12 +6275,14 @@
     "clone_clip",
     "trim_clip",
     "remove_items",
-    "shift_items"
+    "shift_items",
+    "export_sequence",
+    "export_frame"
    ],
    "requirePanel": true,
    "minProtocol": 2,
    "dryRun": true,
-   "doc": "Remove a time range from all tracks and close the gap on every track by the same amount (sync kept, attributes kept)"
+   "doc": "Remove a time range from all tracks and close the gap on every track by the same amount (sync kept, attributes kept); --render-check renders afterwards and checks every piece it split, trimmed or moved plays"
   },
   {
    "name": "extend_cut",
@@ -4091,12 +6292,14 @@
     "list_items",
     "inspect_items",
     "shift_items",
-    "trim_clip"
+    "trim_clip",
+    "export_sequence",
+    "export_frame"
    ],
    "requirePanel": true,
    "minProtocol": 2,
    "dryRun": true,
-   "doc": "Open up a cut (breathing room) with more of the clips' own source; everything after it moves right on every track in one step"
+   "doc": "Open up a cut (breathing room) with more of the clips' own source; everything after it moves right on every track in one step; --render-check renders afterwards and checks every clip it extended or moved plays"
   },
   {
    "name": "snap_edges",
@@ -4110,6 +6313,19 @@
    "minProtocol": 2,
    "dryRun": true,
    "doc": "Put clip edges that drifted microseconds off the frame grid back on it, so the picture cuts on the same frame as the sound"
+  },
+  {
+   "name": "shift_items",
+   "kind": "write",
+   "calls": [
+    "get_sequence",
+    "list_items",
+    "shift_items"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "Move every clip at/after a time on all tracks (or the chosen ones) by whole frames in one undo step, keeping them in sync"
   },
   {
    "name": "conform_captions",
@@ -4163,6 +6379,51 @@
    "doc": "The sequence audio as a WAV for analysis: a shadow mix of the source files, or Premiere's own render"
   },
   {
+   "name": "list_presets",
+   "kind": "read",
+   "calls": [],
+   "requirePanel": false,
+   "minProtocol": 1,
+   "dryRun": false,
+   "doc": "Encoder presets (.epr) on disk: Premiere's system presets next to the running executable and the user's own (Adobe Media Encoder's Presets folders), with the format each writes; no panel needed"
+  },
+  {
+   "name": "export_video",
+   "kind": "read",
+   "calls": [
+    "get_sequence",
+    "export_sequence",
+    "export_status"
+   ],
+   "requirePanel": false,
+   "minProtocol": 1,
+   "dryRun": true,
+   "doc": "Render the active sequence with an encoder preset (name or .epr path) and check the file with ffprobe: frame size, frame rate and length against the sequence; on a panel with exportJobs the render is a job polled without a time limit (--detach / --job)"
+  },
+  {
+   "name": "list_effects",
+   "kind": "read",
+   "calls": [
+    "list_effects"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": false,
+   "doc": "Effects Premiere can add: video filters (match and display name) and audio filters (localised display name)"
+  },
+  {
+   "name": "add_audio_effect",
+   "kind": "write",
+   "calls": [
+    "get_sequence",
+    "add_audio_effect"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "Add an audio effect by its (localised) display name or match name to the audio clip under a time, in one undo step; verified by reading the chain back"
+  },
+  {
    "name": "probe_api",
    "kind": "read",
    "calls": [
@@ -4172,6 +6433,33 @@
    "minProtocol": 2,
    "dryRun": false,
    "doc": "Inventory of this Premiere build's UXP API (classes, methods, instance members); --output saves it, --diff compares with an earlier dump, and a watch list says which calls the port depends on are there"
+  },
+  {
+   "name": "list_effect_presets",
+   "kind": "read",
+   "calls": [
+    "ping",
+    "list_effects"
+   ],
+   "requirePanel": false,
+   "minProtocol": 1,
+   "dryRun": false,
+   "doc": "Effect presets (.prfpset) on disk: Premiere's own (Factory, Lumetri; in its UI language) and the user's, with bin path, effects, animation and whether apply_preset can replay them; ping and list_effects only when the bridge answers"
+  },
+  {
+   "name": "apply_preset",
+   "kind": "write",
+   "calls": [
+    "get_sequence",
+    "list_effects",
+    "inspect_items",
+    "set_params",
+    "remove_effect"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "Apply an effect preset (.prfpset) to the clip under a time or the clips in a range by translating it to set_params (keyframes in clip time per the preset's anchoring); what UXP cannot write is skipped and reported; verified"
   }
  ]
 }

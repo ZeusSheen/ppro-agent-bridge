@@ -7,10 +7,18 @@
 Required: Python 3.10+, websockets 14+, UXP Developer Tool (Premiere only loads development plugins through it),
 UXP developer mode, a Premiere Pro the panel runs in (the minVersion in plugin/manifest.json: 26.3+). Optional:
 ffmpeg/ffprobe (scaling, listening report), Pillow (contact sheets), faster-whisper (local transcription). Fixes: pip
-install the requirements; a desktop shortcut to start_bridge.bat; start it at login (a shortcut in the Startup
-folder). Developer mode and UXP Developer Tool are turned on / installed by the user (Creative Cloud, admin rights):
+install the requirements; shortcuts to start_bridge.bat with the bridge's icon on the desktop and in the Start menu;
+start it at login (a shortcut in the Startup folder). Developer mode and UXP Developer Tool are turned on / installed by the user (Creative Cloud, admin rights):
 the report says how. Installed packages are read from disk on every check, so a check after a pip install in the
 same process (the setup window) sees the new versions.
+
+The command line also asks Creative Cloud's plugin installer (UPIA, read-only `/list all`) whether the panel is
+installed as a .ccx (scripts/build_ccx.py) for a Premiere Pro it knows - optional, for .ccx installs only; --no-upia
+skips it. When the panel's folder is on disk but UPIA no longer lists it (a Premiere update can unregister a .ccx
+plugin), the report prints the repair command; nothing here installs or removes anything. UPIA runs at most once per
+process (30-s timeout; the result is reused for UPIA_REUSE_SECONDS), because rapid UPIA calls can wedge it until
+Creative Cloud restarts. The setup window leaves this check out: it is the UXP Developer Tool route, and UPIA can
+block for minutes while Premiere starts.
 """
 
 import argparse
@@ -19,20 +27,33 @@ import importlib.metadata
 import importlib.util
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 from pathlib import Path
 
-from . import auth, devloader
+from . import auth, ccx, devloader
 
 REPO = Path(__file__).resolve().parent.parent
 START_SCRIPT = REPO / "start_bridge.bat"
 MANIFEST = REPO / "plugin" / "manifest.json"
+ICON = REPO / "ppro_bridge" / "bridge.ico"  # built by scripts/make_icon.py
 SHORTCUT_NAME = "Premiere Agent Bridge.lnk"
 BROKER_PORT = 8017
 PREMIERE_MIN_FALLBACK = (26, 3)
+COMMON_FILES = Path(os.environ.get("CommonProgramFiles")
+                    or os.path.join(os.environ.get("SystemDrive", "C:") + os.sep, "Program Files", "Common Files"))
+UPIA_ENV = "PPRO_UPIA_EXE"
+UPIA_DEFAULT = (COMMON_FILES / "Adobe" / "Adobe Desktop Common" / "RemoteComponents" / "UPI" /
+                "UnifiedPluginInstallerAgent" / "UnifiedPluginInstallerAgent.exe")
+UPIA_TIMEOUT = 30
+UPIA_REUSE_SECONDS = 300.0
+CCX_CHECK = "Panel as .ccx"
 
 # How to fix each check (the setup window's demo machine shows the same texts).
 FIXES = {
@@ -44,6 +65,7 @@ FIXES = {
     "ffprobe": "install FFmpeg and add it to PATH (scaling, listening report)",
     "PIL": "contact sheets (pip install pillow)",
     "faster_whisper": "local transcription (pip install faster-whisper)",
+    "UPIA": "a .ccx install needs the Creative Cloud desktop app (UXP Developer Tool loads the panel without it)",
 }
 
 
@@ -140,7 +162,217 @@ def broker_running(port=BROKER_PORT) -> bool:
         return False
 
 
-def checks() -> list[dict]:
+# ---------------------------------------------------------------- the panel as a .ccx (UPIA)
+
+_UPIA_HOST = re.compile(r"^\s*(\d+) extensions? installed for (.+?)(?: \(ver ([^)]*)\))?\s*$")
+_UPIA_ROW = re.compile(r"^\s*(\S+)\s+(.+?)\s+(\S+)\s*$")
+_upia_lock = threading.Lock()
+_upia_last = None  # (time.monotonic() when it ran, the upia_list() result)
+
+
+def find_upia() -> Path | None:
+    """Creative Cloud's plugin installer, UnifiedPluginInstallerAgent.exe: PPRO_UPIA_EXE, else its place under Common
+    Files (Creative Cloud puts it there). None when it is not installed."""
+    env = os.environ.get(UPIA_ENV)
+    path = Path(env) if env else UPIA_DEFAULT
+    return path if path.is_file() else None
+
+
+def parse_upia_list(text) -> list[dict]:
+    """UPIA `/list all` output -> [{host, version, extensions: [{status, name, version}]}], one entry per host it
+    knows ("Premiere Pro", "26.5.2"; "Others" has no version). Each host block is a line "<n> extension(s) installed
+    for <host> (ver <version>)", a header, a ==== rule, then one row per extension: status, name, version."""
+    hosts, current = [], None
+    for line in str(text).splitlines():
+        m = _UPIA_HOST.match(line)
+        if m:
+            current = {"host": m.group(2).strip(), "version": m.group(3), "extensions": []}
+            hosts.append(current)
+            continue
+        stripped = line.strip()
+        if (current is None or not stripped or set(stripped) <= {"=", " "}
+                or (stripped.startswith("Status") and "Extension Name" in stripped)):
+            continue
+        row = _UPIA_ROW.match(line)
+        if row:
+            current["extensions"].append({"status": row.group(1), "name": row.group(2), "version": row.group(3)})
+    return hosts
+
+
+def _decode(data: bytes) -> str:
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("mbcs" if os.name == "nt" else "latin-1", errors="replace")
+
+
+def _run_upia(exe) -> tuple[int, str]:
+    """(exit code, output) of `UPIA /list all`; TimeoutExpired after UPIA_TIMEOUT, the process killed. The output
+    goes to a temporary file, not a pipe: after a timeout subprocess.run waits without limit for the pipes to close,
+    which a helper process UPIA started could hold open."""
+    with tempfile.TemporaryFile() as out:
+        proc = subprocess.Popen([str(exe), "/list", "all"], stdin=subprocess.DEVNULL, stdout=out,
+                                stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        try:
+            code = proc.wait(timeout=UPIA_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            try:
+                proc.wait(timeout=5)  # the process itself, not the output a helper may still hold
+            except subprocess.TimeoutExpired:
+                pass
+            raise
+        out.seek(0)
+        return code, _decode(out.read())
+
+
+def upia_list(refresh=False) -> dict:
+    """`UPIA /list all` (read-only): {"exe", "hosts"}, or {"exe", "error"} (with "timeout": true when it did not
+    answer within UPIA_TIMEOUT); {"exe": None} when UPIA is not installed. UPIA runs at most once per
+    UPIA_REUSE_SECONDS in this process - a second call reuses the first answer unless `refresh` - and never twice at
+    once."""
+    global _upia_last
+    with _upia_lock:
+        if not refresh and _upia_last and time.monotonic() - _upia_last[0] < UPIA_REUSE_SECONDS:
+            return _upia_last[1]
+        exe = find_upia()
+        if exe is None:
+            result = {"exe": None}
+        else:
+            try:
+                code, text = _run_upia(exe)
+                hosts = parse_upia_list(text)
+                first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "no output")
+                result = ({"exe": str(exe), "hosts": hosts} if hosts else
+                          {"exe": str(exe), "error": f"exit {code}: {first[:200]}"})
+            except subprocess.TimeoutExpired:
+                result = {"exe": str(exe), "error": f"no answer within {UPIA_TIMEOUT} s", "timeout": True}
+            except OSError as e:
+                result = {"exe": str(exe), "error": str(e)}
+        _upia_last = (time.monotonic(), result)
+        return result
+
+
+def roaming_folder() -> Path | None:
+    """The user's roaming application-data folder, where a per-user .ccx install lives, as Windows' known-folder
+    API gives it (SHGetKnownFolderPath: it honours folder redirection). None off Windows or when Windows cannot say."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        import uuid
+        from ctypes import wintypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD), ("Data3", wintypes.WORD),
+                        ("Data4", ctypes.c_ubyte * 8)]
+
+        u = uuid.UUID("3EB685DB-65F9-4CF6-A03A-E3EF65729F3D")  # the known folder for roaming application data
+        guid = GUID(u.time_low, u.time_mid, u.time_hi_version, (ctypes.c_ubyte * 8)(*u.bytes[8:]))
+        found = ctypes.c_wchar_p()
+        status = ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(found))
+        try:
+            return Path(found.value) if status == 0 and found.value else None
+        finally:
+            ctypes.windll.ole32.CoTaskMemFree(found)  # also after a failure, as the API asks
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def ccx_install_dirs(plugin_id) -> list[Path]:
+    """Folders where a .ccx install of `plugin_id` sits on disk (a folder whose manifest.json has that id) in the
+    places UXP keeps installed plugins. Unlike UPIA's list, a Premiere update leaves these behind."""
+    roots = [COMMON_FILES / "Adobe" / "UXP" / "extensions", COMMON_FILES / "Adobe" / "UXP" / "Plugins" / "External"]
+    roaming = roaming_folder()
+    if roaming:
+        roots.insert(0, roaming / "Adobe" / "UXP" / "Plugins" / "External")
+    found = []
+    for root in roots:
+        try:
+            children = sorted(p for p in root.iterdir() if p.is_dir())
+        except OSError:
+            continue
+        for child in children:
+            try:
+                manifest = json.loads((child / "manifest.json").read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(manifest, dict) and manifest.get("id") == plugin_id:
+                found.append(child)
+    return found
+
+
+def _ccx_package(manifest) -> Path | None:
+    """This checkout's .ccx to (re)install: dist/<name>-<VERSION>.ccx, else the newest .ccx in dist/."""
+    exact = ccx.DIST / ccx.package_name(manifest, str(manifest.get("version")))
+    if exact.is_file():
+        return exact
+    built = sorted(ccx.DIST.glob("*.ccx"), key=lambda p: p.stat().st_mtime) if ccx.DIST.is_dir() else []
+    return built[-1] if built else None
+
+
+def ccx_check(listing=None, manifest=None, installs=None, dirs=None) -> dict:
+    """One optional check: is the panel installed as a .ccx for the Premiere Pro builds UPIA knows? `listing`
+    (upia_list()), `manifest`, `installs` (premiere_installs()) and `dirs` (ccx_install_dirs()) are read when not
+    given."""
+    listing = upia_list() if listing is None else listing
+    if not listing.get("exe"):
+        return _bad(CCX_CHECK, "Creative Cloud's plugin installer (UPIA) not found", FIXES["UPIA"], required=False)
+    if listing.get("error"):
+        fix = ("UPIA blocks while Premiere starts: run the doctor again in a few minutes (not in a loop - rapid UPIA "
+               "calls can wedge it until Creative Cloud restarts)" if listing.get("timeout") else
+               "restart the Creative Cloud app, then run the doctor again")
+        return _bad(CCX_CHECK, f"UPIA /list all failed: {listing['error']}", fix, required=False)
+    if manifest is None:
+        try:
+            manifest = json.loads(MANIFEST.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            manifest = {}
+    name, plugin_id = manifest.get("name") or "Agent Bridge", manifest.get("id") or ""
+    minimum = premiere_min()
+    premiere = [h for h in listing["hosts"] if h["host"].lower().startswith("premiere pro")]
+    eligible = [h for h in premiere if h["version"] and _version_tuple(h["version"]) >= minimum]
+    registered = [(h, e) for h in premiere for e in h["extensions"] if e["name"] == name]
+    lacking = [h for h in eligible if not any(e["name"] == name for e in h["extensions"])]
+    dirs = (ccx_install_dirs(plugin_id) if plugin_id else []) if dirs is None else dirs
+
+    knows = ("UPIA knows Premiere Pro " + ", ".join(h["version"] or "?" for h in premiere) if premiere else
+             "UPIA knows no Premiere Pro")
+    installs = premiere_installs() if installs is None else installs
+    beta = [i for i in installs if "(beta)" in i.lower()]
+    if beta and not any("beta" in h["host"].lower() for h in premiere):
+        knows += f", not {beta[0]} (UXP Developer Tool still loads the panel there)"
+    package = _ccx_package(manifest)
+    target = package or ccx.DIST / ccx.package_name(manifest, str(manifest.get("version")))
+    install = f'"{listing["exe"]}" /install "{target}"' + ("" if package else
+                                                           " (build it first: python scripts/build_ccx.py)")
+    if dirs and not registered and not eligible:
+        return _bad(CCX_CHECK, f"{name} is installed in {dirs[0]}, but {knows}: nothing to register it for",
+                    f"a .ccx needs a Premiere Pro {version_label(minimum)} or newer that UPIA lists; UXP Developer "
+                    "Tool loads the panel into any other", required=False)
+    if (registered or dirs) and lacking:
+        where = (f"registered for Premiere Pro {', '.join(h['version'] or '?' for h, _ in registered)}" if registered
+                 else f"installed in {dirs[0]}")
+        missing = ", ".join(h["version"] for h in lacking)
+        return _bad(CCX_CHECK, f"{name} is {where} but not registered for Premiere Pro {missing} (a Premiere update "
+                               f"can unregister a .ccx plugin); {knows}",
+                    f"repair, with Premiere closed (not run here): {install}", required=False)
+    if registered:
+        found = "; ".join(f"{e['name']} {e['version']} for Premiere Pro {h['version']} ({e['status']})"
+                          for h, e in registered)
+        if any(e["status"].lower() != "enabled" for _, e in registered):
+            return _bad(CCX_CHECK, f"installed as .ccx but not enabled: {found}",
+                        "enable it in the Creative Cloud app (Plugins)", required=False)
+        if any(e["version"] != manifest.get("version") for _, e in registered):
+            return _bad(CCX_CHECK, f"installed as .ccx: {found}; this checkout is {manifest.get('version')}",
+                        f'upgrade, with Premiere closed (not run here): "{listing["exe"]}" /remove "{name}", then '
+                        f"{install}", required=False)
+        return _ok(CCX_CHECK, f"installed as .ccx: {found}; {knows}", required=False)
+    return _ok(CCX_CHECK, f"not installed as .ccx (UXP Developer Tool loads the panel); {knows}", required=False)
+
+
+def checks(upia=False) -> list[dict]:
+    """Every check: {name, ok, required, detail, fix}. `upia`: also ask UPIA about a .ccx install (ccx_check)."""
     importlib.invalidate_caches()  # packages pip installed since the last check
     out = []
     v = sys.version_info
@@ -181,6 +413,8 @@ def checks() -> list[dict]:
     for module in ("PIL", "faster_whisper"):
         out.append(_ok(module, "installed", required=False) if importlib.util.find_spec(module) else
                    _bad(module, "not installed", FIXES[module], required=False))
+    if upia:
+        out.append(ccx_check())
     return out
 
 
@@ -211,13 +445,20 @@ def _special_folder(name: str) -> Path:
     return Path(path)
 
 
+def _ps_quote(text) -> str:
+    """A PowerShell single-quoted string (a ' in a folder name is doubled)."""
+    return "'" + str(text).replace("'", "''") + "'"
+
+
 def make_shortcut(folder: Path, minimized=False) -> Path:
-    """A .lnk to start_bridge.bat in `folder` (WScript.Shell through PowerShell)."""
+    """A .lnk to start_bridge.bat in `folder` with the bridge's icon (WScript.Shell through PowerShell). The console
+    window it opens takes the shortcut's icon too."""
     link = Path(folder) / SHORTCUT_NAME
     style = 7 if minimized else 1
-    script = (f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{link}'); "
-              f"$s.TargetPath = '{START_SCRIPT}'; $s.WorkingDirectory = '{START_SCRIPT.parent}'; "
-              f"$s.WindowStyle = {style}; $s.Description = 'Start the Premiere Agent Bridge'; $s.Save()")
+    icon = f"$s.IconLocation = {_ps_quote(f'{ICON},0')}; " if ICON.is_file() else ""
+    script = (f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut({_ps_quote(link)}); "
+              f"$s.TargetPath = {_ps_quote(START_SCRIPT)}; $s.WorkingDirectory = {_ps_quote(START_SCRIPT.parent)}; "
+              f"$s.WindowStyle = {style}; $s.Description = 'Start the Premiere Agent Bridge'; {icon}$s.Save()")
     out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                          capture_output=True, text=True, timeout=30)
     if out.returncode != 0 or not link.is_file():
@@ -228,6 +469,12 @@ def make_shortcut(folder: Path, minimized=False) -> Path:
 def desktop_shortcut() -> Path:
     """Where the desktop shortcut is (or would be) - it may not exist."""
     return _special_folder("Desktop") / SHORTCUT_NAME
+
+
+def start_menu_shortcut() -> Path:
+    """Where the Start menu shortcut is (or would be): the user's Programs folder, so typing "Premiere Agent Bridge"
+    in Start finds it - it may not exist."""
+    return _special_folder("Programs") / SHORTCUT_NAME
 
 
 def autostart_shortcut() -> Path:
@@ -255,27 +502,32 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="doctor", description=__doc__.split("\n\n")[0])
     p.add_argument("--interactive", action="store_true", help="offer each fix (y/n)")
     p.add_argument("--install-deps", action="store_true", help="pip install -r requirements.txt")
-    p.add_argument("--shortcut", action="store_true", help="put a 'Premiere Agent Bridge' shortcut on the desktop")
+    p.add_argument("--shortcut", action="store_true",
+                   help="put a 'Premiere Agent Bridge' shortcut on the desktop and in the Start menu")
     p.add_argument("--autostart", action="store_true", help="start the bridge (minimized) at Windows login")
+    p.add_argument("--no-upia", action="store_true",
+                   help="skip asking Creative Cloud's plugin installer whether the panel is installed as a .ccx")
     args = p.parse_args(argv)
 
-    results = checks()
+    results = checks(upia=not args.no_upia)
     print("Premiere Agent Bridge - setup check\n" + report(results))
     missing_deps = any(r["name"] == "websockets" and not r["ok"] for r in results)
     if args.install_deps or (args.interactive and missing_deps and _ask("\nInstall the Python requirements now?")):
         install_deps()
-    if args.shortcut or (args.interactive and _ask("\nPut a 'Premiere Agent Bridge' shortcut on the desktop?")):
-        try:
-            print(f"Created {make_shortcut(_special_folder('Desktop'))}")
-        except (OSError, subprocess.SubprocessError) as e:
-            print(f"Shortcut failed: {e}")
+    if args.shortcut or (args.interactive and
+                         _ask("\nPut a 'Premiere Agent Bridge' shortcut on the desktop and in the Start menu?")):
+        for where in ("Desktop", "Programs"):
+            try:
+                print(f"Created {make_shortcut(_special_folder(where))}")
+            except (OSError, subprocess.SubprocessError) as e:
+                print(f"Shortcut failed ({'Start menu' if where == 'Programs' else where}): {e}")
     if args.autostart or (args.interactive and _ask("Start the bridge automatically when you log in to Windows?")):
         try:
             print(f"Created {make_shortcut(_special_folder('Startup'), minimized=True)}")
         except (OSError, subprocess.SubprocessError) as e:
             print(f"Autostart failed: {e}")
     if args.install_deps or args.interactive:
-        results = checks()
+        results = checks(upia=not args.no_upia)  # UPIA's answer is reused, not asked again
         print("\nAfter the fixes:\n" + report(results))
     missing = [r["name"] for r in results if r["required"] and not r["ok"]]
     print("\nNext: double-click start_bridge.bat, open Premiere - the panel loads by itself - then "

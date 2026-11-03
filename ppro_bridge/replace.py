@@ -22,7 +22,10 @@ no verified alignment control) and the new media must have the handle it covers,
 Components the new clip cannot get are refused while planning (also in a dry run): Premiere 27's colour-tool
 container (AE.ADBE CompoundComponent, whose settings UXP cannot read), and whatever else the panel cannot create —
 asked as set_params dryRun on the old clip, which commits nothing. skip_effects names components to leave behind
-instead (skippedEffects).
+instead (skippedEffects). A graphic's own components (its Vector Motion and the Text / Shape layers closing its
+chain) are the graphic itself, like a movie's pixels: never carried, refused or compared (graphicComponents). The
+added filters are re-created in the old chain's order; set_params puts them after the new clip's effects and before
+a graphic's layers, and the read-back checks that order.
 
 Keyframes that would land outside the new clip's source range are refused while planning (also in a dry run) with
 KEYFRAME_OUT_OF_RANGE, unless drop_outside_keyframes leaves them out (reported as droppedKeyframes).
@@ -45,6 +48,8 @@ from .errors import BridgeError
 
 EPS = 1e-3
 INTRINSIC = ("AE.ADBE Opacity", "AE.ADBE Motion")  # every video clip has them; never re-created
+GRAPHIC_GROUP = "AE.ADBE Graphic Group"  # a graphic's Vector Motion, after Motion on graphic and text clips
+TOP = INTRINSIC + (GRAPHIC_GROUP, "AE.ADBE Time Remapping")  # above the effects (the panel's effects.TOP_INTRINSICS)
 NOT_ADDABLE = {
     "AE.ADBE CompoundComponent": "Premiere 27's colour-tool container (Color And Contrast, Color Shift, Texture, "
                                  "Unsharp Mask): UXP shows none of its settings and the panel cannot create one",
@@ -157,11 +162,11 @@ def _unaddable(rpc, track_idx: int, at: float, old_comps, skip) -> tuple[list[di
     """Components of the old clip the new clip could not get: the known ones (NOT_ADDABLE), then whatever the panel
     cannot create — asked as set_params dryRun on the old clip for one more instance, which validates and commits
     nothing. A panel from before dryRun refuses the param (BAD_PARAMS): then only the known ones are found and a
-    note says so. Components in `skip` are not asked about."""
+    note says so. Components in `skip` are not asked about, nor a graphic's Graphic Group (see _graphic_own)."""
     counts, display = {}, {}
     for c in old_comps or []:
         m = c["matchName"]
-        if m not in INTRINSIC and m not in skip:
+        if m not in INTRINSIC and m != GRAPHIC_GROUP and m not in skip:
             counts[m] = counts.get(m, 0) + 1
             display.setdefault(m, c.get("displayName"))
     found, notes, ask = [], [], True
@@ -186,6 +191,29 @@ def _unaddable(rpc, track_idx: int, at: float, old_comps, skip) -> tuple[list[di
             else:
                 raise
     return found, notes
+
+
+def _graphic_own(old_comps, unaddable) -> list[str]:
+    """Match names of a graphic's own components on the old clip: its Vector Motion (Graphic Group) and the layer
+    components (Text, Shape) closing the chain after the last top intrinsic or added effect — those the panel cannot
+    create past that point (the panel's effects.insertionIndex; a known container counts as an effect). Only on a
+    graphic (a chain with a Graphic Group); a name with an instance before that point stays unaddable."""
+    names = [c["matchName"] for c in old_comps or []]
+    if GRAPHIC_GROUP not in names:
+        return []
+    cannot = {u["matchName"] for u in unaddable if u["matchName"] not in NOT_ADDABLE}
+    last = max((i for i, m in enumerate(names) if m in TOP or m not in cannot), default=-1)
+    tail = [m for m in dict.fromkeys(names[last + 1:]) if m not in names[:last + 1]]
+    return [GRAPHIC_GROUP] + tail
+
+
+def _effect_order(comps) -> list[tuple]:
+    """(match name, occurrence) of the components below the top intrinsics, in chain order."""
+    out = []
+    for c, _, occ in _pairs(comps, []):
+        if c["matchName"] not in TOP:
+            out.append((c["matchName"], occ))
+    return out
 
 
 def _pairs(old_comps, new_comps):
@@ -330,16 +358,27 @@ def replace_clip(rpc, track_idx: int, at: float, new: dict, *, src_in=None, src_
     if s_out is None:
         s_out = s_in + length
     dur = info.get("duration")
-    if src_out is None and dur and s_out > dur + frame / 2:
-        s_out, s_in = dur, max(0.0, dur - length)
-        notes.append(f"source range ran past the new media's end ({dur:.3f}s) — shifted to {s_in:.3f}–{s_out:.3f}s "
+    picture = framegrid.short_picture(info, fps) or dur  # frames stop here; the audio may run on to the file's end
+    if src_out is not None and picture != dur and s_out > picture + frame / 2:
+        raise BridgeError(f"--out ({s_out:.4f}s) is past the end of the new media's picture ({picture:.3f}s; its "
+                          "audio runs on). Nothing was changed.", code="BAD_PARAMS", outcome="not_committed")
+    if src_out is None and picture and s_out > picture + frame / 2:
+        s_out, s_in = picture, max(0.0, picture - length)
+        notes.append(f"source range ran past the new media's end ({picture:.3f}s) — shifted to {s_in:.3f}–{s_out:.3f}s "
                      "(a frame hold on the old clip is not carried over)")
     want_end = start + (s_out - s_in)
 
     skip = set(skip_effects or ())
     carried = [c for c in old.get("components") or [] if c["matchName"] not in skip]
-    skipped, readd, dropped = [], [], []
+    skipped, readd, dropped, graphic = [], [], [], []
     if keep_effects:
+        unaddable, probe_notes = _unaddable(rpc, track_idx, at, old.get("components"), skip)
+        notes += probe_notes
+        graphic = _graphic_own(old.get("components"), unaddable)
+        if graphic:
+            unaddable = [u for u in unaddable if u["matchName"] not in graphic]
+            carried = [c for c in carried if c["matchName"] not in graphic]
+            notes.append(f"not carried: the graphic's own components ({', '.join(graphic)}); the new clip keeps its own")
         outside = _keyframes_outside(carried, s_in - (old.get("inPoint") or 0.0), s_in - frame / 2, s_out + frame / 2)
         if outside and not drop_outside_keyframes:
             raise BridgeError(f"{len(outside)} keyframe(s) of {old['name']} would land outside the new source range "
@@ -348,8 +387,6 @@ def replace_clip(rpc, track_idx: int, at: float, new: dict, *, src_in=None, src_
                               code="KEYFRAME_OUT_OF_RANGE", outcome="not_committed",
                               data={"keyframes": outside, "source": [round(s_in, 4), round(s_out, 4)]})
         dropped = outside
-        unaddable, probe_notes = _unaddable(rpc, track_idx, at, old.get("components"), skip)
-        notes += probe_notes
         if unaddable:
             names = ", ".join(u["matchName"] + (f' ("{u["displayName"]}")' if u.get("displayName") else "")
                               for u in unaddable)
@@ -387,7 +424,7 @@ def replace_clip(rpc, track_idx: int, at: float, new: dict, *, src_in=None, src_
                               f"({t['before']:.3f}s before, {t['after']:.3f}s after): the bridge can only re-create "
                               "a centred one. Nothing was changed; pass --no-transitions and set it by hand.",
                               code="UNSUPPORTED", outcome="not_committed", data={"transition": t})
-        handle, have = (t["before"], s_in) if t["cut"] == "start" else (t["after"], dur - s_out if dur else None)
+        handle, have = (t["before"], s_in) if t["cut"] == "start" else (t["after"], picture - s_out if picture else None)
         if have is None:
             notes.append(f"{t['name']} at the end needs {handle:.3f}s of the new media after its out point; its "
                          "length is unknown (ffprobe), so that was not checked")
@@ -448,6 +485,8 @@ def replace_clip(rpc, track_idx: int, at: float, new: dict, *, src_in=None, src_
         report["skippedEffects"] = skipped
     if dropped:
         report["droppedKeyframes"] = dropped
+    if graphic:
+        report["graphicComponents"] = graphic
     if dry_run:
         return report
 
@@ -491,12 +530,14 @@ def _swap_in(rpc, report, completed, *, old, carried, new_name, new_bin, track_i
             keep = (new_in - frame / 2, (new_in + (s_out - s_in) if new_out is None else new_out) + frame / 2)
         diffs, missing = _param_diffs(carried, placed["components"], delta, keep)
         if missing:  # create the added filters first, then diff against their defaults
-            need = {}
+            # In the old chain's order (set_params adds in request order); a run of one match name is one component.
+            readd_comps = []
             for m in missing:
-                need[m["matchName"]] = max(need.get(m["matchName"], 0), m["occurrence"])
-            rpc("set_params", {"videoTrack": track_idx, "atSeconds": mid,
-                               "components": [{"matchName": n, "occurrence": occ, "params": []}
-                                              for n, occ in need.items()],
+                if readd_comps and readd_comps[-1]["matchName"] == m["matchName"]:
+                    readd_comps[-1]["occurrence"] = m["occurrence"]
+                else:
+                    readd_comps.append({"matchName": m["matchName"], "occurrence": m["occurrence"], "params": []})
+            rpc("set_params", {"videoTrack": track_idx, "atSeconds": mid, "components": readd_comps,
                                "undoLabel": f"{label}: re-add effects"})
             completed.append("re-add effects")
             placed = _clip_under(rpc, track_idx, mid)
@@ -551,6 +592,10 @@ def _swap_in(rpc, report, completed, *, old, carried, new_name, new_bin, track_i
         if left or missing or keyed:
             gone = [m["matchName"] + ("" if m["occurrence"] == 1 else f"[{m['occurrence']}]") for m in missing]
             problems.append(f"params still differ: {left} keyframes differ: {keyed} missing effects: {gone}")
+        want = _effect_order(carried)
+        got = [k for k in _effect_order(after["components"]) if k in want]
+        if not missing and got != want:
+            problems.append(f"effect order: got {got}, wanted {want}")
         if unchecked:
             report["keyframesNotChecked"] = unchecked
     if transitions or neighbours:

@@ -22,7 +22,7 @@ from unittest import mock
 
 from helpers import BridgeError
 
-from ppro_bridge import editing
+from ppro_bridge import editing, ops
 
 FPS = 60000 / 1001
 F = 1 / FPS
@@ -230,7 +230,7 @@ class SplitTest(EditingCase):
         at = S(20.0)
         self.assertTrue(out["split"])
         self.assertTrue(out["verified"])
-        self.assertEqual(out["undoSteps"], 4)
+        self.assertEqual(out["undoSteps"], 5)
         self.assertAlmostEqual(out["at"], at, places=6)
         self.assertSpans("V1", [(0.0, at, 0.0, at), (at, 60.0, at, 60.0)])
         self.assertEqual(self.components(0, 5.0), chain)
@@ -242,9 +242,12 @@ class SplitTest(EditingCase):
         self.assertEqual([c["components"] for c in self.track("A1")], [volume, volume])
 
         labels = [t for t in self.fake.TRANSACTIONS if t.startswith("Split test: ")]
-        self.assertEqual(len(labels), 8)
-        self.assertTrue(all(f"[{n}/4]" in labels[n - 1] for n in range(1, 5)), labels)
-        self.assertFalse([a for a, _ in self.writes() if a in ("insert_clip", "remove_items")])
+        self.assertEqual(len(labels), 10)
+        self.assertTrue(all(f"[{n}/5]" in labels[n - 1] for n in range(1, 6)), labels)
+        self.assertFalse([a for a, _ in self.writes() if a == "insert_clip"])
+        # the right piece is cloned into place, never moved there: a move across other clips renders silent/blank
+        self.assertFalse([p for a, p in self.writes() if a == "trim_clip" and "moveTo" in p])
+        self.assertEqual(len([a for a, _ in self.writes() if a == "remove_items"]), 2)  # one parked copy per split
 
     def test_split_at_an_edge_is_a_no_op(self):
         editing.split_clip(self.rpc, kind="video", track=0, at=20.0, label="Split")
@@ -262,25 +265,25 @@ class SplitTest(EditingCase):
             editing.split_clip(self.rpc, track="V2", at=5.0, label="Split")
         self.assertEqual((cm.exception.code, cm.exception.outcome), ("NOT_FOUND", "not_committed"))
 
-    def test_dry_run_plans_four_steps_and_writes_nothing(self):
+    def test_dry_run_plans_five_steps_and_writes_nothing(self):
         before = copy.deepcopy(self.fake.STATE["video"])
         out = editing.split_clip(self.rpc, kind="video", track=0, at=20.0, label="Split", dry_run=True)
         self.assertTrue(out["dryRun"])
         self.assertFalse(out["split"])
-        self.assertEqual(len(out["steps"]), 4)
+        self.assertEqual(len(out["steps"]), 5)
         self.assertAlmostEqual(out["right"]["start"], S(20.0), places=6)
         self.assertEqual(self.fake.STATE["video"], before)
         self.assertEqual(self.writes(), [])
 
     def test_failure_after_the_clone_is_partial_and_says_where_the_copy_is(self):
-        self.fake.FAIL_TRANSACTIONS.add("[2/4]")
+        self.fake.FAIL_TRANSACTIONS.add("[2/5]")
         with self.assertRaises(BridgeError) as cm:
             editing.split_clip(self.rpc, kind="video", track=0, at=20.0, label="Split")
         e = cm.exception
         self.assertEqual(e.outcome, "partial")
         self.assertEqual(e.code, "TRANSACTION_FAILED")
         self.assertEqual(len(e.data["completed"]), 1)
-        self.assertIn("[1/4] clone", e.data["completed"][0])
+        self.assertIn("[1/5] clone", e.data["completed"][0])
         parked = e.data["parked"]
         self.assertEqual(len(parked), 1)
         park = parked[0]["start"]
@@ -292,8 +295,74 @@ class SplitTest(EditingCase):
         self.rpc("remove_items", {"videoTracks": [0], "fromSeconds": park - F, "toSeconds": parked[0]["end"] + F})
         self.assertSpans("V1", [(0.0, 60.0, 0.0, 60.0)])
 
+    def test_failure_of_the_clone_into_place_keeps_the_parked_copy_listed(self):
+        self.fake.FAIL_TRANSACTIONS.add("[4/5]")
+        with self.assertRaises(BridgeError) as cm:
+            editing.split_clip(self.rpc, kind="video", track=0, at=20.0, label="Split")
+        e = cm.exception
+        self.assertEqual((e.outcome, e.code), ("partial", "TRANSACTION_FAILED"))
+        self.assertEqual(len(e.data["completed"]), 3)
+        self.assertIn("[3/5] trim head of the copy", e.data["completed"][-1])
+        self.assertIn("[4/5]", e.data["lastStep"])
+        self.assertFalse(e.data["lastStepLanded"])
+        (parked,) = e.data["parked"]
+        at = S(20.0)
+        self.assertSpans("V1", [(0.0, at, 0.0, at), (parked["start"], parked["end"], at, 60.0)])  # no right piece
+        self.assertAlmostEqual(parked["inPoint"], at, delta=F / 2)
+
+    def test_the_parked_copy_is_removed_only_when_the_dry_run_hits_exactly_it(self):
+        """[5/5] asks remove_items for a dry run first: no hit, or a neighbour as well, stops before the removal (so
+        data.completed never names a removal Premiere did not make), with the parked copy listed."""
+        real = self.fake.HANDLERS["remove_items"]
+        at = S(20.0)
+        for hits in (0, 2):
+            with self.subTest(hits=hits):
+                self.fake.reset()  # the demo timeline again: V1 holds the interview 0-60 s
+                calls = []
+
+                def remove_items(p, hits=hits, calls=calls):
+                    out = real(dict(p, dryRun=True))
+                    calls.append(dict(p))
+                    if p.get("dryRun"):
+                        removed = out["removed"]
+                        out["removed"] = [] if hits == 0 else removed + [dict(removed[0], start=0.0, end=at)]
+                        return out
+                    return real(p)
+                self.fake.HANDLERS["remove_items"] = remove_items
+                try:
+                    with self.assertRaises(BridgeError) as cm:
+                        editing.split_clip(self.rpc, kind="video", track=0, at=20.0, label="Split")
+                finally:
+                    self.fake.HANDLERS["remove_items"] = real
+                e = cm.exception
+                self.assertEqual((e.outcome, e.code), ("partial", "PRECONDITION_FAILED"))
+                self.assertEqual(len(e.data["completed"]), 4)
+                self.assertIn("[4/5]", e.data["completed"][-1])
+                self.assertTrue(e.data["lastStepLanded"])  # [5/5] was never sent
+                self.assertEqual(len(e.data["parked"]), 1)
+                self.assertEqual([c.get("dryRun") for c in calls], [True])  # the real removal never ran
+                self.assertEqual(len(self.track("V1")), 3)  # left, right, and the parked copy still there
+
+    def test_a_removal_that_takes_another_count_is_a_verify_failure(self):
+        real = self.fake.HANDLERS["remove_items"]
+
+        def remove_items(p):
+            out = real(p)
+            if not p.get("dryRun"):
+                out["removed"] = out["removed"] * 2
+            return out
+        self.fake.HANDLERS["remove_items"] = remove_items
+        try:
+            with self.assertRaises(BridgeError) as cm:
+                editing.split_clip(self.rpc, kind="video", track=0, at=20.0, label="Split")
+        finally:
+            self.fake.HANDLERS["remove_items"] = real
+        e = cm.exception
+        self.assertEqual((e.outcome, e.code), ("partial", "VERIFY_FAILED"))
+        self.assertEqual(len(e.data["completed"]), 5)  # the removal ran: it is Premiere's undo step
+
     def test_failure_of_the_first_write_is_not_partial(self):
-        self.fake.FAIL_TRANSACTIONS.add("[1/4]")
+        self.fake.FAIL_TRANSACTIONS.add("[1/5]")
         with self.assertRaises(BridgeError) as cm:
             editing.split_clip(self.rpc, kind="video", track=0, at=20.0, label="Split")
         self.assertEqual(cm.exception.code, "TRANSACTION_FAILED")
@@ -311,7 +380,7 @@ class SplitTest(EditingCase):
         self.assertEqual(e.outcome, "partial")
         self.assertIn("[verify]", str(e))
         self.assertEqual(len(e.data["completed"]), 3)
-        self.assertIn("[3/4]", e.data["lastStep"])
+        self.assertIn("[3/5]", e.data["lastStep"])
         self.assertTrue(e.data["parked"])
 
     def test_speed_changed_clip_is_refused(self):
@@ -383,13 +452,14 @@ class CutRangeTest(EditingCase):
         self.assertIn("markers", out["markers"].lower())
         cut_labels = [t for t in self.fake.TRANSACTIONS if t.startswith("Cut test: ")]
         self.assertEqual(len(cut_labels), out["undoSteps"])
-        self.assertEqual(out["undoSteps"], 3 * 4 + 2 + 1 + 1)  # the ripple is one shift_items step
+        self.assertEqual(out["undoSteps"], 3 * 5 + 2 + 1 + 1)  # the ripple is one shift_items step
         shifts = [p for a, p in self.calls if a == "shift_items"]
         self.assertEqual(len(shifts), 1)
         self.assertAlmostEqual(shifts[0]["deltaSeconds"], -shift, delta=1e-6)
         self.assertFalse([a for a, _ in self.writes() if a == "insert_clip"])
         removes = [p for a, p in self.calls if a == "remove_items"]
-        self.assertTrue(removes[0]["dryRun"])  # checked before the real removal
+        cut = [p for p in removes if p["fromSeconds"] < 60.0]  # the others take the parked copies off (>= 70 s)
+        self.assertTrue(cut[0]["dryRun"])  # checked before the real removal
         self.assertFalse(any(p.get("ripple") for p in removes))
 
     def test_dry_run_plans_without_writing_and_matches_the_real_run(self):
@@ -405,23 +475,24 @@ class CutRangeTest(EditingCase):
         self.assertEqual(len(plan["trims"]), 2)
         self.assertEqual(len(plan["removals"]), 1)
         self.assertEqual(len(plan["moves"]), 8)
-        self.assertEqual(plan["undoSteps"], 16)
-        self.assertEqual(len(plan["steps"]), 16)
+        self.assertEqual(plan["undoSteps"], 19)
+        self.assertEqual(len(plan["steps"]), 19)
 
         real = editing.cut_range(self.rpc, start=14.0, end=20.0, label="Cut")
         for key in ("splits", "trims", "removals", "moves", "steps"):
             self.assertEqual(real[key], plan[key], key)
 
-    def test_a_panel_without_shift_items_gets_one_move_per_clip(self):
+    def test_a_panel_without_shift_items_is_refused_before_any_write(self):
+        """No per-clip moveTo fallback any more: ops.cut_range's handshake refuses the panel (PANEL_OUTDATED)."""
         self.set_timeline(*gap_timeline())
         self.fake.HANDLERS.pop("shift_items", None)
-        out = editing.cut_range(self.rpc, start=14.0, end=20.0, label="Cut")
-        self.assertTrue(out["verified"])
-        self.assertEqual(out["undoSteps"], 3 * 4 + 2 + 1 + 8)
-        moves = [p for a, p in self.calls if a == "trim_clip" and "moveTo" in p]
-        self.assertEqual(len(moves), 3 + 8)  # each split ends with a move, then one per rippled clip
-        for label, spans in self.expected().items():
-            self.assertSpans(label, spans)
+        before = copy.deepcopy(self.fake.STATE["video"]), copy.deepcopy(self.fake.STATE["audio"])
+        with self.assertRaises(BridgeError) as cm:
+            ops.cut_range(self.rpc, from_s=14.0, to_s=20.0, label="Cut")
+        self.assertEqual(cm.exception.code, "PANEL_OUTDATED")
+        self.assertIn("shift_items", cm.exception.data["missing"])
+        self.assertEqual(self.writes(), [])
+        self.assertEqual((self.fake.STATE["video"], self.fake.STATE["audio"]), before)
 
     def test_only_some_tracks_reports_what_was_left_behind(self):
         self.set_timeline(*gap_timeline())
@@ -548,6 +619,30 @@ class ExtendCutTest(EditingCase):
         self.assertTrue(out["verified"])
         self.assertEqual(len([h for h in out["heldKeyframes"] if h["silent"]]), 2)
 
+    def test_the_refusal_names_the_remove_keyframes_commands_that_clear_the_way(self):
+        """The KEYFRAMED hint is runnable: taking each held keyframe off (just that key) lets the extension run, and
+        the fades lose only their silent end."""
+        from ppro_bridge import ops
+        self.set_timeline(*gap_timeline())
+        t = self.T
+        self.fade("A1", 5.0, [{"t": t - 2 * F, "value": LEVEL_0DB}, {"t": t, "value": 0.0}])
+        self.fade("V1", 15.0, [{"t": t, "value": 0.0}, {"t": t + 2 * F, "value": 100.0}])
+        with self.assertRaises(BridgeError) as cm:
+            editing.extend_cut(self.rpc, at=10.0, out_by=0.3, in_by=0.25, label="Breathe")
+        hint = cm.exception.hint
+        silent = [h for h in cm.exception.data["heldKeyframes"] if h["silent"]]
+        self.assertEqual((hint.count("remove_keyframes --track"), len(silent)), (2, 2))
+        for h in silent:
+            self.assertIn(f'remove_keyframes --track {h["track"]} --at {h["at"]} --match-name "{h["matchName"]}" '
+                          f'--param {h["index"]} --from {h["keyframe"]} --to {h["keyframe"]} --time-base media', hint)
+            done = ops.remove_keyframes(self.rpc, track=h["track"], at=h["at"], match_name=h["matchName"],
+                                        occurrence=h["occurrence"], param=h["index"], from_s=h["keyframe"],
+                                        to_s=h["keyframe"], time_base="media")
+            self.assertEqual((len(done["removed"]), len(done["remaining"]), done["verified"]), (1, 1, True))
+        out = editing.extend_cut(self.rpc, at=10.0, out_by=0.3, in_by=0.25, label="Breathe")
+        self.assertTrue(out["verified"])
+        self.assertEqual([h["silent"] for h in out["heldKeyframes"]], [False, False])
+
     def test_a_fade_that_holds_a_level_or_runs_on_is_not_refused(self):
         self.set_timeline(*gap_timeline())
         t = self.T
@@ -651,6 +746,113 @@ class SnapEdgesTest(EditingCase):
         self.assertEqual((out["clips"], out["undoSteps"], out["verified"]), (0, 0, True))
 
 
+# ---------------------------------------------------------------- shift_items
+
+class ShiftItemsTest(EditingCase):
+    def setUp(self):
+        super().setUp()
+        self.set_timeline(*gap_timeline())
+
+    def test_opens_room_on_every_track_in_one_step_and_music_under_it_stays(self):
+        music = self.spans("A2")
+        out = editing.shift_items(self.rpc, at=25.0, by=1.0, label="Room")
+        self.assertTrue(out["verified"])
+        self.assertEqual([a for a, _ in self.writes()], ["shift_items"])
+        self.assertEqual(out["undoSteps"], 1)
+        self.assertEqual(sorted((m["track"], m["from"]) for m in out["moves"]),
+                         sorted([("V1", round(S(25), 6)), ("V2", round(S(30), 6)), ("A1", round(S(25), 6)),
+                                 ("A3", round(S(27), 6))]))
+        # by snaps to whole frames: 1.0 s is 60 frames (1.001 s) at 59.94
+        self.assertAlmostEqual(self.track("V1")[2]["start"], S(25) + S(1.0), delta=1e-6)
+        self.assertAlmostEqual(self.track("A3")[2]["start"], S(27) + S(1.0), delta=1e-6)
+        self.assertEqual(self.spans("A2"), music)
+        self.assertEqual([s["track"] for s in out["stays"]], ["A2"])
+
+    def test_dry_run_writes_nothing(self):
+        before = copy.deepcopy(self.fake.STATE)
+        plan = editing.shift_items(self.rpc, at=25.0, by=1.0, label="Room", dry_run=True)
+        self.assertEqual((len(plan["moves"]), plan["dryRun"], self.writes()), (4, True, []))
+        self.assertEqual(self.fake.STATE["video"], before["video"])
+
+    def test_left_into_a_gap_on_chosen_tracks_lists_what_is_now_out_of_sync(self):
+        out = editing.shift_items(self.rpc, at=16.0, by=-1.0, tracks=["V2"], label="Close")
+        self.assertTrue(out["verified"])
+        self.assertAlmostEqual(self.track("V2")[1]["start"], S(16) - S(1.0), delta=1e-6)
+        self.assertEqual([n["track"] for n in out["notMoved"]], ["V1", "A1", "A3"])
+
+    def test_refused_before_any_write(self):
+        for kwargs in ({"at": 25.0, "by": -1.0},                       # B on V1/A1 is in the way of C
+                       {"at": 5.0, "by": -6.0, "tracks": ["V2"]},      # b1 would start before 0
+                       {"at": 25.0, "by": 0.001}):                     # less than a frame
+            with self.assertRaises(BridgeError, msg=kwargs) as cm:
+                editing.shift_items(self.rpc, label="Bad", **kwargs)
+            self.assertEqual(cm.exception.outcome, "not_committed", kwargs)
+        self.assertEqual(self.writes(), [])
+
+    def room_and_back(self):
+        # the live case (2 Nov, real job copy): a music bed under everything on A2 and an SFX hit just before the
+        # point on A3. Back to the left, neither is in the way: the bed's track is not sent (nothing moves there), and
+        # the hit ends after where the earliest moved clip lands but before A3's own first moving clip lands.
+        video, audio = gap_timeline()
+        audio[2].append(clip("sfx.wav", 24.5, 25.8, 0.0, tag="hit"))
+        self.set_timeline(video, audio)
+        before = {label: self.spans(label) for label in ("V1", "V2", "A1", "A2", "A3")}
+        right = editing.shift_items(self.rpc, at=25.0, by=1.0, label="Room")
+        back = editing.shift_items(self.rpc, at=right["at"] + right["by"], by=-right["by"], label="Close")
+        self.assertTrue(back["verified"])
+        for label, spans in before.items():
+            for got, want in zip(self.spans(label), spans):
+                self.assertTrue(all(abs(g - w) < 1e-6 for g, w in zip(got, want)), (label, got, want))
+        return back, [p for a, p in self.writes() if a == "shift_items"][1:]
+
+    def test_room_opened_on_every_track_can_be_closed_again(self):
+        # the panel checks the room per track (ping feature shiftItemsPrecise): ONE step
+        back, sent = self.room_and_back()
+        self.assertEqual(back["undoSteps"], 1)
+        self.assertEqual([(p["videoTracks"], p["audioTracks"]) for p in sent], [([0, 1], [0, 2])])
+        self.assertNotIn("step of its own", " ".join(back["notes"]))
+        self.assertEqual([a for a, _ in self.calls].count("ping"), 2)  # precise=None: each call asked the panel
+        # ops asks once, in its handshake, and passes the answer on
+        calls = len(self.calls)
+        out = ops.shift_items(self.rpc, from_s=25.0, by=1.0, dry_run=True)
+        self.assertEqual(([a for a, _ in self.calls[calls:]].count("ping"), out["undoSteps"]), (1, 1))
+
+    def test_an_older_panel_gets_the_track_it_would_refuse_in_a_step_of_its_own(self):
+        # a 0.5 panel: no features, and its coarse check counts every clip that stays on a sent track
+        fake = self.fake
+        self.addCleanup(setattr, fake, "FEATURES", list(fake.FEATURES))
+        fake.FEATURES = [f for f in fake.FEATURES if f != "shiftItemsPrecise"]
+
+        def coarse_shift(p):
+            frm, delta, half = p["fromSeconds"], p["deltaSeconds"], 0.5 / fake.FPS
+            for kind, key in (("video", "videoTracks"), ("audio", "audioTracks")):
+                for idx in p.get(key) if isinstance(p.get(key), list) else range(len(fake.STATE[kind])):
+                    for it in fake.track(kind, idx):
+                        if delta < 0 and it["start"] < frm - half and it["end"] > frm + delta + half:
+                            raise fake.Coded("PRECONDITION_FAILED", f"{fake.label_of(kind, idx)}: in the way")
+            return precise(p)
+
+        precise = fake.HANDLERS["shift_items"]
+        fake.HANDLERS["shift_items"] = coarse_shift
+        back, sent = self.room_and_back()
+        self.assertEqual(back["undoSteps"], 2)
+        self.assertIn("A3 moved in a step of its own", " ".join(back["notes"]))
+        self.assertEqual([(p["videoTracks"], p["audioTracks"]) for p in sent], [([0, 1], [0]), ([], [2])])
+        # told explicitly, it plans without asking the panel
+        right = editing.shift_items(self.rpc, at=25.0, by=1.0, label="Room")
+        calls = len(self.calls)
+        for precise, steps in ((False, 2), (True, 1)):
+            plan = editing.shift_items(self.rpc, at=right["at"] + right["by"], by=-right["by"], label="Close",
+                                       dry_run=True, precise=precise)
+            self.assertEqual(plan["undoSteps"], steps, precise)
+        self.assertNotIn("ping", [a for a, _ in self.calls[calls:]])
+
+    def test_nothing_after_the_time_is_a_no_op(self):
+        out = editing.shift_items(self.rpc, at=45.0, by=1.0, label="Room")
+        self.assertTrue(out["noop"])
+        self.assertEqual(self.writes(), [])
+
+
 # ---------------------------------------------------------------- conform_captions
 
 class ConformCaptionsTest(EditingCase):
@@ -727,6 +929,25 @@ class ConformCaptionsTest(EditingCase):
 # ---------------------------------------------------------------- pure pieces
 
 class PureTest(unittest.TestCase):
+    def test_a_planned_move_past_another_clip_is_refused_before_writing(self):
+        """B1: a move whose path crosses or lands on another clip of the track never reaches the panel; one that
+        stays clear (or touches a neighbour by less than half a frame, as a snap does) runs."""
+        doc = {"video": [{"index": 0, "items": [
+            {"name": "a", "start": 0.0, "end": 2.0, "inPoint": 0.0, "outPoint": 2.0},
+            {"name": "b", "start": 3.0, "end": 4.0, "inPoint": 0.0, "outPoint": 1.0}]}], "audio": []}
+        sent = []
+        run = editing._Run(lambda action, params=None: sent.append(action) or {}, editing._Grid(FPS),
+                           editing._Timeline(doc), "Move", dry=True, seq_end=4.0)
+        a = run.model.clips(("video", 0))[0]
+        for to in (2.5, 3.5, 10.0):  # onto b, half over it, far past it
+            with self.subTest(to=to), self.assertRaises(BridgeError) as cm:
+                editing._trim(run, ("video", 0), a, editing.MOVE, to, "move a")
+            self.assertEqual((cm.exception.code, cm.exception.outcome), ("PRECONDITION_FAILED", "not_committed"))
+            self.assertIn("B1", str(cm.exception))
+        self.assertEqual(run.steps, [])
+        editing._trim(run, ("video", 0), a, editing.MOVE, 1.0 - F / 3, "move a")  # ends a third of a frame into b
+        self.assertEqual(len(run.steps), 1)
+
     def test_parse_srt_tolerates_bom_crlf_dots_and_missing_indexes(self):
         text = ("\ufeff2\r\n00:00:05.5 --> 00:00:07,250 X1:10\r\nSecond\r\nline\r\n\r\n"
                 "00:00:01,000 --> 00:00:02,000\r\nFirst\r\n")

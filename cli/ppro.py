@@ -90,6 +90,8 @@ def resolve_exported_frame(reply):
 def export_one_frame(directory, at, name, width=None, height=None):
     """0.3.3 form: returns a reply envelope ({"ok": true, "data": …} or the failure object)."""
     try:
+        if at is not None:  # past the end Premiere would hand back the 0 s frame (ops.export_frame refuses it too)
+            _frames.check_times_inside(_g("rpc"), [at])
         return {"ok": True, "data": _frames.export_one_frame(_g("rpc"), directory, at, name, width, height)}
     except BridgeError as e:
         return e.to_reply()

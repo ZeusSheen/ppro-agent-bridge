@@ -9,6 +9,7 @@ Every connection sends the pairing token (auth.read_token); a broker that refuse
 import asyncio
 import json
 import os
+import re
 import uuid
 
 from . import auth, spec
@@ -121,14 +122,22 @@ def rpc(action: str, params: dict | None = None) -> dict:
 
 def make_rpc(*, url: str | None = None, guard: dict | None = None):
     """An rpc-like callable bound to a broker URL and a guard ({project?, projectPrefix?, projectGuid?, sequence?,
-    sequenceGuid?}) that the panel checks on every action but ping. With a guard, the first call pings once and
-    refuses a panel older than protocol 2 (it would ignore the guard) with PANEL_OUTDATED. A guard given but empty
-    (no value, or "" — an empty prefix matches every project) is refused with BAD_PARAMS.
+    sequenceGuid?, fingerprint?}) that the panel checks on every action but ping and export_status (which touches no
+    project or sequence). `fingerprint` (get_sequence's, see items.fingerprint) is checked by the panel on writes that
+    are not dry runs: the timeline must still be the one it was read from, else PRECONDITION_FAILED and nothing
+    changes. With a guard, the first call pings once and refuses a panel older than protocol 2 (it would ignore the
+    guard), or one that does not advertise the "fingerprintGuard" feature when the guard has a fingerprint, with
+    PANEL_OUTDATED. A guard given but empty (no value, or "" — an
+    empty prefix matches every project), or a fingerprint that is not 16 hex digits, is refused with BAD_PARAMS.
     Note: `call(..., guard=…)` sends a guard without this protocol check; use make_rpc for guarded work."""
     if guard is not None:
         set_values = {k: v for k, v in guard.items() if v is not None}
         if not set_values or any(v == "" for v in set_values.values()):
             raise BridgeError(f"Empty guard {guard!r}: give at least one non-empty project/sequence pin.",
+                              code="BAD_PARAMS", outcome="not_committed")
+        fp = set_values.get("fingerprint")
+        if fp is not None and not (isinstance(fp, str) and re.fullmatch(r"[0-9a-f]{16}", fp)):
+            raise BridgeError(f"Bad guard fingerprint {fp!r}: pass get_sequence's fingerprint (16 hex digits).",
                               code="BAD_PARAMS", outcome="not_committed")
         guard = set_values
     checked = {"done": not guard}
@@ -141,6 +150,11 @@ def make_rpc(*, url: str | None = None, guard: dict | None = None):
                                   "and would ignore the project/sequence guard; reload the current panel in UXP "
                                   "Developer Tool.", code="PANEL_OUTDATED", outcome="not_committed",
                                   data={"panelProtocol": info.get("protocol") or 1, "needProtocol": 2})
+            if "fingerprint" in guard and "fingerprintGuard" not in (info.get("features") or []):
+                raise BridgeError(f"The loaded panel ({info.get('plugin')}) cannot check a timeline fingerprint guard; "
+                                  "reload the current panel in UXP Developer Tool (or use items.fingerprint_guard, "
+                                  "the client-side check).", code="PANEL_OUTDATED", outcome="not_committed",
+                                  data={"missingFeature": "fingerprintGuard"})
             checked["done"] = True
             if action == "ping" and not params:
                 return info

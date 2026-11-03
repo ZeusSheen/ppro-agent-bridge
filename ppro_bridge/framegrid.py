@@ -35,6 +35,16 @@ def covers_whole_media(src_in: float, src_out: float, media_duration: float | No
     return src_in <= 0.5 / fps and src_out >= media_duration - 1.5 / fps
 
 
+def short_picture(media: dict, fps: float) -> float | None:
+    """Where the picture ends when it ends well before the file (more than 1.5 frames: the audio runs on), else
+    None. Source ranges past it hold no frames, and Premiere places such a clip frames short, so callers stop the
+    range at the picture's end; a range up to there is not "the whole file" and goes in as a range."""
+    picture, file = media.get("videoDuration"), media.get("duration")
+    if picture and file and picture < file - 1.5 / fps:
+        return picture
+    return None
+
+
 def whole_extents(media: dict, seq_fps: float) -> list[float]:
     """Seconds a whole-clip placement may occupy. The project item's interpretation is not
     readable over UXP, so both the file's own rate and the sequence rate (the usual override,

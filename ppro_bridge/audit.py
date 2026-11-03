@@ -66,7 +66,8 @@ def shorten_params(params) -> dict:
 
 def summary(action, data) -> dict:
     """The reply facts worth keeping: sequence name, guid and track counts, the player position, frame size,
-    undo labels and step counts, the panel's version on ping."""
+    undo labels and step counts, the panel's version, build flavour and load time on ping (a new loadedAt means the
+    panel's code was loaded again: a Reload, a Premiere restart, or a panel that reloads when it is reopened)."""
     if not isinstance(data, dict):
         return {}
     out = {}
@@ -75,7 +76,8 @@ def summary(action, data) -> dict:
     if action == "get_project":
         out.update({k: data[k] for k in ("name", "guid", "activeSequence") if k in data})
     if action == "ping":
-        out.update({k: data[k] for k in ("plugin", "version", "protocol", "host", "stuck", "denied") if k in data})
+        out.update({k: data[k] for k in ("plugin", "version", "protocol", "host", "stuck", "denied", "build", "loadedAt")
+                    if k in data})
     if isinstance(data.get("sequence"), str):
         out["sequence"] = data["sequence"]
     for key, name in (("videoTracks", "videoTracks"), ("audioTracks", "audioTracks"), ("video", "videoTracks"),

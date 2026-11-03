@@ -83,13 +83,18 @@ class LiveSmokeAgainstFake(unittest.TestCase):
                      "write: insert source range (frame-exact)", "write: set_params sequence time",
                      "write: set_params read-back (inspect_items)", "write: add_transition + OTIO read-back",
                      "write: replace_clip EN -> CN", "write: import_transcript (fixture)",
-                     "write: transcribe_clip (Speech-to-Text)", "cleanup: remove placed clips",
-                     "after: timeline restored", "after: project items"):
+                     "write: transcribe_clip (Speech-to-Text)", "write: subclip (read back)",
+                     "write: subclip placed whole keeps its range", "write: relink to a copy and back",
+                     "cleanup: remove placed clips",
+                     "cleanup: remove test bins", "after: timeline restored", "after: project items"):
             self.assertEqual(st.get(name), "PASS", f"{name}: {st.get(name)}\n{proc.stdout}")
         self.assertEqual(report["guard"]["projectPrefix"], "PAB_TEST")
         self.assertIn("sequenceGuid", report["guard"])
         self.assertEqual(report["leftBehind"]["clips"], [])
-        self.assertTrue(all(i.startswith(f"PAB_SMOKE_{report['runId']}") for i in report["leftBehind"]["projectItems"]))
+        # the run's bins (PAB_SMOKE_<id>, PAB_SMOKE_<id>_CN) went with remove_project_items; markers stay
+        self.assertEqual(report["leftBehind"]["projectItems"], [])
+        self.assertFalse([i for i in self.project_items(b) if i["bin"].startswith("PAB_SMOKE_")])
+        self.assertIn("PAB_SMOKE_", next(r["detail"] for r in report["results"] if r["name"] == "cleanup: remove test bins"))
         self.assertTrue(report["leftBehind"]["markers"][0].startswith(f"PAB_SMOKE {report['runId']}"))
 
     def test_read_only_run_writes_nothing(self):
@@ -106,7 +111,10 @@ class LiveSmokeAgainstFake(unittest.TestCase):
         proc, report = self.smoke(b, "--write", "--keep")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(self.statuses(report)["cleanup: remove placed clips"], "SKIP")
+        self.assertEqual(self.statuses(report)["cleanup: remove test bins"], "SKIP")
         self.assertTrue(report["leftBehind"]["clips"])
+        self.assertTrue(report["leftBehind"]["projectItems"])
+        self.assertTrue([i for i in self.project_items(b) if i["bin"] == f"PAB_SMOKE_{report['runId']}"])
 
     def test_denied_host_gets_ping_only_checks(self):
         b = self.bridge(PPRO_FAKE_DENIED="rehearsal: this build is denied")
@@ -117,6 +125,17 @@ class LiveSmokeAgainstFake(unittest.TestCase):
         self.assertEqual(st.get("write phase"), "SKIP", proc.stdout)
         self.assertFalse([n for n in st if n.startswith(("write:", "cleanup:"))], proc.stdout)
         self.assertEqual(proc.returncode, 1, "a denied host is not compatible: " + proc.stdout)
+
+    def test_read_only_run_on_a_release_build(self):
+        """A release panel lacks only the devOnly actions (api_smoke): the read phase expects exactly that."""
+        b = self.bridge(PPRO_FAKE_RELEASE="1")
+        proc, report = self.smoke(b)
+        self.assertIsNotNone(report, proc.stdout + proc.stderr)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        st = self.statuses(report)
+        self.assertEqual(st["read: panel has every spec action"], "PASS", proc.stdout)
+        self.assertEqual(next(r["detail"] for r in report["results"] if r["name"] == "read: build flavour"),
+                         "release build")
 
     def test_other_projects_are_refused(self):
         b = self.bridge(project="Smoke Test.prproj")

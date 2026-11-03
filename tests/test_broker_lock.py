@@ -84,5 +84,26 @@ class SerialTest(unittest.TestCase):
             bridge.stop()
 
 
+class WriteGuardTest(unittest.TestCase):
+    def test_a_runaway_script_is_stopped_but_reads_and_dry_runs_go_on(self):
+        bridge = Bridge(broker_env={"PPRO_WRITE_LIMIT": 3, "PPRO_WRITE_WINDOW": 60})
+        try:
+            replies = [bridge.cli("add_marker", "--at", i, "--name", f"m{i}")[1] for i in range(4)]
+            self.assertEqual([r["ok"] for r in replies], [True, True, True, False])
+            self.assertNotIn("warnings", replies[0]["data"])
+            self.assertIn("runaway guard", replies[1]["data"]["warnings"][0])  # from two thirds of the limit
+            refused = replies[3]
+            self.assertEqual((refused["code"], refused["outcome"], refused["retryable"]),
+                             ("WRITE_LIMIT", "not_committed", True))
+            code, dry, _ = bridge.cli("remove_items", "--track", "V1", "--from", 0, "--to", 60, "--dry-run")
+            self.assertEqual(code, 0, dry)
+            code, ping, _ = bridge.cli("ping")
+            self.assertEqual(code, 0, ping)
+            # three markers, the dry run and this ping: the refused write never reached the panel
+            self.assertEqual(ping["data"]["received"], 3 + 1 + 1)
+        finally:
+            bridge.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

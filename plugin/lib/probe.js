@@ -143,11 +143,12 @@ module.exports = function (deps) {
       inst.sequence = sequence;
       inst.sequenceEditor = tryGetSync(() => ppro.SequenceEditor.getEditor(sequence));
       for (const kind of ["video", "audio"]) {
-        const count = await timeline.trackCount(sequence, kind);
+        // Lenient on purpose: probe_api only collects sample instances; an unreadable track just yields none.
+        const count = await tryGet(() => timeline.trackCount(sequence, kind), 0);
         for (let i = 0; i < count; i++) {
           const track = await tryGet(() => (kind === "video" ? sequence.getVideoTrack(i) : sequence.getAudioTrack(i)));
           if (i === 0 && track) inst[`${kind}Track`] = track;
-          const items = track ? await timeline.clipItems(track) : [];
+          const items = track ? await tryGet(() => timeline.clipItems(track), []) : [];
           if (items.length) { inst[`${kind}ClipTrackItem`] = items[0]; break; }
         }
         const clip = inst[`${kind}ClipTrackItem`];

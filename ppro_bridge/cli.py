@@ -7,6 +7,8 @@ success, 1 on failure.
 Usage (from the repo root: python -m ppro_bridge <command> …; from cli/: python ppro.py <command> …):
   ping [--probe]
   get_project | get_sequence | list_project_items | list_transition_names
+  set_active_sequence --name "02 Police"     open another sequence for the next commands
+  select_items  --track A1 --from 0 --to 60  select clips for Premiere's panels | select_items --clear
   list_items [--track V3]                    clips on the timeline as JSON
   inspect_items [--track V5] [--output f.json]
   export_frame  --dir frames --at 12.5
@@ -24,8 +26,17 @@ Usage (from the repo root: python -m ppro_bridge <command> …; from cli/: pytho
   set_params    --track V3 --at 4.0 --json params.json
   add_transition --track V3 --at 4.0 --match-name "AE.ADBE Cross Dissolve New" --duration 0.5 --edge start
   set_fps       --item g01.mov --fps 59.94
+  subclip       --item interview.mp4 --in 12.5 --out 31 --name "Answer 3" [--bin "Selects"]
+  relink        --item g01.mov --to <renders>/g01_v2.mov [--dry-run]
   add_marker    --at 9.0 --name "Fact check" --comment "..." --color red
+  list_markers | remove_marker --name "Fact check" [--at 9.0] [--dry-run]
+  list_sequences | clone_sequence [--name "Seq"] [--keep 5] [--dry-run] | save_project
   remove_items  --track V3 --from 35 --to 53 [--dry-run]
+  list_presets  [--format h264]              encoder presets on disk (no panel needed)
+  export_video  --preset "00 - Match Source - High bitrate" --output out.mp4 [--dry-run | --detach] | --job ID
+  list_effects  [--kind audio] | add_audio_effect --track A1 --at 5 --name "DeNoise" [--dry-run]
+  list_effect_presets [--search blur] [--file f.prfpset] [--locale zh_CN]   effect presets on disk
+  apply_preset  --track V2 --at 4.0 --preset "PiP 25% LL" [--dry-run]
 
 Requires: Python 3.10+, `pip install websockets`, broker running, Premiere open with the Agent Bridge panel
 loaded. Optional: ffprobe on PATH (fit/fill scaling, audio detection), Pillow (contact sheets).
@@ -35,7 +46,7 @@ import argparse
 import inspect
 import json
 
-from . import ops, transport
+from . import items, ops, spec, transport
 from .console import utf8_stdio
 from .errors import BridgeError
 from .ops import MARKER_COLORS
@@ -57,6 +68,20 @@ def build_parser() -> argparse.ArgumentParser:
     pg.add_argument("--probe", action="store_true", help="Re-run the panel's capability probe")
     add("get_project", help="Active project name / path / active sequence")
     add("get_sequence", help="Active sequence: frame size, fps, duration, tracks, player position")
+    pas = add("set_active_sequence", help="Open another sequence in the Timeline (by name or guid) for the next commands")
+    pas.add_argument("--name", default=None, help="Exact sequence name")
+    pas.add_argument("--guid", default=None, help="Sequence guid (when two sequences share a name)")
+    psl = add("select_items", help="Select clips in the Timeline for Premiere's own panels (e.g. Properties > "
+                                   "Enhance Audio on every selected clip); read back")
+    psl.add_argument("--track", action="append", default=None, help="V1, A1, … (repeatable)")
+    psl.add_argument("--at", type=float, default=None, help="Any sequence time: the clip under it on each track")
+    psl.add_argument("--from", dest="from_s", type=float, default=None)
+    psl.add_argument("--to", dest="to_s", type=float, default=None)
+    psl.add_argument("--mode", choices=["inside", "overlap"], default="inside",
+                     help="With --from/--to: inside (default) = clips entirely in the range; overlap = touching it")
+    psl.add_argument("--clear", action="store_true", help="Empty the selection instead")
+    psl.add_argument("--dry-run", action="store_true", help="List the clips it would select, change nothing")
+    psl.add_argument("--expect-seq", **expect_seq)
 
     pli = add("list_items", help="Clips on the active sequence's tracks, as JSON")
     pli.add_argument("--kind", choices=["video", "audio", "all"], default="all")
@@ -122,6 +147,8 @@ def build_parser() -> argparse.ArgumentParser:
     pi = add("import_media", help="Import media files into the project root or a bin")
     pi.add_argument("--path", action="append", required=True, help="File path (repeatable)")
     pi.add_argument("--bin", default=None, help="Top-level bin name (created if missing)")
+    pi.add_argument("--force", action="store_true",
+                    help="Send files in a codec Premiere refuses (VP9, AV1, Opus …) anyway (default: refuse)")
 
     pm = add("add_marker", help="Add a sequence marker")
     pm.add_argument("--at", type=float, required=True)
@@ -131,6 +158,26 @@ def build_parser() -> argparse.ArgumentParser:
     pm.add_argument("--type", default="Comment", choices=["Comment", "Chapter", "Segmentation", "WebLink"])
     pm.add_argument("--color", default=None, help=f"{', '.join(MARKER_COLORS)} or 0–7")
     pm.add_argument("--label", default=None)
+
+    add("list_markers", help="The active sequence's markers: guid, name, comments, start, duration, type, colour")
+    prm = add("remove_marker", help="Remove one sequence marker by guid, or by name (+ --at when names repeat)")
+    prm.add_argument("--guid", default=None, help="Marker guid (from list_markers)")
+    prm.add_argument("--name", default=None, help="Exact marker name")
+    prm.add_argument("--at", type=float, default=None,
+                     help="The marker's start in sequence seconds (half a frame of tolerance), when names repeat")
+    prm.add_argument("--dry-run", action="store_true", help="Name the marker that would go; change nothing")
+    prm.add_argument("--label", default=None)
+    prm.add_argument("--expect-seq", **expect_seq)
+    add("list_sequences", help="Every sequence in the project: name, guid, active, bridge restore point")
+    pcs = add("clone_sequence", help="Restore point: clone a sequence as \"<name> [restore date time]\", prune old ones")
+    pcs.add_argument("--name", default=None, help="Sequence to clone (default: the active one)")
+    pcs.add_argument("--guid", default=None, help="Sequence guid (when two sequences share a name)")
+    pcs.add_argument("--keep", type=int, default=5,
+                     help="Restore points of that sequence to keep, the new one included (default 5); the oldest "
+                          "bridge restore points beyond it are deleted")
+    pcs.add_argument("--dry-run", action="store_true", help="Show the clone's name and what pruning would delete")
+    pcs.add_argument("--label", default=None)
+    add("save_project", help="Save the project and check that the project file's time stamp changed")
 
     pc = add("insert_clip", help="Place a clip (or a source range of it) on the timeline")
     pc.add_argument("--item", required=True, help='Project item name, or "<bin path>/<name>" when names repeat')
@@ -152,6 +199,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--value", type=float, help="Scale percent, e.g. 50")
     g.add_argument("--fit", action="store_true", help="Fit inside the frame (letterbox), per clip")
     g.add_argument("--fill", action="store_true", help="Fill the frame (crop), per clip")
+    ps.add_argument("--mode", choices=["inside", "overlap"], default="inside",
+                    help="With --from/--to: inside (default) = only clips entirely in the range; overlap = every clip "
+                         "touching it")
     ps.add_argument("--dry-run", action="store_true")
     ps.add_argument("--label", default=None)
     ps.add_argument("--expect-seq", **expect_seq)
@@ -162,6 +212,28 @@ def build_parser() -> argparse.ArgumentParser:
     pfp.add_argument("--fps", type=float, required=True)
     pfp.add_argument("--dry-run", action="store_true", help="List where the items are used in the active sequence")
     pfp.add_argument("--label", default=None)
+
+    psc = add("subclip", help="Make a subclip of a project item (a source range, snapped to its frames) in a bin")
+    psc.add_argument("--item", required=True, help='Source project item, or "<bin path>/<name>" when names repeat')
+    psc.add_argument("--in", dest="in_s", type=float, required=True, help="Source in point, seconds")
+    psc.add_argument("--out", dest="out_s", type=float, required=True, help="Source out point, seconds")
+    psc.add_argument("--name", required=True, help="Name of the new subclip")
+    psc.add_argument("--bin", default=None, help="Bin path for it (default: the source item's bin; \"\" = root; a "
+                     "missing top-level bin is created)")
+    g = psc.add_mutually_exclusive_group()
+    g.add_argument("--video-only", action="store_true", help="Take only the picture")
+    g.add_argument("--audio-only", action="store_true", help="Take only the sound")
+    psc.add_argument("--allow-duplicate-name", action="store_true",
+                     help="Make it even when the bin already holds a clip of that name (default: refuse)")
+    psc.add_argument("--dry-run", action="store_true", help="Check and snap everything, change nothing")
+    psc.add_argument("--label", default=None)
+
+    prl = add("relink", help="Point a project item at another media file (checked against the old media first)")
+    prl.add_argument("--item", required=True, help='Project item, or "<bin path>/<name>" (must name exactly one)')
+    prl.add_argument("--to", required=True, help="The new media file")
+    prl.add_argument("--force", action="store_true",
+                     help="Relink even when duration / frame rate / streams differ or cannot be compared")
+    prl.add_argument("--dry-run", action="store_true", help="Compare and list the uses, change nothing")
 
     pr = add("remove_items", help="Remove clips from tracks within a time range")
     pr.add_argument("--track", action="append", required=True, help="V3, A2, … (repeatable)")
@@ -174,6 +246,14 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--dry-run", action="store_true")
     pr.add_argument("--label", default=None)
     pr.add_argument("--expect-seq", **expect_seq)
+
+    prp = add("remove_project_items", help="Remove bins / project items from the project (refused while in use)")
+    prp.add_argument("--bin", action="append", default=None, help='Bin path, e.g. "PAB_TEST_06" or "B-roll/Old" '
+                     "(repeatable; everything inside goes too)")
+    prp.add_argument("--item", action="append", default=None, help='Project item: name or "<bin path>/<name>" '
+                     "(repeatable)")
+    prp.add_argument("--dry-run", action="store_true", help="List what would go and where it is used")
+    prp.add_argument("--label", default=None)
 
     pp = add("apply_plan", help="Execute a JSON edit plan (insert_clip / note commands)")
     pp.add_argument("plan", help="Plan JSON file")
@@ -227,6 +307,9 @@ def build_parser() -> argparse.ArgumentParser:
     psv.add_argument("--at", type=float, default=None, help="Any sequence time inside the clip")
     psv.add_argument("--from", dest="from_s", type=float, default=None)
     psv.add_argument("--to", dest="to_s", type=float, default=None)
+    psv.add_argument("--mode", choices=["inside", "overlap"], default="inside",
+                     help="With --from/--to: inside (default) = only clips entirely in the range; overlap = every clip "
+                          "touching it")
     psv.add_argument("--dry-run", action="store_true")
     psv.add_argument("--label", default=None)
     psv.add_argument("--expect-seq", **expect_seq)
@@ -241,12 +324,55 @@ def build_parser() -> argparse.ArgumentParser:
     pat.add_argument("--label", default=None)
     pat.add_argument("--expect-seq", **expect_seq)
 
+    prt = add("remove_transition", help="Remove the video transition at the start or end of the clip under a time")
+    prt.add_argument("--track", required=True, help="Video track, e.g. V3")
+    prt.add_argument("--at", type=float, required=True, help="Any sequence time inside the clip")
+    prt.add_argument("--edge", required=True, choices=["start", "end"])
+    prt.add_argument("--dry-run", action="store_true", help="Name the transition that would go (and whose it is)")
+    prt.add_argument("--label", default=None)
+    prt.add_argument("--expect-seq", **expect_seq)
+
+    pre = add("remove_effect", help="Remove one added effect (filter) from the clip under a time")
+    pre.add_argument("--track", required=True, help="V3, or A1 (audio effects)")
+    pre.add_argument("--at", type=float, required=True, help="Any sequence time inside the clip")
+    pre.add_argument("--match-name", required=True, help="Component match name (inspect_items lists them)")
+    pre.add_argument("--occurrence", type=int, default=1, help="n-th instance of that match name in the chain (default 1)")
+    pre.add_argument("--dry-run", action="store_true")
+    pre.add_argument("--label", default=None)
+    pre.add_argument("--expect-seq", **expect_seq)
+
+    prk = add("remove_keyframes", help="Remove keyframes of one effect param: a time range, or all (animation off)")
+    prk.add_argument("--track", required=True, help="V3, or A1 (e.g. Volume > Level)")
+    prk.add_argument("--at", type=float, required=True, help="Any sequence time inside the clip")
+    prk.add_argument("--match-name", required=True, help="Component match name (inspect_items lists them)")
+    prk.add_argument("--occurrence", type=int, default=1, help="n-th instance of that match name in the chain (default 1)")
+    prk.add_argument("--param", type=int, required=True, help="The param's index in that component (inspect_items)")
+    prk.add_argument("--all", dest="all_keys", action="store_true", help="Every keyframe (switches animation off)")
+    prk.add_argument("--from", dest="from_s", type=float, default=None, help="Range start (inclusive), in --time-base")
+    prk.add_argument("--to", dest="to_s", type=float, default=None, help="Range end (inclusive), in --time-base")
+    prk.add_argument("--time-base", choices=["media", "clip", "sequence"], default=None,
+                     help="Seconds of the media (what inspect_items reports), of the clip, or of the sequence")
+    prk.add_argument("--keep-value", action="store_true",
+                     help="When every keyframe goes: keep the value the param had at the middle of the clip")
+    prk.add_argument("--dry-run", action="store_true")
+    prk.add_argument("--label", default=None)
+    prk.add_argument("--expect-seq", **expect_seq)
+
+    def render_check(p):
+        p.add_argument("--render-check", action="store_true",
+                       help="Afterwards render the sequence (audio) and a frame per video piece, and check that every "
+                            "piece the edit made, trimmed or moved plays (exit 1 with RENDER_CHECK_FAILED if not)")
+        p.add_argument("--render-dir", default=None, help="Where --render-check writes its WAV and frames (default: "
+                                                          "a temp folder)")
+        p.add_argument("--preset", default=None, help="WAV preset for --render-check (default: Premiere's own)")
+
     psp = add("split_clip", help="Split the clip under a time without a razor (clone + trim; keeps clip attributes)")
     psp.add_argument("--track", required=True, help="V1, A2, …")
     psp.add_argument("--at", type=float, required=True, help="Sequence time of the split (snapped to the frame grid)")
     psp.add_argument("--dry-run", action="store_true")
     psp.add_argument("--label", default=None)
     psp.add_argument("--expect-seq", **expect_seq)
+    render_check(psp)
 
     pcr = add("cut_range", help="Remove a time range from every track and close the gap on all of them in sync")
     pcr.add_argument("--from", dest="from_s", type=float, required=True)
@@ -259,6 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
     pcr.add_argument("--dry-run", action="store_true")
     pcr.add_argument("--label", default=None)
     pcr.add_argument("--expect-seq", **expect_seq)
+    render_check(pcr)
 
     pec = add("extend_cut", help="Open up a cut (breathing room) with more of the clips' own source; keeps sync")
     pec.add_argument("--at", type=float, required=True, help="The cut point (sequence s)")
@@ -277,6 +404,15 @@ def build_parser() -> argparse.ArgumentParser:
     pec.add_argument("--dry-run", action="store_true")
     pec.add_argument("--label", default=None)
     pec.add_argument("--expect-seq", **expect_seq)
+    render_check(pec)
+
+    psh = add("shift_items", help="Move everything at/after a time on all tracks (or --track ones) by whole frames")
+    psh.add_argument("--from", dest="from_s", type=float, required=True, help="Clips starting at/after this move")
+    psh.add_argument("--by", type=float, required=True, help="Seconds to move (negative: left)")
+    psh.add_argument("--track", action="append", default=None, help="Only these tracks (repeatable; default all)")
+    psh.add_argument("--dry-run", action="store_true")
+    psh.add_argument("--label", default=None)
+    psh.add_argument("--expect-seq", **expect_seq)
 
     psn = add("snap_edges", help="Put clip edges that drifted off the frame grid back on it (lint OFF_GRID)")
     psn.add_argument("--track", action="append", default=None, help="Only these tracks (repeatable; default all)")
@@ -313,13 +449,82 @@ def build_parser() -> argparse.ArgumentParser:
     pea.add_argument("--render", action="store_true", help="Render Premiere's own mix (export_sequence)")
     pea.add_argument("--preset", default=None)
 
+    plp = add("list_presets", help="Encoder presets (.epr) on disk: Premiere's own and yours, with their format")
+    plp.add_argument("--format", default=None, help="Only this format, e.g. h264, hevc, quicktime, wav, mxf")
+
+    pev = add("export_video", help="Render the active sequence with an encoder preset and check the file (ffprobe)")
+    pev.add_argument("--preset", default=None,
+                     help='Preset name from list_presets (e.g. "00 - Match Source - High bitrate") or an .epr path '
+                          "(required unless --job)")
+    pev.add_argument("--output", default=None,
+                     help="Output file; its extension must fit the format (.mp4 for H.264) (required unless --job)")
+    pev.add_argument("--format", default=None, help="Narrow a preset name to this format (h264, quicktime, …)")
+    pev.add_argument("--overwrite", action="store_true", help="Replace an existing output file")
+    pev.add_argument("--dry-run", action="store_true", help="Resolve the preset and check the paths; render nothing")
+    pev.add_argument("--job", default=None, metavar="ID",
+                     help="Wait for the render job ID (from --detach or EXPORT_STALLED) and check its file")
+    pev.add_argument("--detach", action="store_true",
+                     help="Return the render job at once (with --job: one look at it) instead of waiting")
+    pev.add_argument("--stall-seconds", type=float, default=180.0,
+                     help="Give up waiting (EXPORT_STALLED) after this long with no progress, no panel event and no "
+                          "growth of the output file (default 180; there is no other time limit)")
+
+    ple = add("list_effects", help="Effects Premiere can add: video filters (match + display name), audio filters")
+    ple.add_argument("--kind", choices=["audio", "video"], default=None)
+
+    pae = add("add_audio_effect", help="Add an audio effect by its (localised) display name to the clip under a time")
+    pae.add_argument("--track", required=True, help="Audio track, e.g. A1")
+    pae.add_argument("--at", type=float, required=True, help="Any sequence time inside the clip")
+    pae.add_argument("--name", required=True,
+                     help='Display name as list_effects shows it, in the UI language (e.g. "降噪"), or a match name')
+    pae.add_argument("--dry-run", action="store_true")
+    pae.add_argument("--label", default=None)
+    pae.add_argument("--expect-seq", **expect_seq)
+
+    plep = add("list_effect_presets", help="Effect presets (.prfpset) on disk: Premiere's own and yours, with their "
+                                           "effects and whether apply_preset can replay them")
+    plep.add_argument("--file", default=None, help="Only this .prfpset file")
+    plep.add_argument("--search", default=None, help="Only presets whose name or bin path contains this text")
+    plep.add_argument("--locale", default=None,
+                      help="Which of Premiere's localised preset files, e.g. zh_CN (default: its UI language, "
+                           "else en_US)")
+
+    pap = add("apply_preset", help="Apply an effect preset (.prfpset) to the clip under a time or the clips in a range "
+                                   "(through set_params); what UXP cannot write is skipped and reported")
+    pap.add_argument("--track", required=True, help="Video track, e.g. V2")
+    pap.add_argument("--at", type=float, default=None, help="Any sequence time inside the clip")
+    pap.add_argument("--from", dest="from_s", type=float, default=None)
+    pap.add_argument("--to", dest="to_s", type=float, default=None)
+    pap.add_argument("--mode", choices=["inside", "overlap"], default="inside",
+                     help="With --from/--to: inside (default) = clips entirely in the range; overlap = reaching "
+                          "into it")
+    pap.add_argument("--preset", required=True,
+                     help='Preset name as list_effect_presets shows it, or "<bin path>/<name>" when names repeat')
+    pap.add_argument("--file", default=None, help="Look the preset up in this .prfpset file only")
+    pap.add_argument("--locale", default=None,
+                     help="Which of Premiere's localised preset files (default: its UI language)")
+    pap.add_argument("--dry-run", action="store_true", help="Show the set_params request per clip; change nothing")
+    pap.add_argument("--label", default=None)
+    pap.add_argument("--expect-seq", **expect_seq)
+
+    for name, sp in sub.choices.items():
+        if (spec.command(name) or {}).get("kind") == "write":
+            sp.add_argument("--expect-fingerprint", default=None, metavar="FP",
+                            help="Refuse the first write unless the timeline still has this fingerprint "
+                                 "(get_sequence's), so nothing is written over an edit made in between")
     return parser
 
 
 def run(action: str, kwargs: dict, rpc) -> dict:
-    """Run one command; returns the reply object the CLI prints."""
+    """Run one command; returns the reply object the CLI prints. kwargs["expect_fingerprint"], when set, wraps `rpc`
+    in items.fingerprint_guard (checked before the first write, or after a command that wrote nothing)."""
     try:
+        expected = kwargs.pop("expect_fingerprint", None)
+        if expected:
+            rpc = items.fingerprint_guard(rpc, expected)
         data = getattr(ops, action)(rpc, **kwargs)
+        if expected:
+            rpc.verify()
         reply = {"ok": True, "data": data}
         if action == "apply_plan" and isinstance(data, dict):
             reply["ok"] = bool(data.get("ok", True))

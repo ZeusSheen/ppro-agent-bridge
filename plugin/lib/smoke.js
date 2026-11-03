@@ -4,7 +4,8 @@
  * audio effects by display name, bins, relinking, custom properties, MOGRT insertion, ...). The answers
  * decide which ported tools are real (see the uxp-port plan). Not an editing command.
  *
- * Safety: runs only when the active project's name starts with PAB_TEST, whatever the guard says. A case
+ * Safety: main.js registers it only in a dev build (lib/build.js; api_smoke is devOnly in actions.json), and it
+ * runs only when the active project's name starts with PAB_TEST, whatever the guard says. A case
  * works on the scratch clip the runner placed (videoTrack / audioTrack at atSeconds), on project items the
  * runner names, or on objects it creates itself; it reads every change back and puts back what it changed
  * (cleanup steps). Whatever it could not put back is listed in `leftovers`. Opt-ins: allowTrackAdd.
@@ -141,6 +142,40 @@ module.exports = function (deps) {
   async function sequencesOf(project) {
     const list = (await project.getSequences()) || [];
     return list.map((s) => ({ seq: s, name: tryGetSync(() => s.name), guid: core.readGuid(s) }));
+  }
+
+  /* A host object's readable primitives, own and inherited (a RectF keeps width / height as prototype getters, so
+   * JSON.stringify shows {} — the 22 Oct report did). */
+  function hostView(v) {
+    if (v === null || v === undefined) return null;
+    if (typeof v !== "object") return v;
+    const out = {};
+    let o = v;
+    for (let depth = 0; o && o !== Object.prototype && depth < 3; depth++) {
+      for (const k of tryGetSync(() => Object.getOwnPropertyNames(o), []) || []) {
+        if (k === "constructor" || k === "__proto__" || Object.prototype.hasOwnProperty.call(out, k)) continue;
+        const x = tryGetSync(() => v[k]);
+        if (x === null || typeof x === "number" || typeof x === "string" || typeof x === "boolean") out[k] = x;
+      }
+      o = tryGetSync(() => Object.getPrototypeOf(o));
+    }
+    return out;
+  }
+
+  const SETTINGS_GETTERS = ["getVideoFrameRect", "getPreviewFrameRect", "getVideoFrameRate", "getVideoPixelAspectRatio",
+    "getVideoFieldType", "getVideoDisplayFormat", "getMaxRenderQuality", "getMaximumBitDepth",
+    "getCompositeInLinearColor", "getEditingMode", "getPreviewCodec", "getPreviewFileFormat", "getAudioSampleRate",
+    "getAudioChannelCount", "getAudioChannelType", "getAudioDisplayFormat"];
+
+  /* A sequence's frame size (getFrameSize) and every SequenceSettings getter from a fresh getSettings, as plain data
+   * ("absent": no such getter on this build; null: it threw or returned nothing). */
+  async function settingsView(seq) {
+    const size = await tryGet(() => seq.getFrameSize());
+    const out = { frameSize: size ? { width: tryGetSync(() => size.width), height: tryGetSync(() => size.height) } : null };
+    const s = await tryGet(() => seq.getSettings());
+    if (!s) return Object.assign(out, { settings: null });
+    for (const g of SETTINGS_GETTERS) out[g.slice(3)] = core.isFn(s, g) ? hostView(tryGetSync(() => s[g]())) : "absent";
+    return out;
   }
 
   async function entryFor(env) {
@@ -565,6 +600,134 @@ module.exports = function (deps) {
       });
     },
 
+    /*
+     * Sequence settings (frame size) on a clone that is never made active. On 22 Oct (27.1 build 21) a populated clone
+     * kept 1080x1920 after its RectF was edited to 1080x1350 and createSetSettingsAction ran. Here: clone the active
+     * sequence, name the clone, read its settings, then set the frame size two ways — the RectF getVideoFrameRect
+     * returned, edited (the 22 Oct way), and a new ppro.RectF — each to its own size, read back through getFrameSize
+     * and a fresh getSettings at once and after SETTLE_MS; then a control (one boolean setting flipped) that says
+     * whether createSetSettingsAction applies anything at all. Last, Project#deleteSequence on the clone (the call
+     * clone_sequence's pruning makes), never while it is active; the active sequence's own settings are read before
+     * and after and must be the same. Nothing switches the active sequence.
+     */
+    async sequence_settings(env) {
+      const { rec, project, sequence } = env;
+      const SETTLE_MS = 1000;
+      const origGuid = core.readGuid(sequence);
+      const activeBefore = await settingsView(sequence);
+      const activeGuid = async () => core.readGuid(await tryGet(() => project.getActiveSequence()));
+      let before = [];
+      const listed = await rec.step("Project#getSequences + the active sequence's settings", async () => {
+        before = await sequencesOf(need(project, "getSequences", "Project"));
+        return { pass: before.length > 0 && !!origGuid,
+                 detail: { sequences: before.length, active: { guid: origGuid, settings: activeBefore } } };
+      });
+      if (!listed) return;
+      let clone = null;
+      const cloned = await rec.step("Sequence#createCloneAction (stays inactive)", async () => {
+        need(sequence, "createCloneAction", "Sequence");
+        tx(env, "clone sequence", () => sequence.createCloneAction());
+        const fresh = (await sequencesOf(project)).filter((s) => !before.some((b) => b.guid === s.guid));
+        clone = fresh.length === 1 ? fresh[0] : null;
+        // 0 or 2+ new sequences: none is known to be the clone, so none is deleted; each one goes to leftovers
+        if (!clone) for (const s of fresh) rec.undo(`new sequence "${s.name}" (${s.guid}): not deleted, ${fresh.length} appeared`, async () => false);
+        const active = await activeGuid();
+        return { pass: !!clone && active === origGuid,
+                 detail: { new: fresh.map((s) => ({ name: s.name, guid: s.guid })), activeAfter: active } };
+      });
+      if (!clone) return;
+      let deleted = false;
+      let deleteTried = false;
+      // Only the clone this case made, never while it is the active sequence, and once: a clone that survives one
+      // deleteSequence stays (in leftovers) for a person to look at.
+      const deleteClone = async () => {
+        if (await activeGuid() === clone.guid) return { pass: false, detail: "the clone is the active sequence: not deleted" };
+        deleteTried = true;
+        const returned = await need(project, "deleteSequence", "Project").deleteSequence(clone.seq);
+        const after = await sequencesOf(project);
+        deleted = !after.some((s) => s.guid === clone.guid);
+        return { pass: deleted, detail: { returned: hostView(returned), sequences: { before: before.length, after: after.length } } };
+      };
+      rec.undo(`cloned sequence "${clone.name}" (${clone.guid})`, async () => {
+        if (deleted || deleteTried) return deleted;
+        return (await deleteClone()).pass;
+      });
+      if (!cloned) return;  // the clone is not the only new sequence, or the active one changed: no settings on it
+      const newName = `${LABEL} settings ${env.stamp}`;
+      await rec.step("ProjectItem#createSetNameAction (the clone)", async () => {
+        const item = await need(clone.seq, "getProjectItem", "Sequence").getProjectItem();
+        need(item, "createSetNameAction", "ProjectItem");
+        tx(env, "rename clone", () => item.createSetNameAction(newName));
+        const got = (await sequencesOf(project)).find((s) => s.guid === clone.guid);
+        return { pass: !!got && got.name === newName, detail: { got: got ? got.name : null } };
+      });
+      let cloneBefore = null;
+      await rec.step("Sequence#getSettings (the clone)", async () => {
+        need(clone.seq, "getSettings", "Sequence");
+        need(clone.seq, "createSetSettingsAction", "Sequence");
+        cloneBefore = await settingsView(clone.seq);
+        return { pass: !!cloneBefore.frameSize && cloneBefore.VideoFrameRect !== "absent", detail: cloneBefore };
+      });
+      if (!cloneBefore) return;
+
+      /* One frame-size attempt on the clone: `edit` puts {width, height} into the settings object it is given and
+       * says what it saw; then one transaction and the read-backs. */
+      const frameAttempt = async (label, want, edit) => {
+        const s = await clone.seq.getSettings();
+        const how = edit(s, want);
+        tx(env, label, () => clone.seq.createSetSettingsAction(s));
+        const now = await settingsView(clone.seq);
+        await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+        const later = await settingsView(clone.seq);
+        const is = (v) => !!v && v.width === want.width && v.height === want.height;
+        const brief = (v) => ({ frameSize: v.frameSize, VideoFrameRect: v.VideoFrameRect, PreviewFrameRect: v.PreviewFrameRect });
+        return { pass: is(later.frameSize) && is(later.VideoFrameRect),
+                 detail: Object.assign({ want }, how, { now: brief(now), [`after${SETTLE_MS}ms`]: brief(later) }) };
+      };
+      await rec.step("createSetSettingsAction: frame 1080x1350 via the RectF getVideoFrameRect returned", async () =>
+        frameAttempt("frame 1080x1350 (returned RectF)", { width: 1080, height: 1350 }, (s, want) => {
+          const r = s.getVideoFrameRect();
+          const was = hostView(r);
+          r.width = want.width;
+          r.height = want.height;
+          const edited = hostView(r);
+          const returned = s.setVideoFrameRect(r);
+          return { rectWas: was, rectEdited: edited, setReturned: hostView(returned), settingsRead: hostView(s.getVideoFrameRect()) };
+        }));
+      await rec.step("createSetSettingsAction: frame 1080x1080 via a new ppro.RectF", async () => {
+        if (typeof ppro.RectF !== "function") throw new Absent("ppro.RectF is not a constructor on this build");
+        return frameAttempt("frame 1080x1080 (new RectF)", { width: 1080, height: 1080 }, (s, want) => {
+          const r = new ppro.RectF();
+          const fresh = hostView(r);
+          r.width = want.width;
+          r.height = want.height;
+          const returned = s.setVideoFrameRect(r);
+          return { rectNew: fresh, rectEdited: hostView(r), setReturned: hostView(returned), settingsRead: hostView(s.getVideoFrameRect()) };
+        });
+      });
+      await rec.step("createSetSettingsAction: control (one boolean setting flipped)", async () => {
+        const s = await clone.seq.getSettings();
+        const pick = ["MaxRenderQuality", "CompositeInLinearColor"].find((k) =>
+          core.isFn(s, `get${k}`) && core.isFn(s, `set${k}`) && typeof tryGetSync(() => s[`get${k}`]()) === "boolean");
+        if (!pick) return { skip: "no boolean setting with a getter and a setter on this build" };
+        const was = s[`get${pick}`]();
+        const returned = s[`set${pick}`](!was);
+        tx(env, `control: ${pick} ${!was}`, () => clone.seq.createSetSettingsAction(s));
+        const fresh = await clone.seq.getSettings();
+        const got = tryGetSync(() => fresh[`get${pick}`]());
+        return { pass: got === !was, detail: { setting: pick, was, want: !was, setReturned: hostView(returned), got } };
+      });
+      await rec.step("Project#deleteSequence (the clone, inactive) + the active sequence unchanged", async () => {
+        const r = await deleteClone();
+        const active = await activeGuid();
+        const activeAfter = await settingsView(sequence);
+        const unchanged = JSON.stringify(activeAfter) === JSON.stringify(activeBefore);
+        return { pass: r.pass && active === origGuid && unchanged,
+                 detail: Object.assign({}, r.detail, { activeAfter: active, activeSettingsUnchanged: unchanged },
+                   unchanged ? {} : { activeSettingsAfter: activeAfter }) };
+      });
+    },
+
     /* Player position, sequence in/out, work area: set, read back, put back. */
     async sequence_points(env) {
       const { rec, sequence } = env;
@@ -893,7 +1056,8 @@ module.exports = function (deps) {
       });
     },
 
-    /* MOGRT: the installed templates folder; with mogrtPath also insert one, list its params (text untouched), remove it. */
+    /* MOGRT: the installed templates folder; with mogrtPath also insert one, list its params (text untouched), remove it
+     * (keepMogrt: leave it in place, its clips listed in the skipped removal step, for a live test on a graphic). */
     async mogrt(env) {
       const { rec, sequence } = env;
       await rec.step("SequenceEditor.getInstalledMogrtPath", async () => {
@@ -926,7 +1090,14 @@ module.exports = function (deps) {
         }
         return { pass: items.length > 0, detail: { returned: items.length, items: described } };
       });
-      if (items.length) {
+      if (items.length && env.params.keepMogrt) {
+        const kept = [];
+        for (const it of items) {
+          const d = await timeline.describeItem(it);
+          kept.push({ name: d.name, start: d.start, end: d.end });
+        }
+        await rec.step("remove the inserted MOGRT clips", async () => ({ skip: "keepMogrt", detail: { keptInPlace: kept } }));
+      } else if (items.length) {
         let gone = false;
         rec.undo("inserted MOGRT clips", async () => gone);
         await rec.step("remove the inserted MOGRT clips", async () => { gone = removeTrackItems(env, items, "remove MOGRT"); return { pass: gone }; });
@@ -1003,7 +1174,7 @@ module.exports = function (deps) {
 
   const handlers = {
     /* params: { case, videoTrack?, audioTrack?, atSeconds?, itemName?, binPath?, copyPath?, outputDir?,
-     *           displayName?, paramIndex?, value?, mogrtPath?, allowTrackAdd?, binName?, allowProject? }
+     *           displayName?, paramIndex?, value?, mogrtPath?, keepMogrt?, allowTrackAdd?, binName?, allowProject? }
      * allowProject: the exact name of one non-PAB_TEST project the user agreed to test in. */
     async api_smoke(params, ctx) {
       const { project, sequence } = await core.requireSequence(ctx);
