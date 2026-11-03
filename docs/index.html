@@ -850,7 +850,7 @@ const GRID = { share: [0.7, 0.5], step: 0.02, minZoom: 0.72, maxZoom: 1.4 };
 function px(v) { return parseFloat(v) || 0; }
 function fontOf(cs) { return `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`; }
 function widthOf(text, cs) {
-  return pretext.measureNaturalWidth(pretext.prepareWithSegments(text, fontOf(cs), { letterSpacing: px(cs.letterSpacing) }));
+  return pretext.measureNaturalWidth(pretext.prepare(text, fontOf(cs), { letterSpacing: px(cs.letterSpacing) }));
 }
 
 // One text block as Pretext rich-inline items: each word is an unbreakable item in its own font (with a chip's
