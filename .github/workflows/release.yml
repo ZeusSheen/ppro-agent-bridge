@@ -85,8 +85,15 @@ jobs:
             # against the checksum in its package before running it.
             choco install innosetup --version=6.7.1 --no-progress -y
           }
-          if (-not (Test-Path (Join-Path (Split-Path $iscc) "Languages\ChineseSimplified.isl"))) {
-            throw "Inno Setup 6.5 or newer (with Languages\ChineseSimplified.isl) is needed at $iscc"
+          if (-not (Test-Path $iscc)) { throw "No Inno Setup 6 at $iscc" }
+          # The Chinese wizard's texts: Inno Setup 6.7.1 ships no Languages\ChineseSimplified.isl (it is one of the
+          # unofficial translations), so the script falls back to installer\ChineseSimplified.isl from this checkout
+          # (installer/PremiereAgentBridge.iss); either one will do. Requiring the compiler's own copy failed the first
+          # v0.7.0 run on 7 Nov 2026.
+          $zh = @((Join-Path (Split-Path $iscc) "Languages\ChineseSimplified.isl"),
+                  (Join-Path $env:GITHUB_WORKSPACE "installer\ChineseSimplified.isl"))
+          if (-not ($zh | Where-Object { Test-Path $_ })) {
+            throw "No ChineseSimplified.isl at $($zh -join ' or ')"
           }
           "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 

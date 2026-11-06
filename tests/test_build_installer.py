@@ -670,6 +670,17 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertRegex(sign, r"if: github.ref_type == 'tag' &&")
         self.assertIn("permissions: {}", self.TEXT)
 
+    def test_inno_setup_without_its_own_chinese_texts_is_enough(self):
+        """Inno Setup 6.7.1 (GitHub's image) ships no ChineseSimplified.isl; the repository's copy is the fallback, so
+        the workflow must not require the compiler's own (that failed the first v0.7.0 run)."""
+        build = self.TEXT.split("\n  sign:\n", 1)[0]
+        start = build.index("name: Find Inno Setup")
+        step = build[start:build.index("name: Build the installer")]
+        self.assertIn('"installer\\ChineseSimplified.isl"', step)
+        self.assertIn('"Languages\\ChineseSimplified.isl"', step)
+        self.assertNotIn("6.5 or newer", step)
+        self.assertTrue((REPO / "installer" / "ChineseSimplified.isl").is_file())
+
 
 # ---------------------------------------------------------------- the start scripts
 

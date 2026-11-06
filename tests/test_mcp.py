@@ -699,11 +699,13 @@ class ConnectionTest(unittest.TestCase):
 class OptionalSdkTest(unittest.TestCase):
     def test_nothing_outside_the_mcp_package_imports_the_sdk(self):
         pattern = re.compile(r"^\s*(import\s+mcp\b|from\s+mcp\b)", re.M)
-        # shipped code only: the tests may drive the server with the SDK's own client (guarded by skipIf)
+        # shipped code only: the tests may drive the server with the SDK's own client (guarded by skipIf). Not under
+        # dist/, python/, build/ (a staged / bundled Python) or export/ (the release workflow's copy of this commit,
+        # with its own tests and mcp package: it failed the CI rehearsal of v0.7.0 on 7 Nov 2026)
         offenders = [str(p.relative_to(REPO)) for p in REPO.rglob("*.py")
                      if "__pycache__" not in p.parts and (REPO / "ppro_bridge" / "mcp") not in p.parents
                      and (REPO / "tests") not in p.parents
-                     and p.relative_to(REPO).parts[0] not in ("dist", "python", "build")  # a staged / bundled Python
+                     and p.relative_to(REPO).parts[0] not in ("dist", "python", "build", "export")
                      and pattern.search(p.read_text(encoding="utf-8", errors="replace"))]
         self.assertEqual(offenders, [])
 
