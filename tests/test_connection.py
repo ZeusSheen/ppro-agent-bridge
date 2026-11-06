@@ -23,7 +23,9 @@ from unittest import mock
 
 import websockets
 
-from helpers import BROKER, REPO, Bridge, controller_hello, env
+from helpers import BROKER, REPO, Bridge, controller_hello, env, panel_hello, panel_pair
+
+from ppro_bridge import auth
 
 MANIFEST = json.loads((REPO / "plugin" / "manifest.json").read_text(encoding="utf-8"))
 PLUGIN_ID = MANIFEST["id"]
@@ -72,10 +74,40 @@ def dual_free_port() -> int:
     raise RuntimeError("no port free on both stacks")
 
 
-def silent_panel(port: int, hello: dict) -> socket.socket:
-    """A panel that says hello and never reads its socket again, so it answers no ping: what a socket whose JS context
-    is gone looks like to the broker. A raw handshake and one masked text frame (no websockets client: that one
-    answers pings by itself)."""
+def _send_text(s: socket.socket, obj: dict):
+    payload, mask = json.dumps(obj).encode(), os.urandom(4)
+    n = len(payload)
+    length = bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + n.to_bytes(2, "big")
+    s.sendall(bytes([0x81]) + length + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+
+
+def _recv_text(s: socket.socket, buf: bytearray) -> dict:
+    """The next text frame from the broker (unmasked, small), skipping pings."""
+    def need(n):
+        while len(buf) < n:
+            chunk = s.recv(4096)
+            if not chunk:
+                raise RuntimeError("closed")
+            buf.extend(chunk)
+
+    while True:
+        need(2)
+        op, n, at = buf[0] & 0x0F, buf[1] & 0x7F, 2
+        if n == 126:
+            need(4)
+            n, at = int.from_bytes(buf[2:4], "big"), 4
+        need(at + n)
+        payload = bytes(buf[at:at + n])
+        del buf[:at + n]
+        if op == 0x1:
+            return json.loads(payload)
+
+
+def silent_panel(port: int, hello: dict | None = None) -> socket.socket:
+    """A panel that pairs (auth.py "Pairing") and never reads its socket again, so it answers no ping: what a socket
+    whose JS context is gone looks like to the broker. A raw handshake and masked text frames (no websockets client:
+    that one answers pings by itself)."""
+    hello = panel_hello() if hello is None else hello
     s = socket.create_connection(("127.0.0.1", port), timeout=5)
     key = base64.b64encode(os.urandom(16)).decode()
     s.sendall((f"GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
@@ -87,18 +119,26 @@ def silent_panel(port: int, hello: dict) -> socket.socket:
             raise RuntimeError(f"handshake refused: {head!r}")
         head += chunk
     assert head.startswith(b"HTTP/1.1 101"), head
-    payload, mask = json.dumps(hello).encode(), os.urandom(4)
-    n = len(payload)
-    length = bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + n.to_bytes(2, "big")
-    s.sendall(bytes([0x81]) + length + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+    buf = bytearray(head.partition(b"\r\n\r\n")[2])
+    _send_text(s, hello)
+    challenge = _recv_text(s, buf)
+    assert challenge.get("event") == "challenge", challenge
+    token = auth.read_token()
+    _send_text(s, {"proof": auth.proof(token, "client", "panel", hello["nonce"], challenge["nonce"])})
+    registered = _recv_text(s, buf)
+    assert registered.get("event") == "registered", registered
     return s
 
 
 async def refused(url, hello) -> tuple[dict, int, str]:
-    """(the broker's notice, close code, close reason) for a panel the broker turns away."""
+    """(the broker's notice, close code, close reason) for a panel the broker turns away (a hello with "auth" pairs
+    first, with the test token)."""
     async with websockets.connect(url, open_timeout=5) as ws:
-        await ws.send(json.dumps(hello))
-        notice = json.loads(await asyncio.wait_for(ws.recv(), 10))
+        if "auth" in hello:
+            notice = await panel_pair(ws, hello)
+        else:
+            await ws.send(json.dumps(hello))
+            notice = json.loads(await asyncio.wait_for(ws.recv(), 10))
         try:
             await asyncio.wait_for(ws.recv(), 5)
         except websockets.ConnectionClosed:
@@ -107,10 +147,9 @@ async def refused(url, hello) -> tuple[dict, int, str]:
 
 
 async def panel_session(url, hello, name, registered: asyncio.Event, stop: asyncio.Event):
-    """A panel that registers, then answers every request with {"who": name} until `stop`."""
+    """A panel that pairs and registers, then answers every request with {"who": name} until `stop`."""
     async with websockets.connect(url, open_timeout=5) as ws:
-        await ws.send(json.dumps(hello))
-        first = json.loads(await asyncio.wait_for(ws.recv(), 10))
+        first = await panel_pair(ws, hello)
         assert first.get("event") == "registered", first
         registered.set()
 
@@ -181,7 +220,7 @@ class PanelRulesTest(unittest.TestCase):
         self.assertEqual([(r["role"], r["plugin"]) for r in rec], [("panel", "com.example.other")])
 
     def test_a_second_live_panel_is_refused(self):
-        hello = {"role": "panel", "plugin": PLUGIN_ID, "version": VERSION}
+        hello = panel_hello()
         t0 = time.monotonic()
         notice, code, reason = asyncio.run(refused(self.bridge.url, hello))
         self.assertLess(time.monotonic() - t0, 2.5)  # the fake answered the ping: no waiting for a timeout
@@ -206,7 +245,8 @@ class TakeOverTest(unittest.TestCase):
     def test_a_panel_without_plugin_id_is_accepted_with_a_warning(self):
         async def scenario():
             registered, stop = asyncio.Event(), asyncio.Event()
-            task = asyncio.create_task(panel_session(self.bridge.url, {"role": "panel"}, "old", registered, stop))
+            hello = {"role": "panel", "auth": auth.SCHEME, "nonce": auth.new_nonce()}
+            task = asyncio.create_task(panel_session(self.bridge.url, hello, "old", registered, stop))
             await asyncio.wait_for(registered.wait(), 10)
             reply = await request(self.bridge.url)
             stop.set()
@@ -218,10 +258,9 @@ class TakeOverTest(unittest.TestCase):
         self.assertEqual([(r["plugin"], r["version"]) for r in self.registered()], [("missing", None)])
 
     def test_a_closed_panel_makes_room_without_a_refusal(self):
-        hello = {"role": "panel", "plugin": PLUGIN_ID, "version": VERSION}
-
         async def scenario():
-            for name in ("first", "second"):  # what a Reload looks like: the old socket closes, then the new hello
+            for name in ("first", "second"):
+                hello = panel_hello()  # what a Reload looks like: the old socket closes, then the new hello
                 registered, stop = asyncio.Event(), asyncio.Event()
                 task = asyncio.create_task(panel_session(self.bridge.url, hello, name, registered, stop))
                 await asyncio.wait_for(registered.wait(), 10)
@@ -238,18 +277,17 @@ class TakeOverTest(unittest.TestCase):
 
     def test_a_silent_panel_keeps_its_place_until_its_socket_closes(self):
         # silent = a Premiere whose main thread is busy (QA F-2b): taking over would send commands to another one
-        hello = {"role": "panel", "plugin": PLUGIN_ID, "version": VERSION}
-        old = silent_panel(self.bridge.port, hello)
+        old = silent_panel(self.bridge.port)
         self.addCleanup(old.close)
         time.sleep(0.3)
-        notice, code, _ = asyncio.run(refused(self.bridge.url, hello))
+        notice, code, _ = asyncio.run(refused(self.bridge.url, panel_hello()))
         self.assertEqual((notice["reason"], code), ("live_panel", 4409))
         old.close()  # the process ends: the OS closes its socket
         time.sleep(0.3)
 
         async def scenario():
             registered, stop = asyncio.Event(), asyncio.Event()
-            task = asyncio.create_task(panel_session(self.bridge.url, hello, "new", registered, stop))
+            task = asyncio.create_task(panel_session(self.bridge.url, panel_hello(), "new", registered, stop))
             await asyncio.wait_for(registered.wait(), 10)
             reply = await request(self.bridge.url)
             stop.set()
@@ -263,15 +301,14 @@ class TakeOverTest(unittest.TestCase):
         self.assertIn([r.get("replaced") for r in self.registered()], ([None, None], [None, "closed"]))
 
     def test_a_silent_panel_with_a_request_in_flight_is_not_replaced(self):
-        hello = {"role": "panel", "plugin": PLUGIN_ID, "version": VERSION}
-        old = silent_panel(self.bridge.port, hello)
+        old = silent_panel(self.bridge.port)
         self.addCleanup(old.close)
         time.sleep(0.3)
 
         async def scenario():
             stuck = asyncio.create_task(request(self.bridge.url, "get_project", timeout_s=30))
             await asyncio.sleep(0.3)  # forwarded to the silent panel, which never answers
-            result = await refused(self.bridge.url, hello)
+            result = await refused(self.bridge.url, panel_hello())
             stuck.cancel()
             return result
 
@@ -280,6 +317,138 @@ class TakeOverTest(unittest.TestCase):
         rec = [r for r in audit_lines(self.audit) if r.get("event") == "refused"]
         self.assertEqual([(r["reason"], r["old"]) for r in rec], [("live_panel", "silent")])
         self.assertEqual(len(self.registered()), 1)
+
+
+async def first_messages(url, hello, then=None, n=2, timeout=5) -> tuple[list, int | None]:
+    """Send `hello` (and `then`, if given, after the first answer); collect up to n messages until the close."""
+    got = []
+    async with websockets.connect(url, open_timeout=5, max_size=None) as ws:
+        await ws.send(hello if isinstance(hello, (str, bytes)) else json.dumps(hello))
+        try:
+            while len(got) < n:
+                got.append(json.loads(await asyncio.wait_for(ws.recv(), timeout)))
+                if then is not None and len(got) == 1:
+                    await ws.send(json.dumps(then(got[0]) if callable(then) else then))
+            await asyncio.wait_for(ws.recv(), timeout)
+        except (websockets.ConnectionClosed, asyncio.TimeoutError):
+            pass
+        return got, ws.close_code
+
+
+class PairingTest(unittest.TestCase):
+    """RA-1 / open issue 2: a panel registers only once it proved the pairing token (HMAC challenge-response), and the
+    broker proves it back; DOC-8: a controller can pair without sending the token. Nothing but the challenge is said
+    to a client that has not proved the token yet."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.audit = tmp()
+        cls.bridge = Bridge(broker_env={"PPRO_AUDIT_DIR": cls.audit, "PPRO_HELLO_TIMEOUT": 1.5})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.bridge.stop()
+
+    def refusals(self, reason):
+        return [r for r in audit_lines(self.audit) if r.get("event") == "refused" and r.get("reason") == reason]
+
+    def test_the_challenge_carries_no_proof_and_a_wrong_proof_is_refused(self):
+        hello = panel_hello()
+        got, code = asyncio.run(first_messages(self.bridge.url, hello, then={"proof": "0" * 64}))
+        challenge, notice = got
+        self.assertEqual(set(challenge), {"event", "auth", "nonce", "broker"})  # no proof before the client's
+        self.assertTrue(auth.valid_nonce(challenge["nonce"]))
+        self.assertEqual((notice["event"], notice["reason"], notice["closeCode"], code), ("refused", "token", 4401, 4401))
+        self.assertNotIn("proof", notice)
+        self.assertIn("wrong", [r["token"] for r in self.refusals("token") if r.get("role") == "panel"])
+        self.assertTrue(asyncio.run(request(self.bridge.url))["ok"])  # the fake panel still serves
+
+    def test_a_proof_for_another_role_or_direction_is_refused(self):
+        token = auth.read_token()
+        for side, role in (("broker", "panel"), ("client", "controller")):
+            with self.subTest(side=side, role=role):
+                hello = panel_hello()
+                got, code = asyncio.run(first_messages(self.bridge.url, hello, then=lambda c: {
+                    "proof": auth.proof(token, side, role, hello["nonce"], c["nonce"])}))
+                self.assertEqual((got[1]["reason"], code), ("token", 4401))
+
+    def test_a_panel_that_cannot_pair_is_refused_by_default(self):
+        got, code = asyncio.run(first_messages(self.bridge.url, {"role": "panel", "plugin": PLUGIN_ID,
+                                                                 "version": "0.6.0"}))
+        self.assertEqual((got[0]["event"], got[0]["reason"], code), ("refused", "pairing", 4401))
+        self.assertIn("pairing token", got[0]["error"])
+        rec = self.refusals("pairing")
+        self.assertEqual(rec[-1]["version"], "0.6.0")
+
+    def test_a_malformed_hello_and_a_silent_client_get_nothing(self):
+        got, code = asyncio.run(first_messages(self.bridge.url, panel_hello(nonce="ABC")))
+        self.assertEqual((got[0]["reason"], code), ("token", 4401))
+        got, code = asyncio.run(first_messages(self.bridge.url, panel_hello(), timeout=4))  # never answers
+        self.assertEqual([m["event"] for m in got], ["challenge"])
+        self.assertEqual(code, 1008)  # closed after PPRO_HELLO_TIMEOUT
+        self.assertIn("no_proof", [r["token"] for r in self.refusals("token")])
+
+    def test_a_controller_pairs_and_the_broker_proves_itself(self):
+        token, nonce = auth.read_token(), auth.new_nonce()
+        hello = {"role": "controller", "auth": auth.SCHEME, "nonce": nonce}
+        got, _ = asyncio.run(first_messages(self.bridge.url, hello, then=lambda c: {
+            "proof": auth.proof(token, "client", "controller", nonce, c["nonce"])}, n=2, timeout=2))
+        challenge, welcome = got
+        self.assertEqual(welcome["event"], "authenticated")
+        self.assertTrue(auth.proof_matches(welcome["proof"], token, "broker", "controller", nonce, challenge["nonce"]))
+        got, code = asyncio.run(first_messages(self.bridge.url, hello, then={"proof": "f" * 64}))
+        self.assertEqual((got[1]["code"], code), ("AUTH_FAILED", 1008))
+
+    def test_a_big_hello_is_cut_off_before_the_proof(self):
+        got, code = asyncio.run(first_messages(self.bridge.url, json.dumps(panel_hello(pad="x" * (2 * 1024 * 1024)))))
+        self.assertEqual((got, code), ([], 1009))
+
+
+class PairingPolicyTest(unittest.TestCase):
+    """PPRO_PANEL_AUTH=legacy lets a 0.6 panel in (with a warning), and the broker caps connections in the hello."""
+
+    def test_legacy_panels_when_the_user_says_so(self):
+        audit = tmp()
+        bridge = Bridge(panel=False, broker_env={"PPRO_AUDIT_DIR": audit, "PPRO_PANEL_AUTH": "legacy"})
+        self.addCleanup(bridge.stop)
+        got, _ = asyncio.run(first_messages(bridge.url, {"role": "panel", "plugin": PLUGIN_ID, "version": "0.6.0"},
+                                            n=1, timeout=1))
+        self.assertEqual(got[0]["event"], "registered")
+        self.assertNotIn("proof", got[0])
+        rec = [r for r in audit_lines(audit) if r.get("event") in ("panel", "start")]
+        self.assertEqual(rec[0]["panelAuth"], "legacy")
+        self.assertEqual([r.get("token") for r in rec if r.get("state") == "registered"], ["legacy"])
+
+    def test_the_policy_reads_env_then_settings_and_fails_closed(self):
+        b = Ipv6BindErrorTest.load_broker()
+        self.assertEqual(b.panel_auth_policy({}, {})[0], "required")
+        self.assertEqual(b.panel_auth_policy({"PPRO_PANEL_AUTH": "LEGACY"}, {})[0], "legacy")
+        self.assertEqual(b.panel_auth_policy({}, {"panelAuth": "legacy"})[0], "legacy")
+        self.assertEqual(b.panel_auth_policy({"PPRO_PANEL_AUTH": "required"}, {"panelAuth": "legacy"})[0], "required")
+        self.assertEqual(b.panel_auth_policy({"PPRO_PANEL_AUTH": "off"}, {})[0], "required")  # only "legacy" opens it
+
+    def test_idle_connections_in_the_hello_are_capped(self):
+        bridge = Bridge(panel=False, broker_env={"PPRO_MAX_UNPAIRED": 3})
+        self.addCleanup(bridge.stop)
+
+        async def scenario():
+            idle = [await websockets.connect(bridge.url, open_timeout=5) for _ in range(3)]
+            await asyncio.sleep(0.3)
+            extra = await websockets.connect(bridge.url, open_timeout=5)
+            try:
+                await asyncio.wait_for(extra.recv(), 5)
+            except websockets.ConnectionClosed:
+                pass
+            code = extra.close_code
+            for ws in idle:
+                await ws.close()
+            await asyncio.sleep(0.3)
+            ok = await request(bridge.url)  # room again once they are gone
+            return code, ok
+
+        code, ok = asyncio.run(scenario())
+        self.assertEqual(code, 1013)
+        self.assertEqual(ok["code"], "NO_PANEL")
 
 
 class DualStackTest(unittest.TestCase):
@@ -313,8 +482,7 @@ class DualStackTest(unittest.TestCase):
 
         async def register(host):
             async with websockets.connect(f"ws://{host}:{port}", open_timeout=5) as ws:
-                await ws.send(json.dumps({"role": "panel", "plugin": PLUGIN_ID, "version": VERSION}))
-                return json.loads(await asyncio.wait_for(ws.recv(), 10))["event"]
+                return (await panel_pair(ws))["event"]
 
         for host in ("[::1]", "127.0.0.1"):
             self.assertEqual(asyncio.run(register(host)), "registered", host)
@@ -496,6 +664,17 @@ def connection(steps, **extra) -> dict:
 
 REFUSED = {"event": "refused", "reason": "live_panel", "closeCode": 4409, "error": LIVE, "broker": VERSION}
 LIVE_CLOSE = {"code": 4409, "reason": LIVE}
+HARNESS_TOKEN_FILE = "\\".join(["C:", "Users", "harness", ".ppro-agent-bridge", "token"])  # tests/panel/mocks.js: home and token
+
+
+def assert_paired_hello(test, sock):
+    """The socket's first frames: the pairing hello (no token in it) and the proof (tests/panel/harness.js `pair`)."""
+    hello = sock["sent"][0]
+    test.assertEqual({k: hello[k] for k in ("role", "plugin", "version", "auth")},
+                     {"role": "panel", "plugin": PLUGIN_ID, "version": VERSION, "auth": "hmac-sha256"})
+    test.assertTrue(auth.valid_nonce(hello["nonce"]))
+    test.assertEqual(set(hello), {"role", "plugin", "version", "auth", "nonce"})  # never the token
+    test.assertEqual(set(sock["sent"][1]), {"proof"})
 
 
 @unittest.skipUnless(NODE, "node is not on PATH")
@@ -504,15 +683,20 @@ class PanelConnectionTest(unittest.TestCase):
 
     def test_hello_names_the_plugin_and_version(self):
         out = connection([{"open": True}])
+        self.assertEqual(out["status"], "Pairing with the broker ...")  # not connected before the broker's proof
+        out = connection([{"open": True}, {"pair": True}])
         self.assertEqual(out["sockets"][0]["url"], "ws://localhost:8017")
-        self.assertEqual(out["sockets"][0]["sent"], [{"role": "panel", "plugin": PLUGIN_ID, "version": VERSION}])
+        assert_paired_hello(self, out["sockets"][0])
+        self.assertEqual(out["pairing"], [{"nonce": out["sockets"][0]["sent"][0]["nonce"], "proofOk": True}])
+        self.assertEqual(out["fsReads"], [HARNESS_TOKEN_FILE])
+        self.assertIn(f"Pairing token: {HARNESS_TOKEN_FILE} (fs.readFile, home from os.homedir).", "\n".join(out["log"]))
         self.assertEqual((out["status"], out["dot"], out["brand"]), ("Connected to broker", "connected", "connected"))
         self.assertEqual((out["hint"], out["guide"]), ("Ready. To start editing:", "block"))  # the first-run steps
         self.assertIn("Premiere Pro Agent Bridge installed ", out["prompt"])  # wherever it is: the helper starts anywhere
         self.assertIn("read SKILL.md", out["prompt"])
 
     def test_a_chinese_premiere_gets_the_panel_in_chinese(self):
-        out = connection([{"open": True}], mock={"uiLocale": "zh_CN"})
+        out = connection([{"open": True}, {"pair": True}], mock={"uiLocale": "zh_CN"})
         self.assertEqual((out["status"], out["hint"], out["guide"]), ("已连接", "准备好了。开始剪辑只要两步：", "block"))
         self.assertIn("Premiere Pro Agent Bridge", out["prompt"])
         self.assertIn("SKILL.md", out["prompt"])
@@ -536,18 +720,71 @@ class PanelConnectionTest(unittest.TestCase):
         out = connection([{"open": True}, {"close": LIVE_CLOSE}])
         self.assertEqual((out["delays"], out["status"]), ([6000], f"Refused: {LIVE} — retrying in 6 s"))
 
-    def test_registration_or_a_request_ends_the_refusal(self):
-        for accept in ({"message": {"event": "registered", "broker": VERSION}},
-                       {"message": {"id": "r1", "action": "ping", "params": {}}}):
-            out = connection([{"open": True}, {"close": LIVE_CLOSE}, {"runTimer": 6000}, {"open": True},
-                              {"close": LIVE_CLOSE}, {"runTimer": 12000}, {"open": True}, accept, {"wait": 50},
-                              {"close": {"code": 1006}}])
-            self.assertIsNone(out["refused"], accept)
-            self.assertEqual(out["delays"][-1], 3000, accept)  # backoff over: the next drop retries at once
-            self.assertEqual(out["status"], "Disconnected — broker not running?")
-            self.assertIn("The broker accepted this panel.", "\n".join(out["log"]))
+    def test_a_proved_registration_ends_the_refusal(self):
+        out = connection([{"open": True}, {"close": LIVE_CLOSE}, {"runTimer": 6000}, {"open": True},
+                          {"close": LIVE_CLOSE}, {"runTimer": 12000}, {"open": True}, {"pair": True},
+                          {"message": {"id": "r1", "action": "ping", "params": {}}}, {"wait": 50},
+                          {"close": {"code": 1006}}])
+        self.assertIsNone(out["refused"])
+        self.assertEqual(out["delays"][-1], 3000)  # backoff over: the next drop retries at once
+        self.assertEqual(out["status"], "Disconnected — broker not running?")
+        self.assertIn("The broker accepted this panel.", "\n".join(out["log"]))
         reply = [m for m in out["sockets"][2]["sent"] if isinstance(m, dict) and m.get("id") == "r1"]
         self.assertTrue(reply and reply[0]["ok"], out["sockets"][2]["sent"])
+
+    def test_an_unproven_broker_gets_nothing_run(self):
+        """RA-2 / open issue 1: whatever answers on localhost:8017 without proving the pairing token - a request
+        straight away, a registration without a proof (a 0.6 broker), or with a wrong one - is dropped; nothing it
+        sent runs, and the panel backs off and tries again."""
+        request = {"message": {"id": "atk-1", "action": "get_sequence", "params": {}}}
+        for steps, why in (([{"open": True}, request], "sent a request before proving the pairing token"),
+                           ([{"open": True}, {"pair": {"brokerProof": "none"}}, request],
+                            "did not prove the pairing token (a broker older than 0.7, or another program)"),
+                           ([{"open": True}, {"pair": {"brokerProof": "bad"}}, request],
+                            "sent a pairing proof that does not match the token file"),
+                           ([{"open": True}, {"message": {"event": "registered", "broker": VERSION}}, request],
+                            "did not prove the pairing token (a broker older than 0.7, or another program)")):
+            with self.subTest(why=why):
+                out = connection(steps)
+                sock = out["sockets"][0]
+                self.assertEqual([m for m in sock["sent"] if isinstance(m, dict) and m.get("id")], [])  # nothing ran
+                self.assertEqual(sock["readyState"], 3)  # dropped
+                self.assertEqual(out["status"], f"Not paired: the program on ws://localhost:8017 {why}; nothing it "
+                                                "sent was run — retrying in 6 s")
+                self.assertEqual((out["refused"]["kind"], out["delays"], out["dot"]), ("pairing", [6000], ""))
+                self.assertNotIn("<- get_sequence", "\n".join(out["log"]))
+
+    def test_a_challenge_out_of_turn_is_dropped(self):
+        out = connection([{"open": True}, {"pair": {"stop": "challenge"}}, {"pair": True}])
+        self.assertEqual(out["sockets"][0]["readyState"], 3)
+        self.assertIn("sent a pairing challenge out of turn or malformed", out["status"])
+
+    def test_no_token_file_no_hello(self):
+        out = connection([{"open": True}], mock={"token": None})
+        self.assertEqual(out["sockets"][0]["sent"], [])
+        self.assertEqual(out["status"], f"Not paired: no pairing token at {HARNESS_TOKEN_FILE} (the broker creates it "
+                                        "when it starts) — retrying in 6 s")
+
+    def test_the_home_folder_from_the_data_folder(self):
+        out = connection([{"open": True}, {"pair": True}], mock={"noHomedir": True})
+        self.assertEqual(out["status"], "Connected to broker")
+        self.assertIn("(fs.readFile, home from getDataFolder)", "\n".join(out["log"]))
+        out = connection([{"open": True}], mock={"noHomedir": True, "noFs": True, "home": "\\".join(["C:", "no", "such", "home"])})
+        self.assertIn("Not paired: no pairing token at "
+                      + "\\".join(["C:", "no", "such", "home", ".ppro-agent-bridge", "token"]), out["status"])
+
+    def test_the_proof_is_the_brokers_hmac(self):
+        """The panel's HMAC-SHA256 (lib/pairing.js on core.sha256Bytes) is Python's (auth.proof)."""
+        out = connection([{"open": True}, {"pair": {"token": "x" * 100}}])
+        self.assertEqual(out["pairing"][0]["proofOk"], False)  # another token than the panel's file: no match
+        self.assertTrue(out["status"].startswith("Not paired: "), out["status"])
+        long = "é" * 70  # a key longer than SHA-256's block, and not ASCII
+        out = connection([{"open": True}, {"pair": {"token": long}}], mock={"token": long})
+        self.assertEqual((out["pairing"][0]["proofOk"], out["status"]), (True, "Connected to broker"))
+        token = "harness-pairing-token-0123456789abcdefghijklmnop"
+        out = connection([{"open": True}, {"pair": True}])
+        sent = out["sockets"][0]["sent"]
+        self.assertEqual(sent[1]["proof"], auth.proof(token, "client", "panel", sent[0]["nonce"], "ab" * 32))
 
     def test_a_dropped_connection_clears_the_refusal(self):
         out = connection([{"open": True}, {"close": LIVE_CLOSE}, {"runTimer": 6000}, {"close": {"code": 1006}}])
@@ -578,9 +815,10 @@ class PanelConnectionTest(unittest.TestCase):
         self.assertEqual((out["sockets"][0]["readyState"], out["status"]),
                          (3, "Unloaded (beforeunload) — Reconnect connects again"))
         self.assertEqual(out["delays"], [])  # no retry after an unload
-        out = connection([{"open": True}, {"fire": "beforeunload"}, {"click": "reconnectBtn"}, {"open": True}])
+        out = connection([{"open": True}, {"fire": "beforeunload"}, {"click": "reconnectBtn"}, {"open": True},
+                          {"pair": True}])
         self.assertEqual(len(out["sockets"]), 2)
-        self.assertEqual(out["sockets"][1]["sent"], [{"role": "panel", "plugin": PLUGIN_ID, "version": VERSION}])
+        assert_paired_hello(self, out["sockets"][1])
         self.assertEqual(out["status"], "Connected to broker")
 
 

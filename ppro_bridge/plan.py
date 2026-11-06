@@ -43,6 +43,18 @@ def _norm(p: str | None) -> str:
     return os.path.normcase(os.path.normpath(p)) if p else ""
 
 
+def _within(root, path) -> bool:
+    """`path` lies in the folder `root` (or is it), compared as written once `..` is collapsed. False across drives.
+    run() asks it twice: on the paths as written, then on the resolved real paths (a junction or link inside the
+    plan folder must not lead out of it either: QA-6)."""
+    r = os.path.normcase(os.path.normpath(os.path.abspath(str(root))))
+    p = os.path.normcase(os.path.normpath(os.path.abspath(str(path))))
+    try:
+        return os.path.commonpath([r, p]) == r
+    except ValueError:
+        return False
+
+
 def _overlap(a0, a1, b0, b1, tol) -> bool:
     return a0 < b1 - tol and b0 < a1 - tol
 
@@ -64,9 +76,10 @@ def _read_plan(plan_path: Path) -> dict:
 
 
 def run_plan(plan, *, rpc, dry_run=False, media_root=None, bin=None, no_bin=False, only=None, overwrite=False,
-             any_sequence=False, notes_as_markers=False, report=None, probe_media=None) -> dict:
+             any_sequence=False, notes_as_markers=False, report=None, probe_media=None, convert_audio=None) -> dict:
     """Execute (or with dry_run, only resolve and check) the plan file `plan`; returns the report.
-    `only`: comma-separated command ids (or a list). `probe_media` defaults to ffprobe."""
+    `only`: comma-separated command ids (or a list). `probe_media` defaults to ffprobe, `convert_audio` to
+    media.convert_to_wav."""
     if isinstance(only, (list, tuple, set)):
         only = ",".join(str(x) for x in only)
     args = SimpleNamespace(plan=str(plan), dry_run=dry_run, media_root=media_root, bin=bin, no_bin=no_bin,
@@ -76,13 +89,15 @@ def run_plan(plan, *, rpc, dry_run=False, media_root=None, bin=None, no_bin=Fals
     return run(args, rpc=rpc,
                require_panel=lambda actions: items.require_panel(rpc, actions, min_protocol=min_protocol),
                parse_track=items.parse_track, probe_media=probe_media or media.probe_media,
-               fit_scale=media.fit_scale)
+               fit_scale=media.fit_scale, convert_audio=convert_audio)
 
 
-def run(args, *, rpc, require_panel, parse_track, probe_media, fit_scale) -> dict:
+def run(args, *, rpc, require_panel, parse_track, probe_media, fit_scale, convert_audio=None) -> dict:
     """The 0.3.3 entry point: `args` carries plan, dry_run, media_root, bin, no_bin, only, overwrite,
     notes_as_markers, report (and optionally any_sequence); the collaborators are injected."""
-    plan_path = Path(args.plan).expanduser().resolve()
+    plan_path = paths.resolved(paths.check(args.plan, what="plan"))  # no share or link to one: Python opens it
+    if getattr(args, "report", None):
+        paths.check(args.report, what="--report", ext=".json")  # before anything is placed
     plan = _read_plan(plan_path)
     commands = plan.get("commands") or []
     if args.only:
@@ -91,7 +106,21 @@ def run(args, *, rpc, require_panel, parse_track, probe_media, fit_scale) -> dic
 
     media_root = Path(args.media_root).expanduser() if args.media_root else Path(plan.get("media_root") or ".")
     if not media_root.is_absolute():
-        media_root = (plan_path.parent / media_root).resolve()
+        media_root = plan_path.parent / media_root
+    if not args.media_root and not _within(plan_path.parent, media_root):
+        # A plan file reaches only its own folder: one handed over with its media (a "project pack") must not point
+        # Premiere at the rest of the disk. The caller widens it on purpose with --media-root.
+        raise BridgeError(f"{plan_path.name}: media_root {plan.get('media_root')!r} lies outside the plan file's "
+                          f"folder ({plan_path.parent}). Pass --media-root with that folder if it is meant; nothing "
+                          "was sent.",
+                          code="BAD_PARAMS", outcome="not_committed")
+    if not (paths.path_problem(media_root) or paths.link_problem(media_root)):  # else every step refuses it
+        media_root = paths.resolved(media_root)
+        # The same on the real path (QA-6): a junction or link inside the plan folder must not lead out of it.
+        if not args.media_root and not _within(plan_path.parent, media_root):
+            raise BridgeError(f"{plan_path.name}: media_root {plan.get('media_root')!r} leads out of the plan file's "
+                              f"folder through a link (to {media_root}). Pass --media-root with that folder if it is "
+                              "meant; nothing was sent.", code="BAD_PARAMS", outcome="not_committed")
     bin_name = None if args.no_bin else (args.bin or plan.get("sequence") or None)
     any_sequence = getattr(args, "any_sequence", False)
 
@@ -157,12 +186,21 @@ def run(args, *, rpc, require_panel, parse_track, probe_media, fit_scale) -> dic
                                             f"({n_video} video tracks).")
             continue
 
+        if not _within(media_root, media_root / c["src"]):  # "..", or an absolute path elsewhere
+            step.update(status="error", why=f'src {c["src"]!r} leaves media_root ({media_root}): a plan reaches only '
+                                            "files under its media_root. Move the file there, or pass --media-root "
+                                            "with a folder that holds it.")
+            continue
         try:
             paths.check(media_root / c["src"], what=f"{cid} src")  # as typed: no UNC share, no data stream
         except BridgeError as e:
             step.update(status="error", why=str(e))
             continue
-        media_file = (media_root / c["src"]).resolve()
+        media_file = paths.resolved(media_root / c["src"])  # resolved once: the containment and the import use it
+        if not _within(media_root, media_file):  # QA-6: a junction or link under media_root leading elsewhere
+            step.update(status="error", why=f'src {c["src"]!r} leads out of media_root ({media_root}) through a link, '
+                                            f"to {media_file}. Pass --media-root with a folder that holds it.")
+            continue
         step["media"] = str(media_file)
         if not media_file.is_file():
             step.update(status="missing-media", why=f"File not found: {media_file}")
@@ -186,10 +224,19 @@ def run(args, *, rpc, require_panel, parse_track, probe_media, fit_scale) -> dic
         has_audio = info.get("hasAudio", True)  # unknown → assume audio, route it safely
         codecs = media.unimportable(info)
         if codecs and not by_path.get(_norm(str(media_file))):  # already in the project: it did import
-            step.update(status="error", why=f"Premiere does not import {', '.join(codecs)} (the import would hang "
-                                            "the panel); transcode it first", transcode=media.transcode_command(
-                                                media_file, info))
-            continue
+            target = media.wav_target(media_file, info, probe_media) if media.wav_convertible(info) else None
+            if not target or "error" in target:
+                why = f"Premiere does not import {', '.join(codecs)} (the import would hang the panel); "
+                why += f"converting to WAV is not possible: {target['error']}" if target else "transcode it first"
+                step.update(status="error", why=why, transcode=media.transcode_command(media_file, info))
+                continue
+            # An audio-only file (FLAC …): the WAV beside it is what gets imported and placed. Written in a real
+            # run only, right before the import; a dry run says where it would go (or which earlier one it reuses).
+            step["convert"] = {"from": str(media_file), "to": target["to"], "reuse": target["reuse"],
+                               "codecs": codecs}
+            step["_info"] = info
+            media_file = Path(target["to"])
+            step["media"] = str(media_file)
         picture_end = framegrid.short_picture(info, fps)
         clamped = picture_end is not None and src_in + dur > picture_end + frame / 2
         if clamped:
@@ -285,6 +332,7 @@ def run(args, *, rpc, require_panel, parse_track, probe_media, fit_scale) -> dic
             occ.setdefault(("audio", aidx), []).append((at_s, span_end, cid))
         step["_v"], step["_a"], step["_hasAudio"], step["_durs"] = vidx, aidx, has_audio, durations
         step["_audioKnown"] = "hasAudio" in info
+        step["_noPicture"] = media.audio_only(info)  # music, a WAV: only an audio leg lands
         step["status"] = "planned"
 
     report = {"plan": str(plan_path), "sequence": seq.get("name"), "fps": fps,
@@ -295,10 +343,10 @@ def run(args, *, rpc, require_panel, parse_track, probe_media, fit_scale) -> dic
     report["imports"] = to_import
 
     if not args.dry_run:
-        _execute(args, plan, steps, to_import, bin_name, rpc, report)
+        _execute(args, plan, steps, to_import, bin_name, rpc, report, convert_audio or media.convert_to_wav)
 
     for s in steps:
-        for k in ("_v", "_a", "_hasAudio", "_audioKnown", "_bin", "_durs", "_at", "_out"):
+        for k in ("_v", "_a", "_hasAudio", "_audioKnown", "_noPicture", "_bin", "_durs", "_at", "_out", "_info"):
             s.pop(k, None)
     counts = {}
     for s in steps:
@@ -307,7 +355,7 @@ def run(args, *, rpc, require_panel, parse_track, probe_media, fit_scale) -> dic
     report["steps"] = steps
     report["ok"] = not any(s["status"] in BAD for s in steps)
     if args.report:
-        out = Path(args.report).expanduser().resolve()
+        out = paths.resolved(args.report)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(json.dumps(report, indent=2, ensure_ascii=False).encode("utf-8"))
         report["reportPath"] = str(out)
@@ -320,7 +368,28 @@ def _abort_rest(steps, start, why):
             s.update(status="aborted", why=f"Not run: {why}.")
 
 
-def _execute(args, plan, steps, to_import, bin_name, rpc, report):
+def _convert(steps, to_import, convert_audio) -> list:
+    """Write the WAVs the import needs (audio-only files Premiere refuses: FLAC …), once per source. A step whose
+    conversion fails is failed, with the ffmpeg command; the paths still to import are returned."""
+    done = {}
+    for s in steps:
+        cv = s.get("convert")
+        if s.get("status") != "planned" or not s.get("import") or not cv or cv.get("reuse"):
+            continue
+        if cv["from"] not in done:
+            done[cv["from"]] = convert_audio(cv["from"], s["_info"])
+        res = done[cv["from"]]
+        if res.get("error"):
+            s.update(status="failed", why=f"Converting to WAV failed: {res['error']}",
+                     transcode=res.get("command") or media.transcode_command(cv["from"], s["_info"]))
+        else:
+            cv.update(to=res.get("to", cv["to"]), reuse=bool(res.get("reused")), written=not res.get("reused"))
+            s["media"] = cv["to"]
+    wanted = {s["media"] for s in steps if s.get("status") == "planned" and s.get("import")}
+    return [p for p in to_import if p in wanted] + sorted(wanted - set(to_import))
+
+
+def _execute(args, plan, steps, to_import, bin_name, rpc, report, convert_audio):
     label_root = f"plan {plan.get('sequence') or Path(args.plan).stem}"
     where = (rpc("get_project").get("name"), report["sequence"])
 
@@ -329,6 +398,9 @@ def _execute(args, plan, steps, to_import, bin_name, rpc, report):
         now = (rpc("get_project").get("name"), rpc("get_sequence").get("name"))
         return None if now == where else f'the active project/sequence changed to "{now[0]}" / "{now[1]}"'
 
+    if any(s.get("convert") for s in steps):
+        to_import = _convert(steps, to_import, convert_audio)
+        report["imports"] = to_import
     if to_import:
         params = {"paths": to_import}
         if bin_name:
@@ -405,8 +477,8 @@ def _execute(args, plan, steps, to_import, bin_name, rpc, report):
     for s in steps:
         if s.get("status") != "placed":
             continue
-        legs = [] if lands(video.get(s["_v"], []), s, True) else ["video"]
-        if s["_hasAudio"] and s["_audioKnown"] and not lands(audio.get(s["_a"], []), s, False):
+        legs = [] if s["_noPicture"] or lands(video.get(s["_v"], []), s, True) else ["video"]
+        if s["_hasAudio"] and s["_audioKnown"] and not lands(audio.get(s["_a"], []), s, s["_noPicture"]):
             legs.append(f"audio (A{s['_a'] + 1})")
         if legs:
             s.update(status="unverified", why=f"Not found at the expected position/length after placing: "

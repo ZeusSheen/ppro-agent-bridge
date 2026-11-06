@@ -34,19 +34,24 @@ Usage (from the repo root: python -m ppro_bridge <command> …; from cli/: pytho
   remove_items  --track V3 --from 35 --to 53 [--dry-run]
   list_presets  [--format h264]              encoder presets on disk (no panel needed)
   export_video  --preset "00 - Match Source - High bitrate" --output out.mp4 [--dry-run | --detach] | --job ID
+  export_aaf    --output cut.aaf [--embed-audio] [--audio-format wav] [--detach] | --job ID   (click OK on the log)
+  export_xml    --output cut.xml [--overwrite]   Final Cut Pro 7 XML, no dialog
   list_effects  [--kind audio] | add_audio_effect --track A1 --at 5 --name "DeNoise" [--dry-run]
   list_effect_presets [--search blur] [--file f.prfpset] [--locale zh_CN]   effect presets on disk
   apply_preset  --track V2 --at 4.0 --preset "PiP 25% LL" [--dry-run]
+  apply_ops     --json ops.json --label "tidy" [--dry-run]   whitelisted small writes, one transaction
+  query         --what clips|clip|markers|bins|sequence [--track V1] [--at s] [--from s --to s] [--bin path]
 
 Requires: Python 3.10+, `pip install websockets`, broker running, Premiere open with the Agent Bridge panel
 loaded. Optional: ffprobe on PATH (fit/fill scaling, audio detection), Pillow (contact sheets).
 """
 
 import argparse
-import inspect
 import json
+import os
+import sys
 
-from . import items, ops, spec, transport
+from . import ops, spec
 from .console import utf8_stdio
 from .errors import BridgeError
 from .ops import MARKER_COLORS
@@ -54,12 +59,49 @@ from .ops import MARKER_COLORS
 __all__ = ["MARKER_COLORS", "build_parser", "main"]
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="ppro", description="Agent Bridge CLI for Premiere Pro")
+def _columns() -> int:
+    """shutil.get_terminal_size().columns without importing shutil (which loads bz2 and lzma, ~9 ms of a CLI call):
+    argparse asks for it on every add_argument."""
+    try:
+        columns = int(os.environ["COLUMNS"])
+    except (KeyError, ValueError):
+        columns = 0
+    if columns <= 0:
+        try:
+            columns = os.get_terminal_size(sys.__stdout__.fileno()).columns
+        except (AttributeError, ValueError, OSError):
+            columns = 0
+    return columns or 80
+
+
+class _Formatter(argparse.HelpFormatter):
+    """argparse's HelpFormatter with the width it would pick itself (terminal columns - 2), from _columns()."""
+
+    def __init__(self, prog, indent_increment=2, max_help_position=24, width=None, **kw):
+        super().__init__(prog, indent_increment, max_help_position, _columns() - 2 if width is None else width, **kw)
+
+
+class _Skipped:
+    """Stands in for a subcommand's parser that build_parser(only=...) does not build."""
+
+    def add_argument(self, *args, **kw):
+        return None
+
+    def add_mutually_exclusive_group(self, *args, **kw):
+        return self
+
+
+def build_parser(only: str | None = None) -> argparse.ArgumentParser:
+    """The CLI's parser; only: build just that subcommand (main does, when argv names one: the other 55 cost ~10 ms
+    per call), with the same usage, help and errors for it."""
+    parser = argparse.ArgumentParser(prog="ppro", description="Agent Bridge CLI for Premiere Pro",
+                                     formatter_class=_Formatter)
     sub = parser.add_subparsers(dest="action", required=True)
 
     def add(name, **kw):
-        return sub.add_parser(name, **kw)
+        if only is not None and name != only:
+            return _Skipped()
+        return sub.add_parser(name, formatter_class=_Formatter, **kw)
 
     expect_seq = dict(dest="expect_seq", metavar="NAME", default=None,
                       help="Refuse unless this is the active sequence (guards against a UI switch)")
@@ -148,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     pi.add_argument("--path", action="append", required=True, help="File path (repeatable)")
     pi.add_argument("--bin", default=None, help="Top-level bin name (created if missing)")
     pi.add_argument("--force", action="store_true",
-                    help="Send files in a codec Premiere refuses (VP9, AV1, Opus …) anyway (default: refuse)")
+                    help="Send every file as it is (default: audio-only FLAC/Opus/Vorbis becomes a WAV beside it, other codecs Premiere refuses — VP9, AV1, Opus — are refused)")
 
     pm = add("add_marker", help="Add a sequence marker")
     pm.add_argument("--at", type=float, required=True)
@@ -469,6 +511,32 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Give up waiting (EXPORT_STALLED) after this long with no progress, no panel event and no "
                           "growth of the output file (default 180; there is no other time limit)")
 
+    paa = add("export_aaf", help="Export the active sequence as an AAF (a job; Premiere may hold it with its modal "
+                                 "AAF export log until someone clicks OK) and check the file")
+    paa.add_argument("--output", default=None, help="Output file ending in .aaf (required unless --job)")
+    paa.add_argument("--embed-audio", dest="embed_audio", action=argparse.BooleanOptionalAction, default=None,
+                     help="Audio inside the AAF (--no-embed-audio: beside it); omitted: Premiere's default")
+    paa.add_argument("--audio-format", choices=["wav", "aiff"], default=None)
+    paa.add_argument("--sample-rate", type=int, default=None, help="Hz, e.g. 48000")
+    paa.add_argument("--bits-per-sample", type=int, choices=[16, 24], default=None)
+    paa.add_argument("--handle-frames", type=int, default=None, help="Handle frames around each clip")
+    paa.add_argument("--mixdown-video", action=argparse.BooleanOptionalAction, default=None)
+    paa.add_argument("--render-audio-effects", action=argparse.BooleanOptionalAction, default=None)
+    paa.add_argument("--trim-sources", action=argparse.BooleanOptionalAction, default=None)
+    paa.add_argument("--overwrite", action="store_true", help="Replace an existing output file")
+    paa.add_argument("--dry-run", action="store_true", help="Check the path and the panel; export nothing")
+    paa.add_argument("--job", default=None, metavar="ID",
+                     help="Wait for the AAF job ID (from --detach or EXPORT_STALLED) and check its file")
+    paa.add_argument("--detach", action="store_true",
+                     help="Return the job at once (with --job: one look at it) instead of waiting")
+    paa.add_argument("--stall-seconds", type=float, default=180.0,
+                     help="Give up waiting (EXPORT_STALLED) after this long with no state change and no new bytes "
+                          "in the .aaf (default 180; there is no other time limit)")
+
+    pax = add("export_xml", help="Export the active sequence as Final Cut Pro 7 XML (no dialog) and check the file")
+    pax.add_argument("--output", required=True, help="Output file ending in .xml")
+    pax.add_argument("--overwrite", action="store_true", help="Replace an existing output file")
+
     ple = add("list_effects", help="Effects Premiere can add: video filters (match + display name), audio filters")
     ple.add_argument("--kind", choices=["audio", "video"], default=None)
 
@@ -507,6 +575,26 @@ def build_parser() -> argparse.ArgumentParser:
     pap.add_argument("--label", default=None)
     pap.add_argument("--expect-seq", **expect_seq)
 
+    pao = add("apply_ops", help="Several whitelisted small writes (markers, clip name / disabled, a static param "
+                                "value, sequence in / out and playhead, track and bin names) in one transaction, "
+                                "one undo step; each read back")
+    pao.add_argument("--json", dest="ops", required=True,
+                     help='A JSON file holding a list of ops ([{"op": "marker.add", "atSeconds": 2, "name": "x"}, ...] '
+                          'or {"ops": [...]}), or that JSON inline. Ops: ' + ", ".join(ops.OP_NAMES))
+    pao.add_argument("--dry-run", action="store_true", help="Resolve and check every op; change nothing")
+    pao.add_argument("--label", default=None)
+    pao.add_argument("--expect-seq", **expect_seq)
+
+    pq = add("query", help="Whitelisted reads by name: clips, one clip's components, markers, bins, the sequence")
+    pq.add_argument("--what", required=True, choices=list(ops.QUERY_NAMES))
+    pq.add_argument("--track", action="append", default=None,
+                    help="clips: V1, A1, … (repeatable; default every track); clip: exactly one")
+    pq.add_argument("--at", type=float, default=None, help="clips / clip: a sequence time (the clip under it)")
+    pq.add_argument("--from", dest="from_s", type=float, default=None, help="clips: clips touching [from, to]")
+    pq.add_argument("--to", dest="to_s", type=float, default=None)
+    pq.add_argument("--bin", default=None, help='bins: a bin path, e.g. "Selects/Day 1" (default: the root)')
+    pq.add_argument("--max-keyframes", type=int, default=None, help="clip: keyframes listed per param (default 50)")
+
     for name, sp in sub.choices.items():
         if (spec.command(name) or {}).get("kind") == "write":
             sp.add_argument("--expect-fingerprint", default=None, metavar="FP",
@@ -521,6 +609,7 @@ def run(action: str, kwargs: dict, rpc) -> dict:
     try:
         expected = kwargs.pop("expect_fingerprint", None)
         if expected:
+            from . import items
             rpc = items.fingerprint_guard(rpc, expected)
         data = getattr(ops, action)(rpc, **kwargs)
         if expected:
@@ -543,15 +632,25 @@ def run(action: str, kwargs: dict, rpc) -> dict:
     return reply
 
 
+def _keywords(fn) -> tuple:
+    """The parameter names of a plain function (what inspect.signature lists, without importing inspect)."""
+    code = fn.__code__
+    return code.co_varnames[:code.co_argcount + code.co_kwonlyargcount]
+
+
 def main(argv=None, *, rpc=None, probe_media=None) -> int:
     """argv None = run as a program (reads sys.argv, switches stdout/stderr to UTF-8); a list = called in-process
     (stdio left alone). `rpc` / `probe_media` replace the defaults (the 0.3.3 shim passes its module's)."""
     if argv is None:
         utf8_stdio()
-    args = build_parser().parse_args(argv)
+    first = (sys.argv[1:] if argv is None else argv)[:1]
+    args = build_parser(only=first[0] if first and first[0] in spec.command_names() else None).parse_args(argv)
     kwargs = {k: v for k, v in vars(args).items() if k != "action"}
-    if probe_media is not None and "probe_media" in inspect.signature(getattr(ops, args.action)).parameters:
+    if probe_media is not None and "probe_media" in _keywords(getattr(ops, args.action)):
         kwargs["probe_media"] = probe_media
-    reply = run(args.action, kwargs, rpc or transport.rpc)
+    if rpc is None:
+        from . import transport  # here: a command that never reaches the panel does not need it
+        rpc = transport.rpc
+    reply = run(args.action, kwargs, rpc)
     print(json.dumps(reply, indent=2, ensure_ascii=False))
     return 0 if reply.get("ok") else 1

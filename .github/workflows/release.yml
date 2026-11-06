@@ -1,0 +1,179 @@
+# Build the Windows installer from source when a version tag (v0.7.0) is pushed, on a GitHub-hosted Windows runner,
+# and keep it as a workflow artifact. Publishing the GitHub release (zip + installer + SHA-256) stays a manual step.
+#
+# Signing: SignPath Foundation signs open-source releases for free when they are built here from source (see
+# installer/SIGNING.md for the application). Until it is approved, nothing below signs anything: the installer is
+# uploaded unsigned and Windows SmartScreen warns about it. Once approved, set in this repository's
+# Settings > Environments > release (required reviewer: the maintainer; deployment tags: v*.*.*):
+#   secret    SIGNPATH_API_TOKEN                 a SignPath API token of a user with submitter rights on the project
+# and in Settings > Secrets and variables > Actions:
+#   variable  SIGNPATH_ORGANIZATION_ID           from SignPath
+#   variable  SIGNPATH_PROJECT_SLUG              e.g. premiere-agent-bridge
+#   variable  SIGNPATH_SIGNING_POLICY_SLUG       e.g. release-signing (in SignPath, limit it to refs/tags/v*)
+# Signing runs only for a version tag, in its own job behind the release environment: the build job never holds the
+# token, and a manual run (workflow_dispatch) on a branch builds an unsigned installer only (DOC-2). An approver still
+# approves each request in SignPath (the job waits up to an hour). SignPath also requires every job before the signing
+# request to run on GitHub-hosted runners, as these do.
+#
+# Every action is pinned to a full commit SHA (a tag can be moved; DOC-1), the version in the comment, as read from
+# GitHub's API on 6 Nov 2026 (git/ref/tags/<tag>, followed to its commit). .github/dependabot.yml proposes bumps as
+# pull requests.
+
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions: {}  # each job asks for what it needs
+
+jobs:
+  installer:
+    # windows-latest is Windows Server 2025 (Nov 2026); named here so an image switch is a visible change. Its image
+    # ships Inno Setup 6.7.1 and Python 3.12.10 (actions/runner-images, Windows2025-Readme.md).
+    runs-on: windows-2025
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.export.outputs.version }}
+      to-sign: ${{ steps.upload-to-sign.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Check the tag against VERSION
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "The tag is $GITHUB_REF_NAME but VERSION says $version"; exit 1
+          fi
+
+      - name: Export the committed tree
+        id: export
+        # The public repository is the release export (tools/release/export_release_*.py writes both) plus the
+        # landing page in docs/ (GitHub Pages), so the tracked files of this commit minus docs/ are the export;
+        # git archive leaves out .git and anything untracked.
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          dest="export/ppro-agent-bridge-v$version/ppro-agent-bridge"
+          mkdir -p "$dest"
+          git archive --format=tar HEAD -- . ':(exclude)docs' | tar -x -C "$dest"
+          if [ -e "$dest/docs" ]; then echo "docs/ (the website) must not go into the installer"; exit 1; fi
+          echo "EXPORT=export/ppro-agent-bridge-v$version" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Test the installer build (offline, dummy files)
+        run: python -m unittest discover -s tests -p "test_build_installer.py"
+
+      - name: Find Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            # Preinstalled on GitHub's Windows images. Should an image drop it: Chocolatey checks the installer
+            # against the checksum in its package before running it.
+            choco install innosetup --version=6.7.1 --no-progress -y
+          }
+          if (-not (Test-Path (Join-Path (Split-Path $iscc) "Languages\ChineseSimplified.isl"))) {
+            throw "Inno Setup 6.5 or newer (with Languages\ChineseSimplified.isl) is needed at $iscc"
+          }
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build the installer
+        # --download: the embeddable Python from python.org and the wheels from PyPI, each checked against
+        # installer/python.lock.json and installer/requirements.lock (SHA-256) before use. --with-mcp: the MCP SDK.
+        shell: bash
+        env:
+          PROJECT_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: python scripts/build_installer.py "$EXPORT" --download --with-mcp --require-iscc --project-url "$PROJECT_URL"
+
+      - name: Run the test suite under the bundled Python
+        # QA-2: every installed user runs this interpreter (installer/python.lock.json) with the locked wheels, so
+        # the whole suite runs on the staged copy before anything is uploaded or sent for signing; a failure stops
+        # the release here. -I: no user site, no PYTHON* variables (QA-8). The staged ._pth puts its standard
+        # library, Lib\site-packages and the staged bridge folder on sys.path; the tests add this checkout (the same
+        # files: the export is this commit).
+        shell: bash
+        run: |
+          py="dist/installer-stage-$VERSION/app/python/python.exe"
+          "$py" -I -c "import sys; print(sys.version); assert sys.version_info[:2] == (3, 14), sys.version"
+          "$py" -I -m unittest discover -s tests
+
+      - name: Upload the unsigned installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: PremiereAgentBridge-Setup-${{ env.VERSION }}-unsigned
+          path: |
+            dist/PremiereAgentBridge-Setup-${{ env.VERSION }}.exe
+            dist/PremiereAgentBridge-Setup-${{ env.VERSION }}.exe.sha256
+          if-no-files-found: error
+
+      - name: Upload the installer for signing
+        # A version tag only: a branch build is never sent to SignPath.
+        if: github.ref_type == 'tag' && vars.SIGNPATH_PROJECT_SLUG != ''
+        id: upload-to-sign
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: to-sign
+          path: dist/PremiereAgentBridge-Setup-${{ env.VERSION }}.exe
+          if-no-files-found: error
+
+  sign:
+    needs: installer
+    # A version tag, SignPath set up (installer/SIGNING.md), and the release environment's reviewer approved: only
+    # this job sees SIGNPATH_API_TOKEN (an environment secret).
+    if: github.ref_type == 'tag' && vars.SIGNPATH_PROJECT_SLUG != '' && needs.installer.outputs.to-sign != ''
+    runs-on: windows-2025
+    timeout-minutes: 90
+    environment: release
+    permissions:
+      contents: read
+      actions: read  # the SignPath action reads this run's artifact
+    env:
+      VERSION: ${{ needs.installer.outputs.version }}
+    steps:
+      - name: Sign with SignPath
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092  # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ needs.installer.outputs.to-sign }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: dist/signed
+
+      - name: Check the signature and write the signed SHA-256
+        # Signing changes the file, so the published SHA-256 must be the signed file's.
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem dist/signed -Filter *.exe)
+          if ($files.Count -ne 1) { throw "expected one signed .exe in dist/signed, found $($files.Count)" }
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file.FullName
+            if ($signature.Status -ne 'Valid') { throw "$($file.Name): signature status $($signature.Status)" }
+            Write-Host "$($file.Name) signed by $($signature.SignerCertificate.Subject)"
+            $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            [IO.File]::WriteAllText("$($file.FullName).sha256", "$hash *$($file.Name)`n")
+          }
+
+      - name: Upload the signed installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: PremiereAgentBridge-Setup-${{ env.VERSION }}
+          path: |
+            dist/signed/PremiereAgentBridge-Setup-${{ env.VERSION }}.exe
+            dist/signed/PremiereAgentBridge-Setup-${{ env.VERSION }}.exe.sha256
+          if-no-files-found: error

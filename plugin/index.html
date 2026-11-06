@@ -91,6 +91,28 @@
       white-space: pre-wrap;
       word-break: break-all;
     }
+    /* The update notice and the support links: quiet grey lines; their actions are underlined words, not buttons. */
+    #update { display: none; color: #a1a1a1; font-size: 12px; line-height: 1.5; margin: -2px 0 10px 0; }
+    #updateText { color: #ededed; }
+    .link { color: #ededed; text-decoration: underline; cursor: pointer; }
+    .link:hover { color: #fff; }
+    .sep { color: #a1a1a1; }
+    #support { color: #a1a1a1; font-size: 12px; line-height: 1.5; margin-top: 8px; }
+    #reportBox { display: none; margin-top: 8px; }
+    #reportText {
+      display: block;
+      width: 100%;
+      height: 180px;
+      margin: 4px 0 0 0;
+      background: #0a0a0a;
+      color: #ededed;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 11px;
+    }
+    #reportButtons { display: flex; margin-top: 6px; }
     .ok  { color: #8fd19e; }
     .err { color: #ff8c82; }
     .cmd { color: #9999ff; }
@@ -111,6 +133,10 @@
       </div>
     </div>
   </div>
+  <div id="update" role="status">
+    <!-- shown by main.js while the broker knows a newer release (lib/support.js notice) -->
+    <span id="updateText"></span><span id="updateViewGroup"><span class="sep"> · </span><span id="updateView" class="link" role="button">View</span></span><span class="sep"> · </span><span id="updateSkip" class="link" role="button">Skip this version</span>
+  </div>
   <div id="hint"></div>
   <div id="guide">
     <!-- the words come from main.js (UI), in Premiere's UI language -->
@@ -121,6 +147,17 @@
     <div id="note2" class="note"></div>
   </div>
   <div id="log"></div>
+  <div id="support">
+    <span id="reportBtn" class="link" role="button">Copy a problem report</span><span class="sep"> · </span><span id="issuesBtn" class="link" role="button">GitHub Issues</span>
+  </div>
+  <div id="reportBox">
+    <div id="reportNote" class="note"></div>
+    <textarea id="reportText" readonly></textarea>
+    <div id="reportButtons">
+      <div id="reportClose" class="btn" role="button">Close</div>
+    </div>
+    <div id="reportStatus" class="note"></div>
+  </div>
   <script src="main.js"></script>
 </body>
 </html>

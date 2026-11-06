@@ -15,7 +15,7 @@ from ppro_bridge import plan as edit_plan
 SEQ_FPS = 60000 / 1001
 
 
-def run_plan(commands, rpc, probe, dry_run=False, any_sequence=False, sequence="Sequence 01"):
+def run_plan(commands, rpc, probe, dry_run=False, any_sequence=False, sequence="Sequence 01", convert=None):
     tmp = Path(tempfile.mkdtemp())
     for c in commands:
         if c.get("src"):
@@ -25,7 +25,7 @@ def run_plan(commands, rpc, probe, dry_run=False, any_sequence=False, sequence="
     args = argparse.Namespace(plan=str(plan), dry_run=dry_run, media_root=None, bin=None, no_bin=False, only=None,
                               overwrite=False, notes_as_markers=False, report=None, any_sequence=any_sequence)
     return edit_plan.run(args, rpc=rpc, require_panel=lambda actions: {}, parse_track=items.parse_track,
-                         probe_media=probe, fit_scale=media.fit_scale)
+                         probe_media=probe, fit_scale=media.fit_scale, convert_audio=convert)
 
 
 def probe_for(**media):
@@ -111,6 +111,59 @@ class WholeMediaTest(unittest.TestCase):
                           rpc, probe_for(hasAudio=False, duration=5.005, videoDuration=5.005 - 1 / SEQ_FPS,
                                          frames=299, fps=SEQ_FPS), dry_run=True)
         self.assertNotIn("pictureEnds", report["steps"][0])
+
+
+class ConvertAudioTest(unittest.TestCase):
+    """A FLAC (6 Nov 2026: Premiere's modal "file format not supported" dialog, importFiles never settled) is
+    converted to a WAV beside it, and the WAV is imported and placed."""
+    FLAC = dict(hasAudio=True, coverArt=True, audioCodecs=["flac"], duration=171.626304)
+    CMD = [{"command": "insert_clip", "id": "m01", "track": "V3", "timeline_at": 2.0, "src": "song.flac",
+            "src_in": 10.0, "src_out": 40.0}]
+
+    def converter(self, made, error=None):
+        def convert(path, info):
+            made.append(path)
+            if error:
+                return {"from": path, "error": error, "command": media.transcode_command(path, info)}
+            wav = os.path.splitext(path)[0] + ".wav"
+            Path(wav).write_bytes(b"RIFF")
+            return {"from": path, "to": wav, "reused": False, "codecs": ["flac"]}
+        return convert
+
+    def test_dry_run_says_where_the_wav_goes_and_writes_nothing(self):
+        rpc, _, calls = fake_rpc()
+        made = []
+        report = run_plan(self.CMD, rpc, probe_for(**self.FLAC), dry_run=True, convert=self.converter(made))
+        step = report["steps"][0]
+        self.assertEqual(step["status"], "planned", step)
+        self.assertTrue(step["convert"]["from"].endswith("song.flac"))
+        self.assertTrue(step["convert"]["to"].endswith("song.wav"))
+        self.assertFalse(step["convert"]["reuse"])
+        self.assertEqual(report["imports"], [step["convert"]["to"]])
+        self.assertFalse(Path(step["convert"]["to"]).exists())
+        self.assertEqual(made, [])
+        self.assertFalse({"import_media", "insert_clip"} & {a for a, _ in calls})
+
+    def test_real_run_imports_and_places_the_wav(self):
+        rpc, _, calls = fake_rpc()
+        made = []
+        report = run_plan(self.CMD, rpc, probe_for(**self.FLAC), convert=self.converter(made))
+        step = report["steps"][0]
+        self.assertEqual(len(made), 1)
+        self.assertEqual([p["paths"] for a, p in calls if a == "import_media"], [[step["convert"]["to"]]])
+        self.assertTrue(step["convert"]["written"])
+        self.assertEqual(step["status"], "placed", step)  # only an audio leg: a WAV has no picture
+        self.assertTrue(report["ok"], report)
+
+    def test_failed_conversion_fails_the_step_and_imports_nothing(self):
+        rpc, _, calls = fake_rpc()
+        report = run_plan(self.CMD, rpc, probe_for(**self.FLAC), convert=self.converter([], error="disk full"))
+        step = report["steps"][0]
+        self.assertEqual(step["status"], "failed")
+        self.assertIn("disk full", step["why"])
+        self.assertIn("pcm_s24le", step["transcode"])
+        self.assertFalse({"import_media", "insert_clip"} & {a for a, _ in calls})
+        self.assertFalse(report["ok"])
 
 
 class SequenceGuardTest(unittest.TestCase):

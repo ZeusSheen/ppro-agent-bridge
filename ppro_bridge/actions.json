@@ -2,7 +2,7 @@
  "specVersion": 1,
  "protocol": 2,
  "defaultTimeoutSeconds": 30,
- "doc": "The bridge's action contract. Single source of truth: the panel (plugin/lib/spec.js is generated from it), the fake panel and the CLI are tested against it. Params are a JSON-Schema subset: type, required, default (documentation; handlers apply defaults), enum, minimum, maximum, minItems, items, properties (objects reject unknown keys), pairedWith, deprecated; requireOneOf at action level means at least one of the names is present (non-empty for arrays). An action with devOnly: true is a test that changes Premiere: only a dev build of the panel registers it (plugin/lib/build.js says dev: true in the repository, false in release exports and .ccx packages); a release build leaves it out of ping's actions and answers UNKNOWN_ACTION. No CLI command calls one.",
+ "doc": "The bridge's action contract. Single source of truth: the panel (plugin/lib/spec.js is generated from it), the fake panel and the CLI are tested against it. Params are a JSON-Schema subset: type, required, default (documentation; handlers apply defaults), enum, minimum, maximum, minItems, items, properties (objects reject unknown keys), pairedWith, deprecated, and on strings localPath (no network, device or stream path: ppro_bridge/paths.py), fileName (a plain file name) and extensions (the value must end in one of them, case-insensitive: an export keeps its file type); requireOneOf at action level means at least one of the names is present (non-empty for arrays). variantKey + variants make a tagged union (an object schema, or an action's params): the variant the tag names is checked, its properties merged over the base ones; an unknown tag is refused (apply_ops' ops, query's what). An action with devOnly: true is a test that changes Premiere: only a dev build of the panel registers it (plugin/lib/build.js says dev: true in the repository, false in release exports and .ccx packages); a release build leaves it out of ping's actions and answers UNKNOWN_ACTION. No CLI command calls one.",
  "outcomes": [
   "not_committed",
   "committed",
@@ -277,7 +277,14 @@
     "broker",
     "cli"
    ],
-   "doc": "The broker refused the pairing token (missing or wrong; a CLI older than 0.5 sends none). data.tokenFile says where the client looked; nothing reached Premiere."
+   "doc": "The broker refused the pairing token (missing or wrong; a CLI older than 0.5 sends none), or this client found no token to pair with. data.tokenFile says where the client looked; nothing reached Premiere."
+  },
+  "BROKER_UNVERIFIED": {
+   "outcome": "not_committed",
+   "source": [
+    "cli"
+   ],
+   "doc": "The program answering on the broker's port did not prove that it knows the pairing token: a broker older than 0.7 (restart start_bridge.bat or broker.py from this bridge's folder) or another program holding the port. Neither the request nor the token was sent."
   },
   "TIMEOUT": {
    "outcome": "unknown",
@@ -433,21 +440,21 @@
    "source": [
     "cli"
    ],
-   "doc": "export_video saw no progress, no new panel event and no growth of the output file for --stall-seconds (default 180) and the file does not hold the whole sequence: the render may still finish (the project is untouched; the file may still be written). export_video --job <data.jobId> waits for it again."
+   "doc": "export_video saw no progress, no new panel event and no growth of the output file for --stall-seconds (default 180) and the file does not hold the whole sequence: the render may still finish (the project is untouched; the file may still be written). export_video --job <data.jobId> waits for it again. export_aaf: no state change and no new bytes in the .aaf for --stall-seconds; Premiere is probably showing its modal AAF export log (data.hint: someone must click OK there); export_aaf --job <data.jobId> waits again."
   },
   "EXPORT_RUNNING": {
    "outcome": "not_committed",
    "source": [
     "panel"
    ],
-   "doc": "export_sequence while an export job of this panel is still rendering (or its exportSequence has not returned): one render at a time. data.jobId names it; wait for it (export_status, export_video --job), or Reload the panel if Premiere is no longer rendering."
+   "doc": "export_sequence or export_aaf while an export job of this panel is still running (or its export call has not returned): one export at a time (export_xml is refused only while an AAF job runs). data.jobId and data.kind name it; wait for it (export_status, export_video --job, export_aaf --job), or Reload the panel if Premiere is no longer exporting."
   },
   "EXPORT_LOST": {
    "outcome": "unknown",
    "source": [
     "cli"
    ],
-   "doc": "The export job vanished from the panel's job table while export_video waited (the panel was reloaded): Premiere may still be rendering to data.output; check the file before rendering again."
+   "doc": "The export job vanished from the panel's job table while export_video or export_aaf waited (the panel was reloaded): Premiere may still be rendering to data.output; check the file before rendering again."
   },
   "RENDER_CHECK_FAILED": {
    "outcome": "committed",
@@ -1217,6 +1224,9 @@
     "name": {
      "type": "string",
      "fileName": true,
+     "extensions": [
+      ".png"
+     ],
      "default": "frame.png"
     },
     "atSeconds": {
@@ -1330,6 +1340,9 @@
     "outputPath": {
      "type": "string",
      "localPath": true,
+     "extensions": [
+      ".otio"
+     ],
      "required": true
     }
    },
@@ -5067,11 +5080,46 @@
     "outputPath": {
      "type": "string",
      "localPath": true,
+     "extensions": [
+      ".mp4",
+      ".m4v",
+      ".mov",
+      ".avi",
+      ".wmv",
+      ".3gp",
+      ".gif",
+      ".flv",
+      ".mxf",
+      ".wav",
+      ".aif",
+      ".aiff",
+      ".mp3",
+      ".aac",
+      ".m4a",
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".tif",
+      ".tiff",
+      ".tga",
+      ".bmp",
+      ".dpx",
+      ".exr",
+      ".mpg",
+      ".mpeg",
+      ".m2v",
+      ".m2t",
+      ".m2ts",
+      ".ts"
+     ],
      "required": true
     },
     "presetPath": {
      "type": "string",
      "localPath": true,
+     "extensions": [
+      ".epr"
+     ],
      "required": true,
      "doc": "An .epr encoder preset, e.g. Premiere's own MediaIO/systempresets/3F3F3F3F_57415645/Waveform Audio 48kHz 16-bit.epr (the CLI finds it)"
     },
@@ -5190,7 +5238,7 @@
    "readOnly": true,
    "destructive": false,
    "idempotent": true,
-   "doc": "Export jobs of this panel (export_sequence wait false), each {jobId, state: running | done | failed | cancelled, progress (0-1 or null), progressRaw, elapsedSeconds, outputPath, preset, workAreaOnly, sequence, startedAt, finishedAt, lastEventAt, endEvent (the last complete / error / cancel / exportMediaComplete event: {type, at, message, state?}), error, settledBy (\"promise\": exportSequence's promise is the only thing that ends a job; the encoder and project events are not tied to one render), returned (what exportSequence returned: true, false, \"threw\", null while pending), pending, events (count per type: progress, complete, error, cancel, queue, exportMediaComplete), routes (events per listener route), eventKeys / eventSample (keys and primitive values of each type's first event), listeners, listenerErrors}. Makes no Premiere call and checks no guard (like ping: it touches no project or sequence); a panel reload forgets its jobs.",
+   "doc": "Export jobs of this panel (export_sequence wait false, export_aaf), each {jobId, kind (\"render\": export_sequence; \"aaf\": export_aaf, which fires no encoder event and has no preset), state: running | done | failed | cancelled, progress (0-1 or null), progressRaw, elapsedSeconds, outputPath, preset, workAreaOnly, sequence, startedAt, finishedAt, lastEventAt, endEvent (the last complete / error / cancel / exportMediaComplete event: {type, at, message, state?}), error, settledBy (\"promise\": exportSequence's promise is the only thing that ends a job; the encoder and project events are not tied to one render), returned (what exportSequence returned: true, false, \"threw\", null while pending), pending, events (count per type: progress, complete, error, cancel, queue, exportMediaComplete), routes (events per listener route), eventKeys / eventSample (keys and primitive values of each type's first event), listeners, listenerErrors; an aaf job adds options {set, values} and, while it runs past 3 s, hint (Premiere may be showing its modal AAF export log: someone must click OK)}. Makes no Premiere call and checks no guard (like ping: it touches no project or sequence); a panel reload forgets its jobs.",
    "params": {
     "jobId": {
      "type": "string",
@@ -5226,6 +5274,232 @@
      },
      "code": "BAD_PARAMS",
      "outcome": "not_committed"
+    }
+   ]
+  },
+  {
+   "name": "export_aaf",
+   "kind": "read",
+   "since": "0.7.0",
+   "timeoutSeconds": 120,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": true,
+   "destructive": false,
+   "idempotent": true,
+   "doc": "Export the active sequence as an AAF (ProjectConverter.exportAAF with an AAFExportOptions; each option given is applied with its setter and listed in optionsSet, every getter's value comes back in optionValues) as an export job, like export_sequence wait false: the reply comes once exportAAF settled, or after 1 s with state running (poll export_status: kind \"aaf\"). Premiere 27.1 b21 opens a MODAL \"AAF export log\" when an effect or transition cannot go into the AAF, and exportAAF does not return until someone clicks OK: the job keeps running and its export_status view carries a hint after 3 s. Whether the panel answers other requests while that window is up is not measured. false or a throw within that second is EXPORT_FAILED and no job; one export at a time (EXPORT_RUNNING). Not measured live yet.",
+   "params": {
+    "outputPath": {
+     "type": "string",
+     "localPath": true,
+     "extensions": [
+      ".aaf"
+     ],
+     "required": true,
+     "doc": "The .aaf file to write (the CLI checks the extension and refuses an existing file without --overwrite)"
+    },
+    "embedAudio": {
+     "type": "boolean",
+     "doc": "AAFExportOptions.setEmbedAudio: audio inside the AAF (true) or beside it; omitted: Premiere's default"
+    },
+    "audioFormat": {
+     "type": "string",
+     "enum": [
+      "wav",
+      "aiff"
+     ],
+     "doc": "AAFExportOptions.setAudioFileFormat with Constants.AAFExportAudioFormat (27.1: AIFF 0, WAV 1)"
+    },
+    "sampleRate": {
+     "type": "integer",
+     "minimum": 8000,
+     "maximum": 192000,
+     "doc": "AAFExportOptions.setSampleRate, in Hz (e.g. 48000)"
+    },
+    "bitsPerSample": {
+     "type": "integer",
+     "enum": [
+      16,
+      24
+     ],
+     "doc": "AAFExportOptions.setBitsPerSample"
+    },
+    "handleFrames": {
+     "type": "integer",
+     "minimum": 0,
+     "maximum": 10000,
+     "doc": "AAFExportOptions.setHandleFrames: frames of handle kept around each clip when sources are trimmed"
+    },
+    "mixdownVideo": {
+     "type": "boolean",
+     "doc": "AAFExportOptions.setMixdownVideo"
+    },
+    "renderAudioEffects": {
+     "type": "boolean",
+     "doc": "AAFExportOptions.setRenderAudioEffects"
+    },
+    "trimSources": {
+     "type": "boolean",
+     "doc": "AAFExportOptions.setTrimSources"
+    }
+   },
+   "reply": [
+    "exported",
+    "outputPath",
+    "jobId",
+    "started",
+    "state",
+    "optionsSet",
+    "optionValues"
+   ],
+   "replyOptional": [],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NO_SEQUENCE",
+    "UNSUPPORTED",
+    "EXPORT_FAILED",
+    "EXPORT_RUNNING"
+   ],
+   "example": {
+    "params": {
+     "outputPath": "/tmp/ppro-aaf/sequence.aaf",
+     "embedAudio": true,
+     "audioFormat": "wav",
+     "handleFrames": 12
+    },
+    "reply": {
+     "started": true,
+     "optionsSet": [
+      "embedAudio",
+      "audioFormat",
+      "handleFrames"
+     ]
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {},
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "outputPath": ""
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "required strings must not be empty"
+    },
+    {
+     "params": {
+      "outputPath": "/tmp/ppro-aaf/sequence.aaf",
+      "audioFormat": "mp3"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "audioFormat is wav or aiff"
+    },
+    {
+     "params": {
+      "outputPath": "/tmp/ppro-aaf/sequence.aaf",
+      "bitsPerSample": 20
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "outputPath": "/fake/no/such/folder/sequence.aaf"
+     },
+     "code": "EXPORT_FAILED",
+     "outcome": "not_committed",
+     "doc": "exportAAF returned false within the first second: no job"
+    },
+    {
+     "params": {
+      "outputPath": "//host/share/sequence.aaf"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "Premiere would open a network path with the user's credentials"
+    }
+   ]
+  },
+  {
+   "name": "export_xml",
+   "kind": "read",
+   "since": "0.7.0",
+   "timeoutSeconds": 120,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": true,
+   "destructive": false,
+   "idempotent": true,
+   "doc": "Export the active sequence as Final Cut Pro 7 XML (ProjectConverter.exportAsFinalCutProXML(sequence, path, true): the last argument suppresses Premiere's UI, so no dialog). Synchronous; false or a throw is EXPORT_FAILED. Refused while an export_aaf job runs (EXPORT_RUNNING: its modal log may be up). Not measured live yet.",
+   "params": {
+    "outputPath": {
+     "type": "string",
+     "localPath": true,
+     "extensions": [
+      ".xml"
+     ],
+     "required": true,
+     "doc": "The .xml file to write"
+    }
+   },
+   "reply": [
+    "exported",
+    "outputPath"
+   ],
+   "replyOptional": [],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NO_SEQUENCE",
+    "UNSUPPORTED",
+    "EXPORT_FAILED",
+    "EXPORT_RUNNING"
+   ],
+   "example": {
+    "params": {
+     "outputPath": "/tmp/ppro-xml/sequence.xml"
+    },
+    "reply": {
+     "exported": true
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {},
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "outputPath": ""
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "required strings must not be empty"
+    },
+    {
+     "params": {
+      "outputPath": "/fake/no/such/folder/sequence.xml"
+     },
+     "code": "EXPORT_FAILED",
+     "outcome": "not_committed",
+     "doc": "exportAsFinalCutProXML returned false (missing folder)"
+    },
+    {
+     "params": {
+      "outputPath": "out/sequence.xml:hidden"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "an NTFS data stream"
     }
    ]
   },
@@ -5551,6 +5825,842 @@
    ]
   },
   {
+   "name": "apply_ops",
+   "kind": "write",
+   "since": "0.7.0",
+   "timeoutSeconds": 60,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": true,
+   "idempotent": false,
+   "doc": "Several small whitelisted writes (ops, each with its own param spec in params.ops.items.variants) in ONE transaction with one undo label: every op's target is resolved and checked and every Action built before the transaction commits; a missing target, a refused value or an Action that cannot be built commits nothing. Each op is read back afterwards (results[i].readBack, verified; a mismatch is VERIFY_FAILED, committed). sequence.set_player_position is a direct call run after the transaction (not an undo step). Targets: a clip = track label + a time inside it, a marker = guid or name (+ atSeconds), a bin = its path; the sequence is the active one. Ops act on what exists before the request; two ops writing the same property of one target, or touching a target another op removes, are refused (BAD_PARAMS). Never eval: an op name outside the whitelist fails the spec check.",
+   "params": {
+    "ops": {
+     "type": "array",
+     "required": true,
+     "minItems": 1,
+     "doc": "At most 200 ops; each {op, ...its params}",
+     "items": {
+      "type": "object",
+      "variantKey": "op",
+      "properties": {
+       "op": {
+        "type": "string",
+        "required": true,
+        "doc": "The op's name"
+       }
+      },
+      "variants": {
+       "marker.add": {
+        "doc": "Add a sequence marker (its start lands on the sequence's frame grid). Set its colour in a later request (marker.set_color): the marker does not exist before this one commits.",
+        "properties": {
+         "name": {
+          "type": "string",
+          "required": true,
+          "doc": "The new marker's name"
+         },
+         "atSeconds": {
+          "type": "number",
+          "required": true,
+          "minimum": 0,
+          "doc": "Start, sequence seconds"
+         },
+         "durationSeconds": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0
+         },
+         "comments": {
+          "type": "string",
+          "default": ""
+         },
+         "type": {
+          "type": "string",
+          "enum": [
+           "Comment",
+           "Chapter",
+           "Segmentation",
+           "WebLink"
+          ],
+          "default": "Comment"
+         }
+        },
+        "readBack": "a marker with that name at that start (half a frame) that was not there before: guid, start, duration, type, comments",
+        "evidence": "Markers#createAddMarkerAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md); add_marker has used it since 0.3"
+       },
+       "marker.remove": {
+        "doc": "Remove one marker (none or several matching: refused, nothing changes).",
+        "properties": {
+         "guid": {
+          "type": "string",
+          "doc": "The marker's guid (query markers, list_markers)"
+         },
+         "name": {
+          "type": "string",
+          "doc": "The marker's exact name"
+         },
+         "atSeconds": {
+          "type": "number",
+          "doc": "The marker's start (sequence seconds, half a frame of tolerance), when several markers share the name"
+         }
+        },
+        "requireOneOf": [
+         [
+          "guid",
+          "name"
+         ]
+        ],
+        "readBack": "the marker is no longer listed (by guid)",
+        "evidence": "Markers#createRemoveMarkerAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md); remove_marker uses it",
+        "removes": true
+       },
+       "marker.set_name": {
+        "doc": "Rename one marker.",
+        "properties": {
+         "guid": {
+          "type": "string",
+          "doc": "The marker's guid (query markers, list_markers)"
+         },
+         "name": {
+          "type": "string",
+          "doc": "The marker's exact name"
+         },
+         "atSeconds": {
+          "type": "number",
+          "doc": "The marker's start (sequence seconds, half a frame of tolerance), when several markers share the name"
+         },
+         "newName": {
+          "type": "string",
+          "required": true
+         }
+        },
+        "requireOneOf": [
+         [
+          "guid",
+          "name"
+         ]
+        ],
+        "readBack": "Marker#getName",
+        "evidence": "Marker#createSetNameAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md)"
+       },
+       "marker.set_comment": {
+        "doc": "Replace one marker's comments (\"\" clears them).",
+        "properties": {
+         "guid": {
+          "type": "string",
+          "doc": "The marker's guid (query markers, list_markers)"
+         },
+         "name": {
+          "type": "string",
+          "doc": "The marker's exact name"
+         },
+         "atSeconds": {
+          "type": "number",
+          "doc": "The marker's start (sequence seconds, half a frame of tolerance), when several markers share the name"
+         },
+         "comments": {
+          "type": "string",
+          "required": true
+         }
+        },
+        "requireOneOf": [
+         [
+          "guid",
+          "name"
+         ]
+        ],
+        "readBack": "Marker#getComments",
+        "evidence": "Marker#createSetCommentsAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md)"
+       },
+       "marker.set_color": {
+        "doc": "Set one marker's colour.",
+        "properties": {
+         "guid": {
+          "type": "string",
+          "doc": "The marker's guid (query markers, list_markers)"
+         },
+         "name": {
+          "type": "string",
+          "doc": "The marker's exact name"
+         },
+         "atSeconds": {
+          "type": "number",
+          "doc": "The marker's start (sequence seconds, half a frame of tolerance), when several markers share the name"
+         },
+         "colorIndex": {
+          "type": "integer",
+          "required": true,
+          "minimum": 0,
+          "maximum": 7,
+          "doc": "0 green, 1 red, 2 purple, 3 orange, 4 yellow, 5 white, 6 blue, 7 cyan"
+         }
+        },
+        "requireOneOf": [
+         [
+          "guid",
+          "name"
+         ]
+        ],
+        "readBack": "Marker#getColorIndex",
+        "evidence": "Marker#createSetColorByIndexAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md); add_marker --color uses it"
+       },
+       "marker.set_duration": {
+        "doc": "Set one marker's duration (seconds).",
+        "properties": {
+         "guid": {
+          "type": "string",
+          "doc": "The marker's guid (query markers, list_markers)"
+         },
+         "name": {
+          "type": "string",
+          "doc": "The marker's exact name"
+         },
+         "atSeconds": {
+          "type": "number",
+          "doc": "The marker's start (sequence seconds, half a frame of tolerance), when several markers share the name"
+         },
+         "durationSeconds": {
+          "type": "number",
+          "required": true,
+          "minimum": 0
+         }
+        },
+        "requireOneOf": [
+         [
+          "guid",
+          "name"
+         ]
+        ],
+        "readBack": "Marker#getDuration (half a frame)",
+        "evidence": "Marker#createSetDurationAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md)"
+       },
+       "marker.set_type": {
+        "doc": "Set one marker's type.",
+        "properties": {
+         "guid": {
+          "type": "string",
+          "doc": "The marker's guid (query markers, list_markers)"
+         },
+         "name": {
+          "type": "string",
+          "doc": "The marker's exact name"
+         },
+         "atSeconds": {
+          "type": "number",
+          "doc": "The marker's start (sequence seconds, half a frame of tolerance), when several markers share the name"
+         },
+         "type": {
+          "type": "string",
+          "required": true,
+          "enum": [
+           "Comment",
+           "Chapter",
+           "Segmentation",
+           "WebLink"
+          ]
+         }
+        },
+        "requireOneOf": [
+         [
+          "guid",
+          "name"
+         ]
+        ],
+        "readBack": "Marker#getType",
+        "evidence": "Marker#createSetTypeAction (Chapter): pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md)"
+       },
+       "marker.move": {
+        "doc": "Move one marker to a new start.",
+        "properties": {
+         "guid": {
+          "type": "string",
+          "doc": "The marker's guid (query markers, list_markers)"
+         },
+         "name": {
+          "type": "string",
+          "doc": "The marker's exact name"
+         },
+         "atSeconds": {
+          "type": "number",
+          "doc": "The marker's start (sequence seconds, half a frame of tolerance), when several markers share the name"
+         },
+         "toSeconds": {
+          "type": "number",
+          "required": true,
+          "minimum": 0,
+          "doc": "The new start, sequence seconds (lands on the frame grid)"
+         }
+        },
+        "requireOneOf": [
+         [
+          "guid",
+          "name"
+         ]
+        ],
+        "readBack": "Marker#getStart (half a frame)",
+        "evidence": "Markers#createMoveMarkerAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md)"
+       },
+       "clip.set_name": {
+        "doc": "Rename the clip instance under atSeconds on a video track (the project item keeps its name). Audio clips: UNSUPPORTED until a live test.",
+        "properties": {
+         "track": {
+          "type": "string",
+          "required": true,
+          "doc": "Track label: V1, V2, ... or A1, A2, ..."
+         },
+         "atSeconds": {
+          "type": "number",
+          "required": true,
+          "doc": "Any sequence time inside the clip (seconds)"
+         },
+         "name": {
+          "type": "string",
+          "required": true
+         }
+        },
+        "readBack": "TrackItem#getName",
+        "evidence": "VideoClipTrackItem#createSetNameAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md) (clip_props; video clips only)"
+       },
+       "clip.set_disabled": {
+        "doc": "Disable (true) or enable (false) the clip under atSeconds on a video track. Needs the trackItemDisable capability; audio clips: UNSUPPORTED until a live test.",
+        "properties": {
+         "track": {
+          "type": "string",
+          "required": true,
+          "doc": "Track label: V1, V2, ... or A1, A2, ..."
+         },
+         "atSeconds": {
+          "type": "number",
+          "required": true,
+          "doc": "Any sequence time inside the clip (seconds)"
+         },
+         "disabled": {
+          "type": "boolean",
+          "required": true
+         }
+        },
+        "readBack": "TrackItem#isDisabled",
+        "evidence": "VideoClipTrackItem#createSetDisabledAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md) (clip_props; video clips only)"
+       },
+       "param.set": {
+        "doc": "A static value for one param of a component the clip already has (matchName + occurrence, param by index as inspect_items lists them), on a video or audio track. Numbers, booleans and points ([x, y] or {x, y}) of the same kind as the current value; strings and colours are refused (unverified over UXP). A param with keyframes is refused (KEYFRAMED); one with animation on and no keys is switched off in the same transaction. Adding an effect is not an op (set_params / add_audio_effect).",
+        "properties": {
+         "track": {
+          "type": "string",
+          "required": true,
+          "doc": "Track label: V1, V2, ... or A1, A2, ..."
+         },
+         "atSeconds": {
+          "type": "number",
+          "required": true,
+          "doc": "Any sequence time inside the clip (seconds)"
+         },
+         "matchName": {
+          "type": "string",
+          "required": true
+         },
+         "occurrence": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+         },
+         "index": {
+          "type": "integer",
+          "required": true,
+          "minimum": 0
+         },
+         "value": {
+          "type": "any",
+          "required": true
+         }
+        },
+        "readBack": "ComponentParam#getStartValue (numbers within 1e-4)",
+        "evidence": "ComponentParam#createSetValueAction(createKeyframe(v), true): pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md) (Opacity, Lumetri exposure #19, blend mode); set_params, set_scale and set_volume write static values this way live"
+       },
+       "sequence.set_in_out": {
+        "doc": "Set the active sequence's in and / or out point (sequence seconds, on the frame grid).",
+        "properties": {
+         "inSeconds": {
+          "type": "number",
+          "minimum": 0
+         },
+         "outSeconds": {
+          "type": "number",
+          "minimum": 0
+         }
+        },
+        "requireOneOf": [
+         [
+          "inSeconds",
+          "outSeconds"
+         ]
+        ],
+        "readBack": "Sequence#getInPoint / getOutPoint (half a frame)",
+        "evidence": "Sequence#createSetInPointAction / createSetOutPointAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md) (sequence_points)"
+       },
+       "sequence.set_player_position": {
+        "doc": "Move the playhead (sequence seconds, on the frame grid). A direct call, not an undo step: it runs after the transaction has committed.",
+        "properties": {
+         "atSeconds": {
+          "type": "number",
+          "required": true,
+          "minimum": 0
+         }
+        },
+        "direct": true,
+        "readBack": "Sequence#getPlayerPosition (half a frame)",
+        "evidence": "Sequence#setPlayerPosition: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md) (sequence_points)"
+       },
+       "track.rename": {
+        "doc": "Rename a video track. Audio tracks: UNSUPPORTED until a live test.",
+        "properties": {
+         "track": {
+          "type": "string",
+          "required": true,
+          "doc": "Track label: V1, V2, ... or A1, A2, ..."
+         },
+         "name": {
+          "type": "string",
+          "required": true
+         }
+        },
+        "readBack": "VideoTrack#name",
+        "evidence": "VideoTrack#createSetNameAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md) (track; video tracks only)"
+       },
+       "bin.create": {
+        "doc": "Create a bin in the root or in the bin at `parent` (a bin path, \"A/B\"); refused when that bin already holds a bin of that name (PRECONDITION_FAILED).",
+        "properties": {
+         "name": {
+          "type": "string",
+          "required": true,
+          "doc": "No \"/\": bin paths use it"
+         },
+         "parent": {
+          "type": "string",
+          "default": "",
+          "doc": "Bin path; \"\" = the root"
+         }
+        },
+        "readBack": "a bin of that name in the parent that was not there before",
+        "evidence": "FolderItem#createBinAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md) (project_items); import_media --bin uses it"
+       },
+       "bin.rename": {
+        "doc": "Rename the bin at `bin` (a bin path); refused when its parent already holds a bin named newName.",
+        "properties": {
+         "bin": {
+          "type": "string",
+          "required": true,
+          "doc": "Bin path, e.g. \"Selects/Day 1\""
+         },
+         "newName": {
+          "type": "string",
+          "required": true,
+          "doc": "No \"/\""
+         }
+        },
+        "readBack": "the parent holds a bin named newName",
+        "evidence": "FolderItem#createRenameBinAction: pass, api_smoke on Premiere 27.1 b21, 22 Oct 2026 (uxp-port/LIVE_RESULTS_2026-10-22.md) (project_items)"
+       }
+      }
+     }
+    },
+    "undoLabel": {
+     "type": "string",
+     "doc": "Label for Premiere's undo history (one undo step for all ops)"
+    },
+    "dryRun": {
+     "type": "boolean",
+     "default": false,
+     "doc": "Resolve and check every op and report what each would change; build and commit nothing"
+    }
+   },
+   "reply": [
+    "dryRun",
+    "count",
+    "results",
+    "undoLabel"
+   ],
+   "replyOptional": [
+    "verified",
+    "notUndoable"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NO_SEQUENCE",
+    "NOT_FOUND",
+    "AMBIGUOUS",
+    "UNSUPPORTED",
+    "KEYFRAMED",
+    "PRECONDITION_FAILED",
+    "TRANSACTION_FAILED",
+    "VERIFY_FAILED"
+   ],
+   "example": {
+    "params": {
+     "ops": [
+      {
+       "op": "marker.add",
+       "atSeconds": 2.0,
+       "name": "Check this claim",
+       "comments": "Source?"
+      },
+      {
+       "op": "marker.set_color",
+       "name": "harness marker",
+       "colorIndex": 1
+      },
+      {
+       "op": "clip.set_name",
+       "track": "V1",
+       "atSeconds": 5.0,
+       "name": "A-roll"
+      },
+      {
+       "op": "param.set",
+       "track": "V1",
+       "atSeconds": 5.0,
+       "matchName": "AE.ADBE Opacity",
+       "index": 0,
+       "value": 80
+      }
+     ],
+     "undoLabel": "Agent: flag and tidy"
+    },
+    "reply": {
+     "dryRun": false,
+     "count": 4,
+     "verified": true,
+     "undoLabel": "Agent: flag and tidy"
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "ops": [
+       {
+        "op": "eval",
+        "code": "app.quit()"
+       }
+      ]
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "an op outside the whitelist fails the spec check"
+    },
+    {
+     "params": {
+      "ops": []
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "ops": [
+       {
+        "op": "marker.set_name",
+        "newName": "x"
+       }
+      ]
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "a marker op needs guid or name"
+    },
+    {
+     "params": {
+      "ops": [
+       {
+        "op": "clip.set_name",
+        "track": "X9",
+        "atSeconds": 1.0,
+        "name": "x"
+       }
+      ]
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "track labels are V1.. / A1.."
+    },
+    {
+     "params": {
+      "ops": [
+       {
+        "op": "param.set",
+        "track": "V1",
+        "atSeconds": 5.0,
+        "matchName": "AE.ADBE Opacity",
+        "index": 0,
+        "value": "loud"
+       }
+      ]
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "the value must be of the param's kind"
+    },
+    {
+     "params": {
+      "ops": [
+       {
+        "op": "marker.set_name",
+        "name": "harness marker",
+        "newName": "a"
+       },
+       {
+        "op": "marker.remove",
+        "name": "harness marker"
+       }
+      ]
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "an op touching a marker another op removes"
+    },
+    {
+     "params": {
+      "ops": [
+       {
+        "op": "marker.set_comment",
+        "name": "harness marker",
+        "comments": "ok"
+       },
+       {
+        "op": "marker.set_name",
+        "name": "No such marker",
+        "newName": "x"
+       }
+      ]
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed",
+     "doc": "one missing target: nothing is committed"
+    },
+    {
+     "params": {
+      "ops": [
+       {
+        "op": "clip.set_disabled",
+        "track": "A1",
+        "atSeconds": 5.0,
+        "disabled": true
+       }
+      ]
+     },
+     "code": "UNSUPPORTED",
+     "outcome": "not_committed",
+     "doc": "audio clips are pending a live test"
+    },
+    {
+     "params": {
+      "ops": [
+       {
+        "op": "bin.create",
+        "name": "EN"
+       }
+      ]
+     },
+     "code": "PRECONDITION_FAILED",
+     "outcome": "not_committed",
+     "doc": "the root already holds a bin EN"
+    }
+   ]
+  },
+  {
+   "name": "query",
+   "kind": "read",
+   "since": "0.7.0",
+   "timeoutSeconds": 30,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": true,
+   "destructive": false,
+   "idempotent": true,
+   "doc": "Whitelisted reads by name (`what`, each with its own params in variants): clips on tracks, one clip's components and params, markers, bins and items, the sequence's settings / in-out / player position. A read that fails is an error, never an empty answer.",
+   "params": {
+    "what": {
+     "type": "string",
+     "required": true,
+     "enum": [
+      "clips",
+      "clip",
+      "markers",
+      "bins",
+      "sequence"
+     ]
+    }
+   },
+   "variantKey": "what",
+   "variants": {
+    "clips": {
+     "doc": "Clips on the tracks (default every track), in start order: name, start / end (sequence s), in / out (source s), speed, disabled, projectItem, mediaPath; optionally only those under atSeconds or touching [fromSeconds, toSeconds].",
+     "properties": {
+      "tracks": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "doc": "Track labels, e.g. [\"V1\", \"A1\"]"
+      },
+      "atSeconds": {
+       "type": "number"
+      },
+      "fromSeconds": {
+       "type": "number",
+       "pairedWith": "toSeconds"
+      },
+      "toSeconds": {
+       "type": "number",
+       "pairedWith": "fromSeconds"
+      }
+     }
+    },
+    "clip": {
+     "doc": "One clip (the one under atSeconds on that track) with its component chain: components by matchName and occurrence, params by index with values and keyframes (media time).",
+     "properties": {
+      "track": {
+       "type": "string",
+       "required": true,
+       "doc": "Track label: V1, V2, ... or A1, A2, ..."
+      },
+      "atSeconds": {
+       "type": "number",
+       "required": true,
+       "doc": "Any sequence time inside the clip (seconds)"
+      },
+      "maxKeyframes": {
+       "type": "integer",
+       "minimum": 1,
+       "default": 50
+      }
+     }
+    },
+    "markers": {
+     "doc": "The active sequence's markers in start order (as list_markers).",
+     "properties": {}
+    },
+    "bins": {
+     "doc": "Bins and project items under the root or under `bin` (a bin path), parents first: path, kind (bin / clip), name, bin (the parent's path), mediaPath (clips).",
+     "properties": {
+      "bin": {
+       "type": "string",
+       "doc": "Bin path; default the root"
+      }
+     }
+    },
+    "sequence": {
+     "doc": "The active sequence: name, guid, frame size, timebase, fps, duration, player position, in / out point (null when unset: Premiere reports -400000 s), and every track's name and clip count.",
+     "properties": {}
+    }
+   },
+   "reply": [
+    "what"
+   ],
+   "replyOptional": [
+    "sequence",
+    "tracks",
+    "track",
+    "clip",
+    "count",
+    "markers",
+    "bin",
+    "entries",
+    "guid",
+    "frameSize",
+    "timebase",
+    "fps",
+    "durationSeconds",
+    "playerPositionSeconds",
+    "inPoint",
+    "outPoint",
+    "videoTracks",
+    "audioTracks"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NO_PROJECT",
+    "NO_SEQUENCE",
+    "NOT_FOUND",
+    "AMBIGUOUS"
+   ],
+   "example": {
+    "params": {
+     "what": "clips",
+     "tracks": [
+      "V1"
+     ],
+     "fromSeconds": 0.0,
+     "toSeconds": 10.0
+    },
+    "reply": {
+     "what": "clips",
+     "sequence": "Sequence 01"
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {
+      "what": "everything"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "what": "clip",
+      "track": "V1"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "clip needs atSeconds"
+    },
+    {
+     "params": {
+      "what": "markers",
+      "track": "V1"
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "each query takes only its own params"
+    },
+    {
+     "params": {
+      "what": "clips",
+      "tracks": [
+       "V1"
+      ],
+      "atSeconds": 1.0,
+      "fromSeconds": 0.0,
+      "toSeconds": 2.0
+     },
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "atSeconds or a range, not both"
+    },
+    {
+     "params": {
+      "what": "clip",
+      "track": "V4",
+      "atSeconds": 5.0
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed"
+    },
+    {
+     "params": {
+      "what": "bins",
+      "bin": "No such bin"
+     },
+     "code": "NOT_FOUND",
+     "outcome": "not_committed"
+    }
+   ]
+  },
+  {
    "name": "probe_api",
    "kind": "read",
    "since": "0.5.0",
@@ -5791,7 +6901,7 @@
    "requirePanel": false,
    "minProtocol": 1,
    "dryRun": false,
-   "doc": "Liveness + version/protocol handshake; warns when panel, broker or CLI differ"
+   "doc": "Liveness + version/protocol handshake; warns when panel, broker or CLI differ; update: the broker's daily update check ({latest, url, published, newer, skipped, checkedAt}, or null when it is off or has not run)"
   },
   {
    "name": "get_project",
@@ -5820,12 +6930,13 @@
    "name": "set_active_sequence",
    "kind": "write",
    "calls": [
-    "set_active_sequence"
+    "set_active_sequence",
+    "get_project"
    ],
    "requirePanel": true,
    "minProtocol": 2,
    "dryRun": false,
-   "doc": "Switch the active sequence by name or guid (opens it in the Timeline) so later commands work on it; the project's content is unchanged"
+   "doc": "Switch the active sequence by name or guid (opens it in the Timeline) so later commands work on it; the project's content is unchanged; get_project confirms the switch (VERIFY_FAILED when Premiere stays on another sequence)"
   },
   {
    "name": "select_items",
@@ -6259,7 +7370,9 @@
     "trim_clip",
     "remove_items",
     "export_sequence",
-    "export_frame"
+    "export_frame",
+    "export_otio",
+    "add_transition"
    ],
    "requirePanel": true,
    "minProtocol": 2,
@@ -6276,6 +7389,8 @@
     "trim_clip",
     "remove_items",
     "shift_items",
+    "add_transition",
+    "export_otio",
     "export_sequence",
     "export_frame"
    ],
@@ -6292,6 +7407,8 @@
     "list_items",
     "inspect_items",
     "shift_items",
+    "add_transition",
+    "export_otio",
     "trim_clip",
     "export_sequence",
     "export_frame"
@@ -6320,7 +7437,9 @@
    "calls": [
     "get_sequence",
     "list_items",
-    "shift_items"
+    "shift_items",
+    "add_transition",
+    "export_otio"
    ],
    "requirePanel": true,
    "minProtocol": 2,
@@ -6401,6 +7520,30 @@
    "doc": "Render the active sequence with an encoder preset (name or .epr path) and check the file with ffprobe: frame size, frame rate and length against the sequence; on a panel with exportJobs the render is a job polled without a time limit (--detach / --job)"
   },
   {
+   "name": "export_aaf",
+   "kind": "read",
+   "calls": [
+    "get_sequence",
+    "export_aaf",
+    "export_status"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "Export the active sequence as an AAF (options: embedded audio, WAV / AIFF, sample rate, bits, handles, trimmed sources ...) as a job polled without a time limit (--detach / --job); the file must exist and not be empty afterwards. A job that waits with no new bytes is most likely held by Premiere's modal AAF export log: the reply says to click OK there"
+  },
+  {
+   "name": "export_xml",
+   "kind": "read",
+   "calls": [
+    "export_xml"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": false,
+   "doc": "Export the active sequence as Final Cut Pro 7 XML (no dialog) and check the file: it exists, starts with <?xml and holds an <xmeml> document"
+  },
+  {
    "name": "list_effects",
    "kind": "read",
    "calls": [
@@ -6460,6 +7603,29 @@
    "minProtocol": 2,
    "dryRun": true,
    "doc": "Apply an effect preset (.prfpset) to the clip under a time or the clips in a range by translating it to set_params (keyframes in clip time per the preset's anchoring); what UXP cannot write is skipped and reported; verified"
+  },
+  {
+   "name": "apply_ops",
+   "kind": "write",
+   "calls": [
+    "get_sequence",
+    "apply_ops"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": true,
+   "doc": "Several whitelisted small writes (markers, clip name / disabled, a static param value, sequence in / out and playhead, track and bin names) from a JSON list, in one transaction with one undo step; each read back"
+  },
+  {
+   "name": "query",
+   "kind": "read",
+   "calls": [
+    "query"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": false,
+   "doc": "Whitelisted reads by name: clips on tracks, one clip's components and params, markers, bins and items, the sequence's settings, in / out and player position"
   }
  ]
 }

@@ -32,10 +32,11 @@ SPEC = json.loads((REPO / "ppro_bridge" / "actions.json").read_text(encoding="ut
 ACTIONS = {a["name"]: a for a in SPEC["actions"]}
 
 MAIN_REQUIRES = ["./lib/spec.js", "./lib/build.js", "./lib/core.js", "./lib/timeline.js", "./lib/project.js",
-                 "./lib/effects.js", "./lib/exportjobs.js", "./lib/capabilities.js", "./lib/handlers_read.js",
+                 "./lib/effects.js", "./lib/exportjobs.js", "./lib/capabilities.js", "./lib/support.js",
+                 "./lib/pairing.js", "./lib/handlers_read.js",
                  "./lib/handlers_edit.js", "./lib/handlers_items.js", "./lib/handlers_effects.js",
                  "./lib/handlers_removals.js", "./lib/handlers_transcript.js", "./lib/handlers_markers.js",
-                 "./lib/handlers_export.js", "./lib/probe.js", "./lib/smoke.js", "./lib/launcher.js"]
+                 "./lib/handlers_export.js", "./lib/handlers_ops.js", "./lib/probe.js", "./lib/smoke.js", "./lib/launcher.js"]
 DEV_FLAG = re.compile(r"\bdev\s*:\s*(true|false)\b")  # the build flag as scripts/build_ccx.py rewrites it
 DEV_ONLY = [a["name"] for a in SPEC["actions"] if a.get("devOnly")]
 RELEASE_ACTIONS = [a["name"] for a in SPEC["actions"] if not a.get("devOnly")]
@@ -1476,8 +1477,13 @@ const h = require(process.argv[1]);
             "trim_clip": {"kind": "video", "track": 1, "atSeconds": 12, "end": 14},
             "export_sequence": {"outputPath": "/fake/out/mix.wav", "presetPath": "/fake/presets/wav.epr"},
             "export_status": {},
+            "export_aaf": {"outputPath": "/fake/out/cut.aaf", "embedAudio": True},
+            "export_xml": {"outputPath": "/fake/out/cut.xml"},
             "list_effects": {}, "add_audio_effect": {"audioTrack": 0, "atSeconds": 5, "name": "DeNoise"},
             "shift_items": {"fromSeconds": 5, "deltaSeconds": 3},
+            "apply_ops": {"ops": [{"op": "marker.set_color", "name": "harness marker", "colorIndex": 2},
+                                  {"op": "sequence.set_player_position", "atSeconds": 3}]},
+            "query": {"what": "sequence"},
             "probe_api": {},
             "api_smoke": {"case": "clip_props", "videoTrack": 1, "atSeconds": 12},
         }
@@ -1740,6 +1746,126 @@ const h = require(process.argv[1]);
         self.assertEqual(sorted(o[1:] for o in ops_ if o[0] == "add"), sorted(o[1:] for o in ops_ if o[0] == "remove"))
         self.assertIn(("add", "EventManager", "RenderProgressEvent"), ops_)
         self.assertIn(("add", "own", "OperationCompleteEvent.ExportMediaComplete"), ops_)
+
+    # ---- export_aaf / export_xml (ProjectConverter; mock knob aafJob holds exportAAF the way 27.1 b21's modal
+    # "AAF export log" does until the user clicks OK - whether the panel still answers then is NOT measured)
+
+    AAF = {"action": "export_aaf", "params": {"outputPath": "/fake/out/cut.aaf"}}
+
+    def test_export_aaf_applies_options_with_setters(self):
+        """Each option given goes through its AAFExportOptions setter (audioFormat via Constants.AAFExportAudioFormat),
+        in the panel's order, and every getter is read back; the job is kind aaf, has no preset and no listeners."""
+        params = {"outputPath": "/fake/out/cut.aaf", "embedAudio": True, "audioFormat": "aiff", "sampleRate": 96000,
+                  "bitsPerSample": 24, "handleFrames": 12, "mixdownVideo": False, "renderAudioEffects": True,
+                  "trimSources": True}
+        out = recorded([{"action": "export_aaf", "params": params}, {"action": "export_status", "params": {}}])
+        start, st = out["replies"]
+        d = start["data"]
+        self.assertEqual((d["exported"], d["state"], d["started"], d["outputPath"]),
+                         (True, "done", True, "/fake/out/cut.aaf"))
+        self.assertEqual(d["optionsSet"], ["embedAudio", "audioFormat", "sampleRate", "bitsPerSample", "handleFrames",
+                                           "mixdownVideo", "renderAudioEffects", "trimSources"])
+        values = {"audioFileFormat": 0, "bitsPerSample": 24, "embedAudio": True, "handleFrames": 12,
+                  "mixdownVideo": False, "renderAudioEffects": True, "sampleRate": 96000, "trimSources": True}
+        self.assertEqual({k: d["optionValues"][k] for k in values}, values)
+        self.assertEqual(len(d["optionValues"]), 12)  # every getter of the 27.1 class
+        [exp] = out["exports"]
+        self.assertEqual((exp["kind"], exp["outputPath"], exp["argc"]), ("aaf", "/fake/out/cut.aaf", 3))
+        self.assertEqual({k: exp["options"][k] for k in values}, values)
+        job = st["data"]["jobs"][0]
+        self.assertEqual((job["kind"], job["state"], job["settledBy"], job["returned"], job["preset"], job["events"],
+                          job["listeners"], job["error"]), ("aaf", "done", "promise", True, None, {}, [], None))
+        self.assertEqual(job["options"], {"set": d["optionsSet"], "values": d["optionValues"]})
+        self.assertNotIn("hint", job)
+        self.assertEqual((out["listeners"], out["transactions"]), ([], []))  # no encoder listeners, no undo step
+        # nothing asked: a default AAFExportOptions all the same (as api_smoke's converter case passes one) ...
+        out = recorded([self.AAF])
+        self.assertEqual((out["replies"][0]["data"]["optionsSet"], out["exports"][0]["argc"]), ([], 3))
+        # ... and on a build without the class, the two-argument call
+        out = recorded([self.AAF], mock={"noAafOptions": True})
+        d = out["replies"][0]["data"]
+        self.assertEqual((d["optionsSet"], d["optionValues"], out["exports"][0]["argc"], out["exports"][0]["options"]),
+                         ([], {}, 2, None))
+
+    def test_export_aaf_held_by_the_modal_log(self):
+        """Past the 1 s window the job is running; after 3 s its view carries the click-OK hint; the OK (the promise)
+        settles it; meanwhile export_sequence, export_aaf and export_xml are EXPORT_RUNNING (one export at a time)."""
+        status = {"action": "export_status", "params": {}}
+        render = {"action": "export_sequence", "params": {"outputPath": "/fake/out/b.wav", "presetPath": "/fake/w.epr"}}
+        xml = {"action": "export_xml", "params": {"outputPath": "/fake/out/cut.xml"}}
+        out = recorded([self.AAF, status, render, self.AAF, xml, dict(status, waitMs=2500), dict(status, waitMs=2000)],
+                       mock={"aafJob": {"holdMs": 5000}})
+        start, early, busy_render, busy_aaf, busy_xml, held, done = out["replies"]
+        self.assertEqual((start["data"]["state"], start["data"]["exported"]), ("running", False))
+        job = early["data"]["jobs"][0]
+        self.assertEqual((job["kind"], job["state"], job["pending"]), ("aaf", "running", True))
+        self.assertNotIn("hint", job)  # not yet 3 s
+        for busy in (busy_render, busy_aaf, busy_xml):
+            self.assertEqual((busy["code"], busy["outcome"], busy["data"]["jobId"], busy["data"]["kind"]),
+                             ("EXPORT_RUNNING", "not_committed", job["jobId"], "aaf"))
+            self.assertIn("AAF export log", busy["error"])
+        job = held["data"]["jobs"][0]
+        self.assertEqual(job["state"], "running")
+        self.assertIn("click", job["hint"])
+        self.assertIn("AAF export log", job["hint"])
+        job = done["data"]["jobs"][0]
+        self.assertEqual((job["state"], job["settledBy"], job["returned"]), ("done", "promise", True))
+        self.assertNotIn("hint", job)
+        self.assertEqual([e["kind"] for e in out["exports"]], ["aaf"])  # the refused requests reached no exporter
+
+    def test_export_aaf_failures(self):
+        """Refused at once, leaving no job: false or a throw within the first second, a setter this build lacks
+        (UNSUPPORTED), a setter that throws (BAD_PARAMS), options on a build without AAFExportOptions, no sequence.
+        false after the log was dismissed fails the job instead."""
+        status = {"action": "export_status", "params": {}}
+        aaf = self.AAF["params"]
+        cases = (({"outputPath": "/fake/no/such/cut.aaf"}, {}, "EXPORT_FAILED", "exportAAF returned false"),
+                 (aaf, {"aafJob": {"throwSync": True}}, "EXPORT_FAILED", "exportAAF failed (exportAAF: Unable"),
+                 (aaf, {"aafJob": {"result": "throw", "holdMs": 100}}, "EXPORT_FAILED",
+                  "exportAAF failed (exportAAF failed (mock))"),
+                 (dict(aaf, trimSources=True), {"aafMissingSetter": ["setTrimSources"]}, "UNSUPPORTED", "setTrimSources"),
+                 (dict(aaf, sampleRate=44100), {"aafSetterThrows": ["setSampleRate"]}, "BAD_PARAMS",
+                  "setSampleRate(44100) threw"),
+                 (dict(aaf, embedAudio=True), {"noAafOptions": True}, "UNSUPPORTED", "no AAFExportOptions"))
+        for params, knobs, code, text in cases:
+            with self.subTest(knobs=knobs, params=params):
+                out = recorded([{"action": "export_aaf", "params": params}, status], mock=knobs)
+                failed, st = out["replies"]
+                self.assertEqual((failed["ok"], failed["code"], failed["outcome"]), (False, code, "not_committed"))
+                self.assertIn(text, failed["error"])
+                self.assertEqual(st["data"]["jobs"], [])
+                if code != "EXPORT_FAILED":
+                    self.assertEqual(out["exports"], [])  # refused before exportAAF
+        r = call("export_aaf", aaf, scenario="no-sequence")["reply"]
+        self.assertEqual((r["code"], r["outcome"]), ("NO_SEQUENCE", "not_committed"))
+        out = batch([self.AAF, dict(status, waitMs=700)], mock={"aafJob": {"holdMs": 1300, "result": False}})
+        start, st = out["replies"]
+        self.assertEqual(start["data"]["state"], "running")
+        job = st["data"]["jobs"][0]
+        self.assertEqual((job["state"], job["returned"], job["error"], job["settledBy"]),
+                         ("failed", False, "exportAAF returned false", "promise"))
+
+    def test_export_xml(self):
+        """exportAsFinalCutProXML(sequence, path, true): UI suppressed; false or a throw is EXPORT_FAILED. A render
+        job does not block it; an AAF job does (its modal log may be up)."""
+        xml = {"action": "export_xml", "params": {"outputPath": "/fake/out/cut.xml"}}
+        out = recorded([xml, self.START, xml], mock={"exportJob": {"result": "never"}})
+        first, render, during = out["replies"]
+        self.assertEqual(first["data"], {"exported": True, "outputPath": "/fake/out/cut.xml"})
+        self.assertEqual((render["data"]["state"], during["ok"]), ("running", True))
+        self.assertEqual([(e["kind"], e.get("suppressUI")) for e in out["exports"]],
+                         [("fcpxml", True), ("sequence", None), ("fcpxml", True)])
+        self.assertEqual(out["transactions"], [])
+        for params, extra, text in ((dict(xml["params"], outputPath="/fake/no/such/cut.xml"), {}, "returned false"),
+                                    (xml["params"], {"mock": {"exportFails": True}}, "returned false"),
+                                    (xml["params"], {"mock": {"exportThrows": True}},
+                                     "exportAsFinalCutProXML failed (exportAsFinalCutProXML: Unable"),
+                                    (xml["params"], {"scenario": "no-sequence"}, "")):
+            with self.subTest(params=params, extra=extra):
+                r = call("export_xml", params, **extra)["reply"]
+                code = "NO_SEQUENCE" if extra.get("scenario") else "EXPORT_FAILED"
+                self.assertEqual((r["ok"], r["code"], r["outcome"]), (False, code, "not_committed"))
+                self.assertIn(text, r["error"])
 
     def test_list_effects(self):
         """Video filters pair match and display names (checked by creating a few); audio filters are display names
@@ -2132,7 +2258,16 @@ REFUSED_PATHS = [
     ("export_sequence", {"outputPath": "out/mix.wav", "presetPath": B * 2 + "." + B + "pipe" + B + "p.epr"}),
     ("export_sequence", {"outputPath": "out/mix.wav:hidden", "presetPath": "p.epr"}),
     ("relink", {"itemName": "broll_city.mp4", "newPath": "//?/UNC/h/s/a.mov"}),
+    ("export_aaf", {"outputPath": "//host/share/cut.aaf"}),
+    ("export_xml", {"outputPath": "out/cut.xml:hidden"}),
     ("relink", {"itemName": "broll_city.mp4", "newPath": B + "??" + B + "UNC" + B + "h" + B + "a.mov"}),
+    # exports keep their file type (spec `extensions`, DOC-9): nothing but an .otio, .xml, .aaf, media file or .png
+    ("export_otio", {"outputPath": "out/run.bat"}),
+    ("export_xml", {"outputPath": "out/cut.cmd"}),
+    ("export_aaf", {"outputPath": "out/cut.aaf.ps1"}),
+    ("export_sequence", {"outputPath": "out/mix.bat", "presetPath": "p.epr"}),
+    ("export_sequence", {"outputPath": "out/mix.wav", "presetPath": "p.vbs"}),
+    ("export_frame", {"dir": "frames", "name": "f.lnk"}),
 ]
 
 
@@ -2155,6 +2290,8 @@ class PanelPathTest(unittest.TestCase):
         long_local = B * 2 + "?" + B + "C:" + B + "Job" + B + "media" + B + "a.mp4"  # as Premiere reports project paths
         for action, params in (("import_media", {"paths": [long_local, "media/a.mp4"]}),
                                ("export_otio", {"outputPath": "out/t.otio"}),
+                               ("export_otio", {"outputPath": "out/T.OTIO"}),
+                               ("export_sequence", {"outputPath": "out/a.MP4", "presetPath": "p.epr"}),
                                ("export_frame", {"dir": "frames", "name": "f_1.png"})):
             with self.subTest(action=action):
                 self.assertEqual(pspec.check_params(action, params), [])

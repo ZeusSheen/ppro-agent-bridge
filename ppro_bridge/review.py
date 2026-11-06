@@ -925,7 +925,7 @@ def export_audio(rpc, *, output, tracks=("A1",), render: bool = False, preset=No
     mix refuses clips without readable media (NO_MEDIA, nothing written): it never falls back to the render."""
     paths.check(output, what="output", ext=".wav")
     _require_ffmpeg()
-    out = Path(output).expanduser().resolve()
+    out = paths.resolved(output)  # a mapped drive keeps its letter (the panel refuses a UNC path)
     out.parent.mkdir(parents=True, exist_ok=True)
     labels = _audio_labels(tracks)
     if not render:

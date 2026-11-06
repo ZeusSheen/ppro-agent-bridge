@@ -1,6 +1,9 @@
 # Required: broker, CLI and fake panel
 websockets>=14
 
+# Optional: the MCP server (python -m ppro_bridge.mcp), the official MCP Python SDK
+# mcp>=2.3,<3
+
 # Optional: labelled contact sheets (ppro.py export_frames --sheet)
 # pillow
 

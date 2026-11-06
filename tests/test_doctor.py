@@ -136,18 +136,26 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(doctor.ICON.is_file(), "ppro_bridge/bridge.ico is missing: python scripts/make_icon.py")
         seen = {}
         with tempfile.TemporaryDirectory() as tmp:
-            folder = Path(tmp) / "it's here"
+            # ' and ’ both end a PowerShell single-quoted string; ; and $( would run code if pasted into the script
+            folder = Path(tmp) / "it's Bob’s; $(x)"
             folder.mkdir()
 
             def fake_run(cmd, **kw):
-                seen["script"] = cmd[-1]
+                seen["script"], seen["env"] = cmd[-1], kw.get("env") or {}
                 (folder / doctor.SHORTCUT_NAME).write_bytes(b"lnk")
                 return subprocess.CompletedProcess(cmd, 0, "", "")
 
             with mock.patch.object(doctor.subprocess, "run", side_effect=fake_run):
                 doctor.make_shortcut(folder)
-        self.assertIn(f"$s.IconLocation = '{doctor.ICON},0'", seen["script"])
-        self.assertIn("it''s here", seen["script"])  # a quote in a folder name is doubled for PowerShell
+        self.assertIn("$s.IconLocation = $env:PAB_SHORTCUT_ICON", seen["script"])
+        self.assertEqual(seen["env"]["PAB_SHORTCUT_ICON"], f"{doctor.ICON},0")
+        self.assertEqual(seen["env"]["PAB_SHORTCUT_LINK"], str(folder / doctor.SHORTCUT_NAME))
+        self.assertEqual(seen["env"]["PAB_SHORTCUT_TARGET"], str(doctor.START_SCRIPT))
+        self.assertNotIn(tmp, seen["script"])  # no path is part of the script text
+
+    def test_ps_quote_doubles_every_powershell_single_quote(self):
+        self.assertEqual(doctor._ps_quote("a'b‘c’d‚e‛f"),
+                         "'a''b‘‘c’’d‚‚e‛‛f'")
 
     def test_the_icon_has_every_windows_size(self):
         try:
@@ -412,6 +420,30 @@ class UpiaTest(unittest.TestCase):
             doctor.main(["--install-deps"])
         run.assert_called_once()
         self.assertEqual(out.getvalue().count("[OK  ] Panel as .ccx: not installed as .ccx"), 2)
+
+
+class DataFolderTest(unittest.TestCase):
+    """QA-4: the data-folder check looks, never creates; and no test may touch the user's real folder."""
+
+    def test_a_missing_folder_is_reported_not_made(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            token = Path(tmp) / "not yet" / "token"
+            with mock.patch.dict(os.environ, {"PPRO_BRIDGE_TOKEN_FILE": str(token)}):
+                result = doctor.data_folder_check()
+            self.assertTrue(result["ok"], result)
+            self.assertIn("made when the bridge first starts", result["detail"])
+            self.assertFalse(token.parent.exists())
+            token.parent.mkdir()
+            with mock.patch.dict(os.environ, {"PPRO_BRIDGE_TOKEN_FILE": str(token)}):
+                self.assertEqual(doctor.data_folder_check()["detail"], str(token.parent))
+
+    def test_the_real_folder_is_out_of_reach_of_this_test_process(self):
+        real = Path(helpers.REAL_DATA_DIR)
+        for touch in (lambda: os.mkdir(real), lambda: open(real / "token", encoding="utf-8"),
+                      lambda: os.listdir(real), lambda: os.remove(real / "x")):
+            with self.subTest(touch=touch), self.assertRaises(PermissionError) as cm:
+                touch()
+            self.assertIn("a test reached the real", str(cm.exception))
 
 
 if __name__ == "__main__":

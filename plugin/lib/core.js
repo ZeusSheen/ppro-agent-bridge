@@ -1,7 +1,7 @@
 /*
  * core: shared plumbing for the Agent Bridge panel.
  *  - BridgeError (every error carries a code from ppro_bridge/actions.json) and the outcome rule
- *  - the spec param check, a mirror of ppro_bridge/spec.py (same rules, same problem texts)
+ *  - the spec param check, a mirror of ppro_bridge/spec.py (same rules, same problem texts; tagged variants too)
  *  - request guards, checked on the very project / sequence object a handler then uses, and the
  *    fingerprint guard (the timeline must be the one the request was planned on; sha256Hex / fixed6)
  *  - runTransaction: build every action inside lockedAccess first, then execute them in one transaction
@@ -222,6 +222,13 @@ module.exports = function (deps) {
       const why = (schema.localPath === true ? pathProblem(value) : null) ||
         (schema.fileName === true ? nameProblem(value) : null);
       if (why) problems.push(`${path}: ${why}`);
+      else if (hasOwn(schema, "extensions")) {
+        // An export keeps its file type whoever sent the request (DOC-9): never, say, a .bat from export_otio.
+        const lower = value.trim().toLowerCase();
+        if (!schema.extensions.some((e) => lower.endsWith(String(e).toLowerCase()))) {
+          problems.push(`${path}: must end in ${schema.extensions.join(" or ")}`);
+        }
+      }
     }
     if (t === "number" || t === "integer") {
       if (hasOwn(schema, "minimum") && value < schema.minimum) problems.push(`${path}: must be >= ${schema.minimum}`);
@@ -237,10 +244,25 @@ module.exports = function (deps) {
         }
       }
     }
-    if (t === "object" && hasOwn(schema, "properties")) {
+    if (t === "object" && hasOwn(schema, "variantKey")) {
+      for (const p of checkVariant(schema, value, path)) problems.push(p);
+    } else if (t === "object" && hasOwn(schema, "properties")) {
       for (const p of checkObject(schema.properties, value, path, !!schema.additionalProperties, [])) problems.push(p);
     }
     return problems;
+  }
+
+  /* A tagged object (spec.py check_variant): the variant named by obj[variantKey], its properties merged over the
+   * schema's own; an absent tag is "required", an unknown one "must be one of ...". */
+  function checkVariant(schema, obj, path) {
+    const key = schema.variantKey;
+    const variants = isPlainObject(schema.variants) ? schema.variants : {};
+    const tag = own(obj, key);
+    if (absent(tag)) return [`${path}.${key}: required`];
+    if (typeof tag !== "string" || !hasOwn(variants, tag)) return [`${path}.${key}: must be one of ${Object.keys(variants).join(", ")}`];
+    const variant = variants[tag];
+    const props = Object.assign({}, schema.properties || {}, variant.properties || {});
+    return checkObject(props, obj, path, !!variant.additionalProperties, variant.requireOneOf || []);
   }
 
   function checkObject(properties, obj, path, additional, requireOneOf) {
@@ -275,6 +297,9 @@ module.exports = function (deps) {
     if (!a) return [`unknown action '${actionName}'`];
     if (absent(params)) params = {};
     if (!isPlainObject(params)) return ["params: expected object"];
+    if (hasOwn(a, "variantKey")) {
+      return checkVariant({ variantKey: a.variantKey, variants: a.variants, properties: a.params }, params, "params");
+    }
     return checkObject(a.params, params, "params", false, a.requireOneOf || []);
   }
 
@@ -486,7 +511,12 @@ module.exports = function (deps) {
 
   /* SHA-256 of a string's UTF-8 bytes, as lowercase hex (hashlib.sha256(s.encode("utf-8")).hexdigest()). */
   function sha256Hex(text) {
-    const bytes = utf8Bytes(String(text));
+    return sha256Bytes(utf8Bytes(String(text))).map((x) => x.toString(16).padStart(2, "0")).join("");
+  }
+
+  /* SHA-256 of an array of byte values (0-255), as an array of 32 byte values (hashlib.sha256(bytes).digest()). */
+  function sha256Bytes(input) {
+    const bytes = Array.from(input);
     const bits = bytes.length * 8;
     bytes.push(0x80);
     while (bytes.length % 64 !== 56) bytes.push(0);
@@ -514,7 +544,9 @@ module.exports = function (deps) {
       }
       [a, b, c, d, e, f, g, k].forEach((x, i) => { h[i] = (h[i] + x) | 0; });
     }
-    return h.map((x) => (x >>> 0).toString(16).padStart(8, "0")).join("");
+    const out = [];
+    for (const x of h) out.push((x >>> 24) & 255, (x >>> 16) & 255, (x >>> 8) & 255, x & 255);
+    return out;
   }
 
   /* ---------- transactions ---------- */
@@ -578,6 +610,7 @@ module.exports = function (deps) {
     secs, atTime, tickTimeFromTicks, ticksOf, frameTicksOf, seqTicks, seqTime, tryGet, tryGetSync, sleep,
     checkParams, checkValue, checkObject, checkGuardShape, pyTypeName, requireText, pathProblem, nameProblem,
     hasGuard, readGuid, requireProject, requireSequence, checkGuard, checkFingerprintGuard, fixed6, sha256Hex,
+    sha256Bytes, utf8Bytes,
     runTransaction, countWords,
   };
 };

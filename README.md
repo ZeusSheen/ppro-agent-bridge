@@ -5,7 +5,7 @@ Adobe Premiere Pro session for **transcript-driven, closed-loop video editing** 
 built entirely on Premiere's official UXP APIs (GA since 25.6), with fully local
 Whisper transcription.
 
-> **Status: experimental (v0.6.0).** Tested on Premiere Pro 27.1 / Windows 11
+> **Status: experimental (v0.7.0).** Tested on Premiere Pro 27.1 / Windows 11
 > (earlier releases also ran on 26.x). macOS is not supported yet.
 > Forty-two whitelisted panel operations, checked against one action spec, plus
 > a Python library and CLI on top (edit plans, contact sheets, effect-preserving
@@ -13,9 +13,10 @@ Whisper transcription.
 
 ## Get started in 3 steps
 
-1. **Download** `ppro-agent-bridge-v0.6.0.zip` from
+1. **Download** `ppro-agent-bridge-v0.7.0.zip` from
    [Releases](../../releases), right-click it and choose
-   **Extract All**.
+   **Extract All**. (New in 0.7: `PremiereAgentBridge-Setup-0.7.0.exe` on the same page installs
+   everything, Python included, without admin rights — see [Install & run](#install--run).)
 2. **Install:** in the extracted folder, double-click **`1 Install Premiere Agent Bridge.bat`**.
    A window checks your computer, fixes what is missing and puts a **Premiere Agent Bridge**
    shortcut on your desktop and in the Start menu.
@@ -23,7 +24,8 @@ Whisper transcription.
    open Premiere Pro and its panel (`Window → UXP Plugins → Agent Bridge`). The panel tells you
    what to send your AI helper (Claude Code or Codex).
 
-**中文：** 1. 从 Releases 下载 zip，右键「全部解压缩」。2. 双击 `1 Install Premiere Agent Bridge.bat`：
+**中文：** 1. 从 Releases 下载 zip，右键「全部解压缩」（0.7 起也可以直接运行同一页的安装程序
+`PremiereAgentBridge-Setup-0.7.0.exe`，自带 Python，不要管理员权限；还没有代码签名，Windows 提示时点「更多信息 → 仍要运行」）。2. 双击 `1 Install Premiere Agent Bridge.bat`：
 它会检查电脑、补齐缺的东西，并在桌面和开始菜单放一个 **Premiere Agent Bridge** 快捷方式。
 3. 双击这个快捷方式（或 `2 Start Premiere Agent Bridge.bat`），打开 Premiere 和面板
 （窗口 → UXP 增效工具 → Agent Bridge），面板会告诉你该对 AI 助手说什么。
@@ -95,6 +97,19 @@ Premiere Pro project      every write is a named entry in Undo history
 
 ## Install & run
 
+> **Installer (new in 0.7).** `PremiereAgentBridge-Setup-<version>.exe` does what the zip's two `.bat`
+> files do: a per-user install without admin rights into `%LOCALAPPDATA%\Programs\Premiere Agent Bridge`, with its own
+> Python (python.org's embeddable 3.14 and pinned wheels, every file checked by SHA-256 at build time), Start menu
+> and optional desktop shortcuts, optional start at login, an English / Simplified Chinese wizard, the setup window
+> after install, and an uninstaller in Settings > Apps that keeps `%USERPROFILE%\.ppro-agent-bridge` unless you say
+> otherwise. `python scripts/build_installer.py <release export folder>` builds it (it downloads only with
+> `--download`; Inno Setup 6.5+ compiles it); `.github/workflows/release.yml` builds it on a version tag and runs
+> the whole test suite under the bundled Python first. It is not code-signed yet (`installer/SIGNING.md`): Windows
+> SmartScreen says "Windows protected your PC" — **More info → Run anyway** — and the zip stays. `start_bridge.bat`
+> and `setup_bridge.bat` use the bundled `python\python.exe` when it is there, else the Python on PATH as before.
+> Moving from the zip to the installer: the installer takes over the zip's "Premiere Agent Bridge" shortcuts (same
+> name), and uninstalling it removes them; run the zip's `setup_bridge.bat` again to get them back.
+
 1. Once: double-click **`setup_bridge.bat`**. The setup opens in its own window
    (Edge app mode: no address bar or tabs) and goes through the machine step by
    step: Python, the Python packages, Premiere (at least the panel manifest's
@@ -108,10 +123,14 @@ Premiere Pro project      every write is a named entry in Undo history
    only reports); `python -m ppro_bridge.setup_ui --demo` shows the window without
    touching the machine.
 2. Every day: double-click **`start_bridge.bat`** (keep its window open). It runs
-   the broker with `--load-panel`: UXP Developer Tool is started minimized when it
-   is not running, and the panel is loaded into Premiere whenever Premiere
-   connects to it — at start-up, after a Premiere restart, after UXP Developer Tool
-   restarts. No clicking **Load**. Open the panel in Premiere via
+   the broker with `--load-panel`: the panel is loaded into every Premiere that
+   starts — at start-up and after a Premiere restart. No clicking **Load**. UXP
+   Developer Tool runs only while that happens: the broker notices the new
+   Premiere process, starts UXP Developer Tool minimized, loads the panel, waits
+   until it answers and closes UXP Developer Tool again (its service accepts any
+   connection and can load any folder into Premiere, so it should not stay open;
+   the loaded panel keeps running without it). A UXP Developer Tool you opened
+   yourself is used and left open. Open the panel in Premiere via
    `Window → UXP Plugins → Agent Bridge`; the status dot turns green when it is
    connected to the broker. While no broker runs, the panel shows a **Start
    bridge** button that opens `start_bridge.bat` for you (UXP asks once whether it
@@ -141,13 +160,15 @@ Premiere Pro project      every write is a named entry in Undo history
    panel's denylist; otherwise its `warning` says what to restart or reload.
 
 Pairing is automatic: on its first start the broker writes a random token to
-`%USERPROFILE%\.ppro-agent-bridge\token`, and the CLI (and any script using
-`ppro_bridge`) sends it on every connection. (Not in `%LOCALAPPDATA%`: Windows
+`%USERPROFILE%\.ppro-agent-bridge\token`, and the CLI, any script using
+`ppro_bridge`, the MCP server and the Premiere panel prove it on every connection
+without sending it (see "Security model"). (Not in `%LOCALAPPDATA%`: Windows
 gives packaged apps such as the Claude desktop app a private copy of it, so a CLI
 run from one would read a different token than a broker started by double-click.) A client without it is refused with
 `AUTH_FAILED` — that includes a CLI older than 0.5, so run the CLI and the broker
 from the same version. `PPRO_BRIDGE_TOKEN` (the token itself) or
-`PPRO_BRIDGE_TOKEN_FILE` (another file) override this for both sides. The broker
+`PPRO_BRIDGE_TOKEN_FILE` (another file) override this for the broker and the CLI
+(the panel reads only the file). The broker
 also keeps an audit log, one JSON line per request, in
 `%USERPROFILE%\.ppro-agent-bridge\audit\audit-YYYY-MM-DD.jsonl` (30 days kept;
 `PPRO_AUDIT_DIR` moves it, `PPRO_AUDIT_DIR=off` turns it off).
@@ -207,7 +228,7 @@ only, nothing touches Premiere): `python -m unittest discover -s tests`.
 | `probe_api [--output dump.json] [--diff old.json]` | This Premiere build's UXP API, with a watch list of the calls the UXP port needs |
 | `export_frame --dir d [--at sec] [--width W --height H]` | One frame of the program output (default: the sequence's frame size) |
 | `export_frames --dir d --at 4,18.5,31.6 [--sheet]` | Several frames, optionally a labelled contact sheet |
-| `import_media --path f [...] [--bin "Name"] [--force]` | Import media into the root or a bin (created if missing); returns the new item names. Refuses codecs Premiere cannot read (VP9, AV1, Opus) with an ffmpeg command for each |
+| `import_media --path f [...] [--bin "Name"] [--force]` | Import media into the root or a bin (created if missing); returns the new item names. Converts audio-only files Premiere cannot read (FLAC, Opus, Vorbis) to a 48 kHz 24-bit WAV beside them and imports that; refuses video in codecs it cannot read (VP9, AV1, Opus) with an ffmpeg command for each |
 | `insert_clip --item "name" [--at sec] [--vtrack N] [--atrack N] [--mode overwrite\|insert] [--in sec --out sec] [--label "text"]` | Place a clip — or, with `--in/--out`, just that source range ("cut by sentence") |
 | `apply_plan plan.json [--dry-run] [--notes-as-markers] [--any-sequence] [--report r.json]` | Execute a JSON edit plan: imports, frame-snapped placements, free audio-track routing, conflict check, verification of both legs |
 | `set_scale --track V3 --at sec (--fit \| --fill \| --value %)` | Motion › Scale, fit/fill computed per clip from the media size |
@@ -233,10 +254,14 @@ only, nothing touches Premiere): `python -m unittest discover -s tests`.
 | `export_audio --output f.wav [--render]` | The sequence's audio as a WAV (shadow mix of the sources, or Premiere's render) |
 | `list_presets [--format h264]` | Encoder presets (`.epr`) on disk, Premiere's own and yours, with the format each writes; no panel needed |
 | `export_video --preset NAME\|PATH --output f.mp4 [--overwrite] [--dry-run]` | Render the active sequence with a preset inside Premiere, then check the file with ffprobe: frame size, fps and length against the sequence |
+| `export_aaf --output f.aaf [--embed-audio] [--audio-format wav\|aiff] [--detach]` / `export_aaf --job ID` | The active sequence as an AAF, as a job with no time limit; the file must be new and not empty. Premiere may hold it with its modal "AAF export log" until someone clicks OK: the reply says so |
+| `export_xml --output f.xml [--overwrite]` | The active sequence as Final Cut Pro 7 XML (no dialog), checked for `<?xml` and `<xmeml>` |
 | `list_effects [--kind audio\|video]` | Effects Premiere can add: video filters (match + display name), audio filters (display name, in the UI language) |
 | `add_audio_effect --track A1 --at s --name "降噪" [--dry-run]` | Add an audio effect by its display name to the clip under a time: one undo step, verified; an unknown name lists the closest |
 | `list_effect_presets [--search text] [--file f.prfpset]` | Effect presets (`.prfpset`) on disk, Premiere's own and yours, with their effects, animation and how much `apply_preset` can replay; no panel needed |
 | `apply_preset --track V2 (--at s \| --from s --to s) --preset "name" [--dry-run]` | Apply an effect preset through `set_params`, keeping its timing anchor; what UXP cannot write (masks, colours, Lumetri curves) is skipped and reported; verified |
+| `apply_ops --json ops.json --label "text" [--dry-run]` | Several whitelisted small writes in ONE transaction and one undo step: markers (add, rename, comment, colour, duration, type, move, remove), clip name / disabled (video), a static param value, sequence in / out and playhead, video track and bin names. Every target is resolved and every action built before anything commits; each op is read back |
+| `query --what clips\|clip\|markers\|bins\|sequence [--track V1] [--at s] [--from s --to s] [--bin path]` | Whitelisted reads by name: clips on tracks, one clip's components and params, markers, bins and items, the sequence's settings, in / out and player position |
 
 Everything prints a single JSON object; failures carry a `code` and an `outcome`:
 `not_committed` (nothing changed), `committed` (the write ran but did not do what
@@ -287,6 +312,15 @@ touch; a mismatch is refused with `PROJECT_MISMATCH` / `SEQUENCE_MISMATCH` befor
 anything changes. `fingerprint` (get_sequence's) pins the timeline itself: the panel
 refuses a write that is not a dry run with `PRECONDITION_FAILED` once the timeline
 has changed.
+
+## MCP server
+
+`python -m ppro_bridge.mcp` serves every CLI command as an MCP tool over stdio, on the official MCP
+Python SDK (optional: `python -m pip install "mcp>=2.3,<3"`). Register it with Claude Code
+(`claude mcp add ppro-bridge -- python -m ppro_bridge.mcp`, from the repository root) or Codex
+(`[mcp_servers.ppro-bridge]` in `~/.codex/config.toml`). Commands that remove or ripple run as a dry run
+unless the call says `confirm: true`; the pairing token never appears in a reply. Details: SKILL.md,
+"MCP server".
 
 ## Protocol and capabilities
 
@@ -425,26 +459,36 @@ and Reload the panel in UXP Developer Tool.
   header (the CLI) and `Origin: file://` (the UXP panel). Browsers let any page open
   a socket to localhost, but always send an Origin — the page's `http(s)` origin, or
   `null` from sandboxed frames and data URLs — and are refused with 403.
-- Controllers (the CLI, scripts, later the MCP server) must send the pairing token
-  from `%USERPROFILE%\.ppro-agent-bridge\token`, compared in constant time; a
-  missing or wrong one gets `AUTH_FAILED` and the connection is closed before
-  anything reaches Premiere. That keeps out local programs and other Windows users
-  that cannot read your profile.
-- The panel does not have the token yet (a wrong one is refused). Instead, a
-  connection must say hello within 10 s, a panel hello naming another plugin id is
-  refused (close 4403), and a registered panel is never replaced while its socket
-  is open — answering or busy, a newcomer is refused (4409). What is left: while no
-  panel is connected (Premiere closed, the broker just started), any local program —
-  another Windows user's too — can register as the panel and read the requests sent
-  to it (never reaching Premiere); and the panel trusts whatever answers on
-  `localhost:8017`: while no broker runs, a program listening there receives the
-  real panel and can send it whitelisted commands. The panel itself refuses network
-  (UNC) and device paths in every param it hands Premiere (the spec's `localPath`),
-  so such a program cannot make Premiere offer your credentials to another host. The
-  broker does not start beside such a program: when 127.0.0.1:8017 or `[::1]:8017`
-  (where the panel arrives first) is taken it exits and names the holder ("It is
-  held by PID n (name)"). On a machine you share, start the bridge before other
-  users' sessions.
+- **Pairing (0.7).** The broker, its controllers (the CLI, scripts, the MCP
+  server) and the Premiere panel all read the pairing token from
+  `%USERPROFILE%\.ppro-agent-bridge\token`, and none of them sends it: each side
+  proves it knows the token with an HMAC-SHA256 challenge-response over both sides'
+  random nonces, the client first, and the client sends its request (the CLI) or
+  runs one (the panel) only after the broker has proved the token back. A program
+  that holds port 8017 while no broker runs learns neither the token nor a request,
+  and the panel runs nothing it sends (the panel's status line reads
+  "Not paired: ..."); a program that connects to the broker without the token is
+  refused (`AUTH_FAILED`, close 1008; a panel: close 4401) and learns nothing but
+  the challenge. That keeps out local programs and other Windows users that cannot
+  read your profile. The broker creates the token file (and the folder) with an
+  ACL of their own: you and SYSTEM. A 0.7 CLI or panel needs a 0.7 broker
+  (`BROKER_UNVERIFIED` otherwise); the broker still takes the token itself from a
+  0.5 / 0.6 CLI. A 0.6 panel cannot pair and is refused, unless you set
+  `PPRO_PANEL_AUTH=legacy` (or `{"panelAuth": "legacy"}` in settings.json) while you
+  update it — that lets any local program register as the panel again. The panel
+  cannot read environment variables: with `PPRO_BRIDGE_TOKEN` set, it pairs only
+  when the token file holds the same token.
+- A connection must finish its hello within 10 s (at most 64 at once), a panel hello
+  naming another plugin id is refused (close 4403), and a registered panel is never
+  replaced while its socket is open — answering or busy, a newcomer is refused
+  (4409). The panel also refuses network (UNC) and device paths in every param it
+  hands Premiere (the spec's `localPath`), and its exports keep their file type (the
+  spec's `extensions`: no `.bat` from export_otio). The CLI goes further: it follows the
+  symbolic links and junctions in a path by reading them (never opening their targets)
+  and refuses a path that leads to a share that way, and it checks every file it opens
+  or writes itself (plans, transcripts, SRT, JSON params, its own `.json` outputs) by the
+  same rules. The broker does not start beside another program on its port: when 127.0.0.1:8017 or `[::1]:8017` (where the panel arrives
+  first) is taken it exits and names the holder ("It is held by PID n (name)").
 - The audit log records every request (action, shortened params, guard, outcome,
   queue and run time, the sequence and track counts Premiere reported), every
   refusal and every panel connection, so a session can be reconstructed afterwards.
@@ -460,9 +504,13 @@ and Reload the panel in UXP Developer Tool.
   live smoke test uses this so it can only ever write into `PAB_TEST*` projects.
 - The panel manifest allows the network only to `ws://localhost/` (UXP takes no IP
   address or port in that list; the panel dials `ws://localhost:8017`), may launch
-  only `.bat` and `.pyw` files (the Start bridge button; UXP asks the user first),
-  and asks for `localFileSystem: fullAccess`. The panel itself reads only its own
-  plugin folder (code hash, `launcher.json`) and lists the folder that should hold
+  only `.bat` and `.pyw` files (the Start bridge button; UXP asks the user first)
+  and open `https` addresses in the browser — and the panel opens only this
+  repository's release pages and its new-issue page (`plugin/lib/support.js`
+  `allowedUrl`; UXP asks first) —, and asks for `localFileSystem: fullAccess`. It asks
+  for no clipboard access (UXP offers only read-and-write): "Copy a problem report"
+  shows the whole report in a box, selected for Ctrl+C. The panel itself reads only its own
+  plugin folder (code hash, `launcher.json`), the pairing token file, and lists the folder that should hold
   `start_bridge.bat`; the media, frames, OTIO, renders and presets it is given
   are opened by Premiere's own API calls with the paths in the request. Whether those
   calls keep working under a lower level (`plugin`) is not measured, so
@@ -471,6 +519,25 @@ and Reload the panel in UXP Developer Tool.
   label — the human always has a one-keystroke rollback.
 - Transcription is local; nothing is uploaded anywhere (Premiere's own
   Speech-to-Text runs inside Premiere, under Adobe's terms).
+- **The one outbound request: the update check.** Only the broker goes online, at most
+  once a day (an attempt counts, so restarts do not ask again), in a background thread:
+  one HTTPS GET of GitHub's releases API for this repository
+  (`https://api.github.com/repos/…/releases/latest`), with the User-Agent
+  `ppro-agent-bridge/<version>`, no cookies and nothing that identifies the machine,
+  the user or a project; redirects only to the same host, 5 s timeout. It keeps the
+  release's version, date and page URL — the URL only when it is one of
+  [this repository's release pages](https://github.com/ZeusSheen/ppro-agent-bridge/releases)
+  — in `%USERPROFILE%\.ppro-agent-bridge\update.json`; the release text is never kept or
+  shown. ping, the panel ("0.7.1 available · View · Skip this version"), `doctor` and the
+  setup window show the result. A failure is quiet (one audit record). **Turn it off**
+  with `PPRO_UPDATE_CHECK=0` in the broker's environment, or
+  `{"updateCheck": false}` in `%USERPROFILE%\.ppro-agent-bridge\settings.json` (where
+  "Skip this version" keeps `"skipVersion"`); then nothing is sent.
+- The problem reports — `python -m ppro_bridge.report` and the panel's "Copy a problem
+  report" — are built from a whitelist: versions, Premiere's version, capabilities,
+  check results, the update check's version, and recent error codes. Never the token,
+  project or sequence names, paths, error messages or request params; the panel shows
+  the whole text before it is copied.
 - Treat any agent bridge as shell-equivalent access to the host app. Run it on
   test projects or copies first.
 
@@ -512,6 +579,63 @@ and Reload the panel in UXP Developer Tool.
 
 ## Changelog
 
+- **0.7.0** — **Security, the release gate:** a review with an attack simulation on this machine (two red
+  teams, two blue teams, a release-process reviewer, and QA re-running every attack); `SECURITY_REVIEW.md` has
+  the threat model, the 43 findings and what was done about each. The broker, its clients and the panel now
+  prove the pairing token to each other with an HMAC-SHA256 challenge-response and never send it: a program
+  holding port 8017 learns neither the token nor a request, and the panel runs nothing it sends (live: a fake
+  broker on 8017 got nothing). **Upgrade the broker and the panel together:** a 0.6 panel is refused
+  (`PPRO_PANEL_AUTH=legacy` lets it in, with a warning) and a 0.7 CLI or panel needs a 0.7 broker
+  (`BROKER_UNVERIFIED`); 0.5 and 0.6 CLIs still work. Every path a command reads or writes goes through one
+  check that also follows links and junctions, so a local-looking path into a network share is refused like
+  `\\host\share`. UXP Developer Tool runs only while the bridge loads the panel and is closed again: its local
+  service takes a connection from any web page, and the panel keeps running without it (live: open 9.3 s). The
+  FLAC→WAV conversion, the start scripts, the Start bridge button's `launcher.json`, the setup window's
+  commands, the update check, MCP redaction, the problem report and the token file's ACL were hardened, and the
+  release workflow pins every action to a commit SHA. **Installer:** `PremiereAgentBridge-Setup-<version>.exe`
+  (Inno Setup, English and Simplified Chinese wizard): a per-user install without admin rights, with its own
+  Python (python.org's embeddable 3.14.10, pip 26.3 and pinned wheels, every file checked by SHA-256 when it is
+  built, always run isolated with `-I`), Start menu and optional desktop shortcuts, optional start at login and
+  an uninstaller. Built, installed, run and uninstalled on Windows 11, and the whole test suite passes under the
+  bundled Python. It is not code-signed yet, so SmartScreen warns (More info → Run anyway); it takes over a zip
+  install's shortcuts of the same name and its uninstaller removes them (`setup_bridge.bat` puts them back).
+  **MCP server:** `python -m ppro_bridge.mcp` serves every CLI
+  command as an MCP tool over stdio, on the official MCP Python SDK (`mcp`, optional: the CLI
+  does not need it). The tools are generated from the CLI itself; 35 common ones are listed,
+  the rest are found through `find_tool` / `describe_tool` / `run_tool`. Commands that remove or
+  ripple run as a dry run unless the call says `confirm: true`; one broker connection per server
+  makes a call cost milliseconds; the pairing token is scrubbed from every reply. **Generic
+  operations:** `apply_ops` runs whitelisted small edits (markers, clip name and disabled state,
+  static param values, sequence in/out and playhead, track and bin names) in one transaction with
+  one undo step, each read back (live: one Ctrl+Z undid 11 of them); `query` reads the same things.
+  **Faster CLI:** about twice as fast to start (live on 27.1: `ping` 0.25–0.32 s instead of 0.55 s;
+  a standard-library WebSocket client, commands loaded on use).
+  **Update notice:** the broker asks GitHub at most once a day whether a newer release is out (one
+  HTTPS request, nothing about the machine or projects sent; off with `PPRO_UPDATE_CHECK=0` or
+  `settings.json`); the panel shows "0.7.1 available · View · Skip this version", and ping, doctor,
+  the setup window and the problem report say it too. **Help:** the panel's "Copy a problem
+  report" (the report in a box: click it, then Ctrl+C) and a GitHub Issues link;
+  `python -m ppro_bridge.report` prints the same report (never the token, project names or media
+  paths). **Exports:** `export_aaf` (an export job: Premiere 27.1
+  stops on a modal "AAF export log" when an effect or transition cannot go into the AAF; the panel
+  keeps answering and the reply asks the user to click OK — live) and `export_xml` (Final Cut Pro 7
+  XML, no dialog — live). Fixes from real jobs: **transitions follow a ripple.** On Premiere 27.1 a
+  move dropped the moved clips' video transitions (confirmed live). `shift_items`, `cut_range`,
+  `extend_cut` and `split_clip` now read them from OTIO before their first write, put back each
+  one that went (one undo step each) and check them with a second export (`transitions`,
+  `transitionsVerified`, a warning when one is not back). At a cut with a neighbour, Premiere
+  centres an added transition even when asked for a one-sided one and drops each half that has no
+  media under it, so a one-sided fade there is added centred at twice its length when the clip
+  itself has no media on the side Premiere drops (before its in point for a fade-in) and the
+  neighbour has the fade's length of media on the side that stays; otherwise it is reported
+  `missing` with how to add it by hand (live).
+  `set_active_sequence` confirms the switch before it answers (a quick switch away and back once
+  reported success while Premiere stayed put). `set_scale --fit/--fill` and `apply_plan`'s
+  `"scale"` read a clip's rotation, so a Sony or phone clip stored 3840×2160 with a 90° rotation
+  fits and fills as the vertical picture Premiere shows (live). `import_media` and `apply_plan`
+  convert audio-only files Premiere cannot read (FLAC — a music download got a modal dialog and
+  hung the panel on 27.1 —, Opus, Vorbis) to a 48 kHz 24-bit WAV beside them and import that
+  instead, reusing a WAV of the same length (live).
 - **0.6.0** — An icon: an L-cut (the picture cutting before the
   sound) under an orange playhead on a deep purple tile (`ppro_bridge/bridge.svg`,
   `bridge.ico` with every Windows size drawn on its own pixel grid by
@@ -744,11 +868,10 @@ and Reload the panel in UXP Developer Tool.
 
 ## Roadmap
 
-- **v0.7 — MCP:** a stdio MCP server on the same `ppro_bridge` library, with a
-  generic operation layer (`apply_ops` / `query`) next to the named commands.
-- **Hardening still to do:** the panel and the broker proving the pairing token to
-  each other (today a program that answers on `localhost:8017` while no broker
-  runs gets the panel); `localFileSystem` lowered from `fullAccess` once a live test shows
+- **Next:** code signing through SignPath Foundation (`installer/SIGNING.md`); the installer putting back a
+  zip install's shortcuts when it is uninstalled (QA-9 in `SECURITY_REVIEW.md`); the panel refusing to overwrite
+  an existing export by itself (DOC-9, today the CLI checks it).
+- **Hardening still to do:** `localFileSystem` lowered from `fullAccess` once a live test shows
   Premiere's import and export calls work without it; installing the `.ccx` on a
   Premiere that Creative Cloud's installer knows.
 - Later: native razor once Premiere exposes it (fewer undo steps than clone + trim),

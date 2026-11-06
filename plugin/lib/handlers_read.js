@@ -1,6 +1,6 @@
 /*
  * handlers_read: read-only actions (project / sequence info, timeline items, effect chains,
- * project items, frame and OTIO export, transition names), plus set_active_sequence (switches the
+ * project items, frame, OTIO, AAF and FCP XML export, transition names), plus set_active_sequence (switches the
  * Timeline) and select_items (sets the Timeline selection): both change nothing in the project.
  * Factory module returning {actionName: async function (params, ctx)}.
  * deps: { ppro, core, timeline, projectLib, effects, exportJobs }
@@ -18,6 +18,80 @@ module.exports = function (deps) {
   const EPS = core.EPS;
   const TICKS_PER_SECOND = core.TICKS_PER_SECOND;
   const EXPORT_EARLY_MS = 1000;  // export_sequence {wait: false} waits this long for an early failure (or the end)
+  const AAF_HINT_MS = 3000;      // an AAF job still running this long may be held by Premiere's modal export log
+  const AAF_HINT = "Premiere may be showing its \"AAF export log\" window (an effect or transition that cannot go " +
+    "into the AAF): exportAAF does not return until someone clicks OK there. Ask the user to click OK in Premiere.";
+  // export_aaf params -> [AAFExportOptions setter]; audioFormat is mapped to Constants.AAFExportAudioFormat
+  const AAF_OPTIONS = [
+    ["embedAudio", "setEmbedAudio"], ["audioFormat", "setAudioFileFormat"], ["sampleRate", "setSampleRate"],
+    ["bitsPerSample", "setBitsPerSample"], ["handleFrames", "setHandleFrames"], ["mixdownVideo", "setMixdownVideo"],
+    ["renderAudioEffects", "setRenderAudioEffects"], ["trimSources", "setTrimSources"],
+  ];
+  // AAFExportOptions getters (27.1 api dump), read back after the setters ran
+  const AAF_GETTERS = ["audioFileFormat", "bitsPerSample", "embedAudio", "explodeToMono", "handleFrames",
+    "interleaveWithoutEffects", "mixdownVideo", "preserveParentFolder", "renderAudioEffects", "sampleRate",
+    "trimSources", "videoMixdownPresetPath"];
+
+  /* One export at a time: export_sequence and export_aaf refuse while a job of this panel still runs. */
+  function refuseBusy() {
+    const busy = exportJobs.busy();
+    if (!busy) return;
+    const aaf = busy.kind === "aaf";
+    const doing = aaf ? "exporting an AAF to" : "rendering";
+    const pending = busy.state === "running" ? "" : ", its export call has not returned";
+    throw new BridgeError("EXPORT_RUNNING", `Export job ${busy.jobId} is still ${doing} ${busy.outputPath} ` +
+      `(${busy.state}${pending}): wait for it (export_status), or Reload the panel if Premiere is no longer ` +
+      "exporting." + (aaf ? " " + AAF_HINT : ""),
+      { data: { jobId: busy.jobId, outputPath: busy.outputPath, state: busy.state, kind: busy.kind || "render" } });
+  }
+
+  /* Constants.AAFExportAudioFormat (27.1: AIFF 0, WAV 1), else ProjectConverter's statics, else those numbers. */
+  function aafAudioFormat(name) {
+    const key = name === "aiff" ? "AIFF" : "WAV";
+    for (const v of [core.tryGetSync(() => ppro.Constants.AAFExportAudioFormat[key]),
+      core.tryGetSync(() => ppro.ProjectConverter[`AAF_EXPORT_AUDIO_FORMAT_${key}`])]) {
+      if (typeof v === "number") return v;
+    }
+    return key === "AIFF" ? 0 : 1;
+  }
+
+  /* An AAFExportOptions with the requested options applied through their setters, as api_smoke's converter case
+   * passes one (null when this build has no such class and none was asked for).
+   * -> { options, set: [param names], values: {getter: value read back} }. A setter the build lacks is UNSUPPORTED,
+   * one that throws BAD_PARAMS: both before anything is exported. */
+  function aafOptions(params) {
+    const asked = AAF_OPTIONS.filter(([p]) => params[p] !== undefined && params[p] !== null);
+    if (typeof ppro.AAFExportOptions !== "function") {
+      if (asked.length) {
+        throw new BridgeError("UNSUPPORTED", `This Premiere build has no AAFExportOptions, so ` +
+          `${asked.map((a) => a[0]).join(", ")} cannot be set: export without them (Premiere's defaults).`);
+      }
+      return { options: null, set: [], values: {} };
+    }
+    let options;
+    try { options = new ppro.AAFExportOptions(); } catch (e) {
+      throw new BridgeError("UNSUPPORTED", `new AAFExportOptions() failed: ${core.errorMessage(e)}`);
+    }
+    const set = [];
+    for (const [param, setter] of asked) {
+      if (!core.isFn(options, setter)) {
+        throw new BridgeError("UNSUPPORTED", `AAFExportOptions.${setter} is not available on this Premiere build ` +
+          `(${param}); nothing was exported.`);
+      }
+      const value = param === "audioFormat" ? aafAudioFormat(params[param]) : params[param];
+      try { options[setter](value); } catch (e) {
+        throw new BridgeError("BAD_PARAMS", `AAFExportOptions.${setter}(${JSON.stringify(value)}) threw: ` +
+          `${core.errorMessage(e)}; nothing was exported.`);
+      }
+      set.push(param);
+    }
+    const values = {};
+    for (const g of AAF_GETTERS) {
+      const v = core.tryGetSync(() => options[g]);
+      if (v === null || ["number", "boolean", "string"].indexOf(typeof v) >= 0) values[g] = v;
+    }
+    return { options, set, values };
+  }
 
   return {
     /* Basic project info (+ guid where the build has one). */
@@ -330,13 +404,7 @@ module.exports = function (deps) {
       core.requireText(params, ["outputPath", "presetPath"]);
       const { project, sequence } = await core.requireSequence(ctx);
       const preset = params.presetPath;
-      const busy = exportJobs.busy();
-      if (busy) {
-        throw new BridgeError("EXPORT_RUNNING", `Export job ${busy.jobId} is still rendering ${busy.outputPath} ` +
-          `(${busy.state}${busy.state === "running" ? "" : ", exportSequence has not returned"}): wait for it ` +
-          "(export_status), or Reload the panel if Premiere is no longer rendering.",
-          { data: { jobId: busy.jobId, outputPath: busy.outputPath, state: busy.state } });
-      }
+      refuseBusy();
       const em = ppro.EncoderManager.getManager();
       const types = ppro.Constants && ppro.Constants.ExportType;
       const type = types && types.IMMEDIATELY !== undefined ? types.IMMEDIATELY : ppro.EncoderManager.EXPORT_IMMEDIATELY;
@@ -390,6 +458,72 @@ module.exports = function (deps) {
         return { jobs: [exportJobs.view(job)] };
       }
       return { jobs: exportJobs.all().map((j) => exportJobs.view(j)) };
+    },
+
+    /*
+     * Export the active sequence as an AAF (ProjectConverter.exportAAF, with an AAFExportOptions whose requested
+     * options are applied through their setters), as an export job like export_sequence {wait: false}: the reply
+     * comes once exportAAF settled, or after EXPORT_EARLY_MS with state "running" (poll export_status). 27.1 b21:
+     * when an effect or transition cannot go into the AAF, Premiere opens a MODAL "AAF export log" and exportAAF does
+     * not return until someone clicks OK, so the job keeps running and its view carries a hint after AAF_HINT_MS.
+     * Whether this panel keeps answering while that window is up is NOT measured (it did during long renders).
+     * false or a throw within the early window is EXPORT_FAILED and no job; one export at a time (EXPORT_RUNNING).
+     * params: { outputPath, embedAudio?, audioFormat? "wav" | "aiff", sampleRate?, bitsPerSample?, handleFrames?,
+     *           mixdownVideo?, renderAudioEffects?, trimSources? }
+     */
+    async export_aaf(params, ctx) {
+      core.requireText(params, ["outputPath"]);
+      const { sequence } = await core.requireSequence(ctx);
+      refuseBusy();
+      if (!ppro.ProjectConverter || !core.isFn(ppro.ProjectConverter, "exportAAF")) {
+        throw new BridgeError("UNSUPPORTED", "ProjectConverter.exportAAF is not available on this Premiere build.");
+      }
+      const { options, set, values } = aafOptions(params);
+      const job = exportJobs.create({ kind: "aaf", call: "exportAAF", outputPath: params.outputPath, preset: null,
+        workAreaOnly: false, sequence: core.tryGetSync(() => sequence.name), options: { set, values },
+        hint: AAF_HINT, hintAfterMs: AAF_HINT_MS });
+      let promise;
+      try {
+        promise = Promise.resolve(options ? ppro.ProjectConverter.exportAAF(sequence, params.outputPath, options)
+          : ppro.ProjectConverter.exportAAF(sequence, params.outputPath));
+      } catch (e) {
+        exportJobs.remove(job);
+        throw new BridgeError("EXPORT_FAILED", `exportAAF failed (${core.errorMessage(e)})`);
+      }
+      const settled = exportJobs.track(job, promise);
+      let timer = null;
+      await Promise.race([settled, new Promise((resolve) => { timer = setTimeout(resolve, EXPORT_EARLY_MS); })]);
+      clearTimeout(timer);
+      if (job.state === "failed" || job.state === "cancelled") {  // refused at once: no job
+        exportJobs.remove(job);
+        throw new BridgeError("EXPORT_FAILED", job.error);
+      }
+      return { exported: job.state === "done", outputPath: params.outputPath, jobId: job.jobId, started: true,
+        state: job.state, optionsSet: set, optionValues: values };
+    },
+
+    /*
+     * Export the active sequence as Final Cut Pro 7 XML (ProjectConverter.exportAsFinalCutProXML(sequence, path,
+     * true): the last argument suppresses Premiere's UI, so no dialog). Synchronous; false is EXPORT_FAILED. Refused
+     * while an AAF job runs (its modal log may be up).   params: { outputPath }
+     */
+    async export_xml(params, ctx) {
+      core.requireText(params, ["outputPath"]);
+      const { sequence } = await core.requireSequence(ctx);
+      const busy = exportJobs.busy();
+      if (busy && busy.kind === "aaf") refuseBusy();
+      if (!ppro.ProjectConverter || !core.isFn(ppro.ProjectConverter, "exportAsFinalCutProXML")) {
+        throw new BridgeError("UNSUPPORTED", "ProjectConverter.exportAsFinalCutProXML is not available on this " +
+          "Premiere build.");
+      }
+      let ok;
+      try {
+        ok = await ppro.ProjectConverter.exportAsFinalCutProXML(sequence, params.outputPath, true);
+      } catch (e) {
+        throw new BridgeError("EXPORT_FAILED", `exportAsFinalCutProXML failed (${core.errorMessage(e)})`);
+      }
+      if (!ok) throw new BridgeError("EXPORT_FAILED", `exportAsFinalCutProXML returned ${ok}`);
+      return { exported: true, outputPath: params.outputPath };
     },
 
     /* Video transition match names available in this Premiere (e.g. "AE.Impact_Film_Dissolve"). */

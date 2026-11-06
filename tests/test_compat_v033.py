@@ -25,6 +25,8 @@ NODE = shutil.which("node")
 
 
 def py_in_cli(code: str, **extra_env) -> subprocess.CompletedProcess:
+    # cli/ goes on sys.path explicitly: the installer's Python (a ._pth: isolated) does not add the current folder
+    code = f"import sys; sys.path.insert(0, {str(CLI)!r})\n" + code
     return subprocess.run([sys.executable, "-c", code], cwd=CLI, env=env(**extra_env), capture_output=True,
                           text=True, encoding="utf-8", timeout=60)
 

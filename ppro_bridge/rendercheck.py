@@ -33,7 +33,7 @@ import time
 from array import array
 from pathlib import Path
 
-from . import framegrid, frames, review
+from . import framegrid, frames, paths, review
 from .errors import BridgeError
 
 RATE = review.RATE        # analysis sample rate (16 kHz)
@@ -206,7 +206,7 @@ def check(rpc, pieces: list[dict], *, out_dir=None, preset=None, source=None, ex
     cannot run raises (BridgeError from export_sequence / ffmpeg)."""
     started = time.monotonic()
     # absolute: the panel hands export_frame's dir to Premiere, which resolves a relative one against its own cwd
-    directory = Path(out_dir).expanduser().resolve() if out_dir else Path(tempfile.mkdtemp(prefix="ppro_render_check_"))
+    directory = paths.resolved(out_dir) if out_dir else Path(tempfile.mkdtemp(prefix="ppro_render_check_"))
     directory.mkdir(parents=True, exist_ok=True)
     seq = rpc("get_sequence")
     duration = float(seq.get("durationSeconds") or 0.0)

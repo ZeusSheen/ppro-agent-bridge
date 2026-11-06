@@ -17,7 +17,7 @@ import json
 import re
 from pathlib import Path
 
-from . import panelhash
+from . import panelhash, paths
 
 REPO = Path(__file__).resolve().parent.parent
 PLUGIN_DIR = REPO / "plugin"
@@ -155,8 +155,9 @@ def package_files(plugin_dir=PLUGIN_DIR, dev=False, plugin_id=None, name=None) -
 
 
 def launcher_bytes(start_script) -> bytes:
-    """launcher.json: the absolute path of start_bridge.bat (ASCII JSON, LF)."""
-    return (json.dumps({"path": str(Path(start_script).resolve())}) + "\n").encode("ascii")
+    """launcher.json: the absolute path of start_bridge.bat (ASCII JSON, LF). A checkout on a mapped drive keeps its
+    drive letter (paths.resolved): the panel opens only a local path, never the share's UNC form."""
+    return (json.dumps({"path": str(paths.resolved(start_script))}) + "\n").encode("ascii")
 
 
 def package_name(manifest: dict, version: str) -> str:

@@ -118,10 +118,11 @@ class DevLoaderTest(unittest.TestCase):
 
         async def go():
             stop = asyncio.Event()
-            with mock.patch.object(devloader, "RETRY_SECONDS", 0.05), mock.patch.object(devloader, "find_udt",
-                                                                                       return_value=None):
+            with mock.patch.object(devloader, "RETRY_SECONDS", 0.05), mock.patch.object(devloader, "PREMIERE_POLL", 0.05), \
+                    mock.patch.object(devloader, "find_udt", return_value=None):
                 task = asyncio.create_task(devloader.watch(self.plugin, free_port(), start=True,
-                                                           on_event=events.append, stop=stop))
+                                                           on_event=events.append, stop=stop,
+                                                           processes=lambda: {100}))
                 await asyncio.sleep(0.3)
                 stop.set()
                 await asyncio.wait_for(task, 5)
@@ -264,41 +265,262 @@ class DevLoaderTest(unittest.TestCase):
             self.assertEqual(kw["startupinfo"].wShowWindow, 7)
 
     def test_watch_does_not_start_udt_for_an_installed_panel(self):
-        events, starts, state = [], [], {"value": {"busy": False, "codeHash": None, "packaged": True}}
-
-        asked = []
+        events, starts, stops = [], [], []
+        state = {"value": {"busy": False, "codeHash": None, "packaged": True}}
+        pids = {"value": {100}}
 
         async def panel_state():
-            asked.append(1)
             return state["value"]
 
         async def go():
             stop = asyncio.Event()
             task = asyncio.create_task(devloader.watch(self.plugin, free_port(), start=True, on_event=events.append,
-                                                       stop=stop, panel_state=panel_state))
-            for _ in range(100):  # several retries while the installed panel is connected
-                if sum(e.get("state") == "not-needed" for e in events) and len(asked) >= 3:
-                    break
+                                                       stop=stop, panel_state=panel_state,
+                                                       processes=lambda: pids["value"]))
+            for _ in range(60):  # several polls while the installed panel is connected
                 await asyncio.sleep(0.05)
             self.assertEqual(starts, [])
-            state["value"] = None  # Premiere quit: the panel is gone, so UDT is needed again
+            state["value"] = None  # Premiere quit, and started again without its panel: UDT is needed again
+            pids["value"] = {200}
             for _ in range(100):
-                if starts:
+                if stops:
                     break
                 await asyncio.sleep(0.05)
             stop.set()
             await asyncio.wait_for(task, 5)
 
-        # UDT's service is down (refused at once: a closed port on Windows takes ~2 s to refuse)
-        with mock.patch.object(devloader, "RETRY_SECONDS", 0.05), mock.patch.object(devloader, "LOAD_GRACE", 0.1), \
+        with mock.patch.object(devloader, "PREMIERE_POLL", 0.05), mock.patch.object(devloader, "LOAD_GRACE", 0.1), \
+                mock.patch.object(devloader, "STARTUP_GRACE", 0.1), mock.patch.object(devloader, "UDT_START_WAIT", 0.3), \
                 mock.patch.object(devloader, "find_udt", return_value=Path("udt.exe")), \
-                mock.patch.object(devloader, "start_udt", side_effect=starts.append), \
-                mock.patch.object(websockets, "connect", side_effect=ConnectionRefusedError):
+                mock.patch.object(devloader, "start_udt", side_effect=lambda exe: starts.append(exe) or "proc"), \
+                mock.patch.object(devloader, "stop_udt", side_effect=lambda proc: stops.append(proc)):
             asyncio.run(go())
         not_needed = [e for e in events if e.get("state") == "not-needed"]
-        self.assertEqual(len(not_needed), 1)  # said once, not every retry
+        self.assertEqual(len(not_needed), 1)  # said once, not every poll
         self.assertIn("Not starting UXP Developer Tool: an installed", devloader.describe(not_needed[0]))
         self.assertEqual(starts, [Path("udt.exe")])
+        self.assertEqual(stops, ["proc"])  # it never came up: closed again all the same
+
+
+class UdtWindowTest(unittest.TestCase):
+    """RA-5: UXP Developer Tool's service takes any WebSocket (no Origin check, no credential) and can load any folder
+    into Premiere, so the bridge runs it only while it loads the panel: started for a Premiere process it has not
+    handled, closed once the panel answers (or the load failed), started again for a Premiere that starts later; a
+    UDT the user opened is followed as before and never closed. A stand-in UDT on a free port (never 14001) that
+    "starts" when start_udt is called and goes away when stop_udt is; a fake process list."""
+
+    def setUp(self):
+        import logging
+        quiet = logging.getLogger("websockets")  # service_up's bare TCP probe makes the stand-in log a failed handshake
+        level, quiet.level = quiet.level, logging.CRITICAL
+        self.addCleanup(setattr, quiet, "level", level)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.plugin = Path(self.tmp.name) / "plugin"
+        self.plugin.mkdir()
+        (self.plugin / "manifest.json").write_text(json.dumps({"id": "org.pproagentbridge.panel"}), encoding="utf-8")
+        for name in ("index.html", "main.js"):
+            (self.plugin / name).write_text(name, encoding="utf-8")
+        self.mine = panelhash.code_hash(self.plugin)
+        self.port = free_port()
+        self.events, self.starts, self.stops = [], [], []
+        self.pids = {100}
+        self.panel = None  # what the broker sees: None until a load "registers" the panel
+
+    def fake_udt(self, udt):
+        """start_udt / stop_udt for a stand-in UDT: start serves `udt` on self.port, stop closes it."""
+        test = self
+
+        class Proc:
+            pid = None  # stop_udt must use the object start_udt returned, never a name
+
+        def start(exe):
+            loop = asyncio.get_running_loop()
+            proc = Proc()
+            test.starts.append(exe)
+
+            async def serve():
+                proc.server = await websockets.serve(udt.handler, "127.0.0.1", test.port)
+            proc.task, proc.loop = loop.create_task(serve()), loop
+            return proc
+
+        def stop(proc):  # called in a worker thread (asyncio.to_thread), like the real taskkill
+            test.stops.append(proc)
+            proc.loop.call_soon_threadsafe(proc.server.close)
+            return None
+
+        return start, stop
+
+    def run_watch(self, udt, script, user_udt=False, **patches):
+        start, stop = self.fake_udt(udt)
+
+        async def panel_state():
+            return self.panel
+
+        async def on_load_reply():  # the panel registers a moment after a load succeeds
+            while True:
+                if udt.loads and self.panel is None and len(udt.loads) > self.loaded:
+                    self.loaded = len(udt.loads)
+                    await asyncio.sleep(0.1)
+                    self.panel = {"busy": False, "codeHash": self.mine, "packaged": False}
+                await asyncio.sleep(0.02)
+
+        async def go():
+            self.loaded = 0
+            stop_event = asyncio.Event()
+            server = await websockets.serve(udt.handler, "127.0.0.1", self.port) if user_udt else None
+            helper = asyncio.create_task(on_load_reply())
+            task = asyncio.create_task(devloader.watch(self.plugin, self.port, start=True, on_event=self.events.append,
+                                                       stop=stop_event, panel_state=panel_state,
+                                                       processes=lambda: set(self.pids)))
+            try:
+                await script()
+            finally:
+                stop_event.set()
+                await asyncio.wait_for(task, 10)
+                helper.cancel()
+                if server is not None:
+                    server.close()
+
+        values = dict(PREMIERE_POLL=0.05, LOAD_GRACE=0.2, STARTUP_GRACE=0.2, RETRY_SECONDS=0.05, UDT_START_WAIT=3,
+                      PREMIERE_CONNECT_WAIT=3, ANSWER_WAIT=3, CLOSE_WAIT=2)
+        values.update(patches)
+        with mock.patch.multiple(devloader, find_udt=mock.Mock(return_value=Path("udt.exe")), start_udt=start,
+                                 stop_udt=stop, **values):
+            asyncio.run(go())
+
+    async def until(self, check, seconds=8):
+        deadline = asyncio.get_running_loop().time() + seconds
+        while not check():
+            if asyncio.get_running_loop().time() > deadline:
+                raise AssertionError(f"timed out; events: {self.events}")
+            await asyncio.sleep(0.02)
+
+    def states(self):
+        return [e.get("state") for e in self.events if e.get("event") == "udt"]
+
+    def test_started_for_the_load_then_closed_and_again_for_a_new_premiere(self):
+        udt = FakeUdt({7: PREMIERE})
+
+        async def script():
+            await self.until(lambda: self.stops)  # loaded, answered, closed
+            self.assertFalse(devloader.service_up(self.port))  # 14001's stand-in is gone again
+            await asyncio.sleep(0.3)
+            self.assertEqual(len(self.starts), 1)  # nothing new: UDT stays closed
+            self.pids, self.panel = {200}, None    # Premiere quit and started again (a new process, no panel)
+            await self.until(lambda: len(self.stops) == 2)
+
+        self.run_watch(udt, script)
+        self.assertEqual((len(self.starts), len(self.stops), [m["clientId"] for m in udt.loads]), (2, 2, [7, 7]))
+        closed = [e for e in self.events if e.get("state") == "closed"]
+        self.assertEqual([e["reason"] for e in closed], ["the panel is loaded and answering"] * 2)
+        self.assertIn("Closed the UXP Developer Tool the bridge started (the panel is loaded and answering).",
+                      devloader.describe(closed[0]))
+        self.assertEqual(self.states().count("starting"), 2)
+
+    def test_a_failed_load_closes_it_too(self):
+        udt = FakeUdt({7: PREMIERE}, reply={"error": "Plugin validation failed"})
+
+        async def script():
+            await self.until(lambda: self.stops)
+            await asyncio.sleep(0.3)  # the same Premiere is not retried: no flapping UDT
+
+        self.run_watch(udt, script)
+        self.assertEqual((len(self.starts), len(self.stops)), (1, 1))
+        self.assertEqual([e for e in self.events if e.get("state") == "closed"][0]["reason"], "the load failed")
+        self.assertEqual([e["ok"] for e in self.events if e.get("event") == "load"], [False])
+
+    def test_a_premiere_that_never_connects_does_not_keep_udt_open(self):
+        udt = FakeUdt({8: PHOTOSHOP})
+
+        async def script():
+            await self.until(lambda: self.stops)
+
+        self.run_watch(udt, script, PREMIERE_CONNECT_WAIT=0.3)
+        failed = [e for e in self.events if e.get("event") == "load"]
+        self.assertIn("did not connect to UXP Developer Tool", failed[0]["error"])
+        self.assertEqual([e["reason"] for e in self.events if e.get("state") == "closed"],
+                         ["Premiere did not connect to it"])
+
+    def test_no_udt_for_a_panel_that_needs_no_load(self):
+        self.panel = {"busy": False, "codeHash": self.mine, "packaged": False}  # its Start bridge button started us
+
+        async def script():
+            await asyncio.sleep(0.6)
+
+        self.run_watch(FakeUdt({7: PREMIERE}), script)
+        self.assertEqual((self.starts, self.stops), ([], []))
+        self.assertEqual(self.states(), ["not-needed"])
+
+    def test_a_udt_the_user_opened_is_followed_and_never_closed(self):
+        udt = FakeUdt({7: PREMIERE})
+
+        async def script():
+            await self.until(lambda: udt.loads and self.panel)
+            self.panel = None  # Premiere restarted while the user's UDT runs: its panel is gone, loaded as before
+            await udt.announce(9, PREMIERE)
+            await self.until(lambda: len(udt.loads) == 2)
+
+        self.run_watch(udt, script, user_udt=True)
+        self.assertEqual((self.starts, self.stops), ([], []))
+        self.assertNotIn("closed", self.states())
+
+    def test_stopping_the_broker_closes_a_udt_it_started(self):
+        udt = FakeUdt({})  # Premiere never connects: the broker stops meanwhile
+
+        async def script():
+            await self.until(lambda: self.starts)
+            await asyncio.sleep(0.2)
+
+        self.run_watch(udt, script, PREMIERE_CONNECT_WAIT=30)
+        self.assertEqual(len(self.stops), 1)
+        self.assertEqual([e["reason"] for e in self.events if e.get("state") == "closed"], ["the broker is stopping"])
+
+    def test_cancelling_the_watch_closes_a_udt_it_started(self):
+        """broker.py stops its loader with task.cancel(): the UDT it started is ended on the way out too."""
+        start, stop = self.fake_udt(FakeUdt({}))
+
+        async def go():
+            task = asyncio.create_task(devloader.watch(self.plugin, self.port, start=True, on_event=self.events.append,
+                                                       processes=lambda: {100}))
+            await self.until(lambda: self.starts)
+            await asyncio.sleep(0.2)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        with mock.patch.multiple(devloader, find_udt=mock.Mock(return_value=Path("udt.exe")), start_udt=start,
+                                 stop_udt=stop, PREMIERE_POLL=0.05, LOAD_GRACE=0.1, STARTUP_GRACE=0.1, CLOSE_WAIT=1,
+                                 PREMIERE_CONNECT_WAIT=30):
+            asyncio.run(go())
+        self.assertEqual(len(self.stops), 1)
+        self.assertEqual([e["reason"] for e in self.events if e.get("event") == "udt" and "reason" in e],
+                         ["the broker is stopping"])
+
+    def test_process_list_and_closing(self):
+        listing = ('"Adobe Premiere Pro (Beta).exe","20708","Console","17","6,076,212 K"\n'
+                   '"Adobe Premiere Pro.exe","123","Console","17","1,000 K"\n'
+                   '"Adobe Premiere Pro Helper.exe","124","Console","17","1 K"\n'
+                   'INFO: No tasks are running which match the specified criteria.\n')
+        self.assertEqual(devloader.parse_tasklist(listing), {20708, 123})
+        self.assertEqual(devloader.parse_tasklist(""), set())
+        calls = []
+
+        def run(args, **kw):
+            calls.append(args)
+            return mock.Mock(stdout=listing)
+
+        if devloader.os.name == "nt":
+            self.assertEqual(devloader.premiere_pids(run), {20708, 123})
+            self.assertEqual(calls[0][:4], ["tasklist", "/FO", "CSV", "/NH"])
+            with mock.patch.object(devloader.subprocess, "run", return_value=mock.Mock(returncode=0)) as taskkill:
+                self.assertIsNone(devloader.stop_udt(mock.Mock(pid=4242)))
+            self.assertEqual(taskkill.call_args[0][0], ["taskkill", "/PID", "4242", "/T", "/F"])  # by PID, never name
+            with mock.patch.object(devloader.subprocess, "run", return_value=mock.Mock(returncode=128)):
+                self.assertIsNone(devloader.stop_udt(mock.Mock(pid=4242)))  # already gone
+        self.assertIsNone(devloader.stop_udt(None))
 
 
 if __name__ == "__main__":

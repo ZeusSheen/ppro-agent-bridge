@@ -1,0 +1,121 @@
+# Python packages the installer bundles into its own Python, pinned by version and SHA-256. Read by
+# scripts/build_installer.py, which runs pip with --require-hashes --only-binary :all: --platform win_amd64
+# --python-version 3.14 --implementation cp --abi cp314 (python.lock.json says which). Wheels are downloaded only
+# with --download; every wheel in the build cache is checked against these hashes before pip runs, and pip checks
+# them again.
+#
+# "# group: NAME" starts a group. core is always bundled: websockets (broker, CLI) and pip (the setup window's
+# Install Pillow / faster-whisper buttons run `python -m pip`). mcp is bundled with --with-mcp: the MCP Python SDK
+# that `python -m ppro_bridge.mcp` needs. Each group lists its whole dependency closure for CPython 3.14 on Windows
+# (environment markers evaluated), so pip has nothing left to resolve; a group must not repeat another's package.
+#
+# Versions: the ones installed and tested on the maintainer's machine on 2026-11-06 (websockets 16.1, mcp 2.3.0,
+# Python 3.12). Hashes: computed that day from those wheels in the machine's pip cache, the bytes pip had downloaded
+# from PyPI and checked against PyPI's published hashes. The same day the bundle moved to CPython 3.14 (DOC-3) and
+# pip to 26.3 (DOC-4: 25.3 has advisories fixed in 26.x): the five binary wheels' cp314 builds and pip 26.3 took the
+# SHA-256 PyPI's JSON API publishes for those files (/pypi/<name>/<version>/json); the pure-Python wheels are the
+# same files as before. Tested on 3.14 by the release workflow (.github/workflows/release.yml, "Run the test suite
+# under the bundled Python"): the whole suite runs with the staged python\python.exe and these wheels before the
+# installer is uploaded or signed (QA-2). To change a pin, take the hash from the file's PyPI page
+# ("view hashes") or from `pip download` + `pip hash` on a trusted machine, never from a mirror, and keep each
+# package's wheel file name in the comment under it.
+
+# group: core
+websockets==16.1 \
+    --hash=sha256:7358ff21632b5d062707f73e859c824f1c3807e73d8ca25e71caca7c4cdcf145
+    # websockets-16.1-cp314-cp314-win_amd64.whl (180167 bytes)
+pip==26.3 \
+    --hash=sha256:f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13
+    # pip-26.3-py3-none-any.whl (1950951 bytes)
+
+# group: mcp
+annotated-types==0.8.0 \
+    --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
+    # annotated_types-0.8.0-py3-none-any.whl (13427 bytes)
+anyio==4.14.2 \
+    --hash=sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494
+    # anyio-4.14.2-py3-none-any.whl (125813 bytes)
+attrs==26.1.0 \
+    --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
+    # attrs-26.1.0-py3-none-any.whl (67548 bytes)
+cffi==2.1.1 \
+    --hash=sha256:3222ba5d678f80a030e6afbcc33dc1ae5cb45facabb61cee2c7016b8432fde48
+    # cffi-2.1.1-cp314-cp314-win_amd64.whl (187949 bytes)
+click==8.4.2 \
+    --hash=sha256:e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76
+    # click-8.4.2-py3-none-any.whl (119243 bytes)
+colorama==0.4.6 \
+    --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
+    # colorama-0.4.6-py2.py3-none-any.whl (25335 bytes)
+cryptography==50.0.2 \
+    --hash=sha256:7afa5a6602a9f29af1f3a2965f831bae7c9d5d597b7cbb716d41ab3b7d89879c
+    # cryptography-50.0.2-cp311-abi3-win_amd64.whl (3824692 bytes)
+h11==0.16.0 \
+    --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
+    # h11-0.16.0-py3-none-any.whl (37515 bytes)
+httpcore2==2.16.0 \
+    --hash=sha256:5c4358319f2602d984ad93182c9fee5160f22e9da7babdda870a5e7c4e2dc34f
+    # httpcore2-2.16.0-py3-none-any.whl (85070 bytes)
+httpx2==2.16.0 \
+    --hash=sha256:fd2c5d7909e8d86fe92d53020c310ca0e4e431b838c207c5754b9bbf0308d49a
+    # httpx2-2.16.0-py3-none-any.whl (97880 bytes)
+idna==3.20 \
+    --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+    # idna-3.20-py3-none-any.whl (69583 bytes)
+jsonschema==4.26.0 \
+    --hash=sha256:d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce
+    # jsonschema-4.26.0-py3-none-any.whl (90630 bytes)
+jsonschema-specifications==2025.9.1 \
+    --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe
+    # jsonschema_specifications-2025.9.1-py3-none-any.whl (18437 bytes)
+mcp==2.3.0 \
+    --hash=sha256:dd0c44c089d16453e8ae31a3877a0054d7a2314caaa81f5e0541b9b1734b2377
+    # mcp-2.3.0-py3-none-any.whl (368664 bytes)
+mcp-types==2.3.0 \
+    --hash=sha256:968efdbdaedfab06adae40d378a34395f1090c5921d4be3c9cde283aaf76d91d
+    # mcp_types-2.3.0-py3-none-any.whl (69108 bytes)
+opentelemetry-api==1.45.2 \
+    --hash=sha256:2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34
+    # opentelemetry_api-1.45.2-py3-none-any.whl (60335 bytes)
+pycparser==2.22 \
+    --hash=sha256:c3702b6d3dd8c7abc1afa565d7e63d53a1d0bd86cdc24edd75470f4de499cfcc
+    # pycparser-2.22-py3-none-any.whl (117552 bytes)
+pydantic==2.14.3 \
+    --hash=sha256:3f7b347782ab7e4cf4c798496ae3a82787d9f21ec12676a9c564355eeef8daa8
+    # pydantic-2.14.3-py3-none-any.whl (494071 bytes)
+pydantic-core==2.50.4 \
+    --hash=sha256:b0cdb655fbd1562c2dfc9986f9103a106f7058cd0915afc6e656d4b1d73f3387
+    # pydantic_core-2.50.4-cp314-cp314-win_amd64.whl (2265109 bytes)
+pyjwt==2.15.1 \
+    --hash=sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193
+    # PyJWT-2.15.1-py3-none-any.whl (33860 bytes)
+python-multipart==0.0.33 \
+    --hash=sha256:8f16c07b36add9da6b2ee87d3efcaf0a45a6de9c3d0a5dd94e9ccf7675a7bc45
+    # python_multipart-0.0.33-py3-none-any.whl (32253 bytes)
+pywin32==312 \
+    --hash=sha256:a4dd3a848290ef724347b19f301045831d8e802fa4464f491b98b1e0a081432e
+    # pywin32-312-cp314-cp314-win_amd64.whl (7024157 bytes)
+referencing==0.37.0 \
+    --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231
+    # referencing-0.37.0-py3-none-any.whl (26766 bytes)
+rpds-py==2026.9.1 \
+    --hash=sha256:837c6b305e26fe0f75b15c92cf3b2ba29e0ae19dc40b1c557b026cb426347d0c
+    # rpds_py-2026.9.1-cp314-cp314-win_amd64.whl (222852 bytes)
+sse-starlette==3.6.0 \
+    --hash=sha256:e4dfa4d237d2712cb2b4d4918eda9b457cd6b44bbecdc838af75de836565bafd
+    # sse_starlette-3.6.0-py3-none-any.whl (17985 bytes)
+starlette==1.10.0 \
+    --hash=sha256:478c0ab3b4ced6e82719849c118fa406f0278a3499c1a898cd15cd31bdc38ce4
+    # starlette-1.10.0-py3-none-any.whl (80571 bytes)
+truststore==0.10.5 \
+    --hash=sha256:9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c
+    # truststore-0.10.5-py3-none-any.whl (19017 bytes)
+typing-extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+    # typing_extensions-4.16.0-py3-none-any.whl (45571 bytes)
+typing-inspection==0.4.5 \
+    --hash=sha256:bc210535442b39e1bf2805e0c7a17dfd6a4ace760c84c7f7d16245d23a6b1c39
+    # typing_inspection-0.4.5-py3-none-any.whl (14874 bytes)
+uvicorn==0.54.0 \
+    --hash=sha256:505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf
+    # uvicorn-0.54.0-py3-none-any.whl (87427 bytes)

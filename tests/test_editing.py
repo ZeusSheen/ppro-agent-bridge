@@ -469,7 +469,7 @@ class CutRangeTest(EditingCase):
         self.assertTrue(plan["dryRun"])
         self.assertEqual({k: self.fake.STATE[k] for k in ("video", "audio")}, before)
         self.assertEqual(self.writes(), [])
-        self.assertEqual({a for a, _ in self.calls}, {"get_sequence", "list_items"})
+        self.assertEqual({a for a, _ in self.calls}, {"get_sequence", "list_items", "export_otio"})  # B2: transitions read
         self.assertEqual([(s["track"], s["name"]) for s in plan["splits"]],
                          [("V1", "interview.mp4"), ("A1", "interview.mp4"), ("A2", "music.wav")])
         self.assertEqual(len(plan["trims"]), 2)
@@ -854,6 +854,160 @@ class ShiftItemsTest(EditingCase):
 
 
 # ---------------------------------------------------------------- conform_captions
+
+class MovedTransitionsTest(EditingCase):
+    """B2 (27.1, 5 Nov 2026): a shift_items step leaves the moved clips without their video transitions; the move
+    commands read them from OTIO first and put back the ones that went (the fake drops them as 27.1 does)."""
+    XD = "AE.ADBE Cross Dissolve New"
+
+    def setUp(self):
+        super().setUp()
+        self.set_timeline(*gap_timeline())
+        tr = lambda v, a, b, cut: {"videoTrack": v, "matchName": self.XD, "start": a, "end": b, "cut": cut}  # noqa
+        self.fake.STATE["transitions"] = [
+            tr(0, S(10) - 30 * F, S(10), S(10)),            # A's fade-out (stays with A)
+            tr(0, S(25) - 15 * F, S(25) + 15 * F, S(25)),   # B|C dissolve across the cut
+            tr(1, S(30), S(30) + 30 * F, S(30))]            # b3's fade-in
+
+    def cuts(self, v):
+        return sorted(round(t["cut"], 6) for t in self.fake.STATE["transitions"] if t["videoTrack"] == v)
+
+    def adds(self):
+        return [p for a, p in self.calls if a == "add_transition"]
+
+    def test_transitions_dropped_by_the_move_are_put_back_on_their_clips(self):
+        out = editing.shift_items(self.rpc, at=10.0, by=1.0, label="Room")
+        d = S(1.0)
+        self.assertEqual([(r["track"], r["lies"], r["status"]) for r in out["transitions"]],
+                         [("V1", "left", "kept"),  # A's fade-out stays with A, next to the moved B: checked
+                          ("V1", "shared", "restored"), ("V2", "right", "restored")])
+        self.assertTrue(out["transitionsVerified"])
+        self.assertNotIn("unexpectedTransitions", out)
+        self.assertEqual(self.cuts(0), [round(S(10), 6), round(S(25) + d, 6)])
+        self.assertEqual(self.cuts(1), [round(S(30) + d, 6)])
+        shared = next(t for t in self.fake.STATE["transitions"] if abs(t["cut"] - (S(25) + d)) < 1e-6)
+        self.assertAlmostEqual(shared["end"] - shared["start"], 30 * F, delta=1e-6)
+        self.assertAlmostEqual(shared["cut"] - shared["start"], 15 * F, delta=1e-6)  # centred again
+        self.assertEqual([(p["applyToStart"], p["forceSingleSided"]) for p in self.adds()], [(True, False), (True, True)])
+        self.assertEqual(out["undoSteps"], 3)  # the move and two transitions back
+
+    def probe(self, path):
+        """ffprobe as the tests see it: the fake project items' durations."""
+        return {"duration": next(i["duration"] for i in self.fake.STATE["items"] if i["mediaPath"] == path)}
+
+    def fade(self, cut, lies):
+        """A 15-frame one-sided fade at `cut` on V1: on the clip after it (lies right) or before it (left)."""
+        a, b = (cut, cut + 15 * F) if lies == "right" else (cut - 15 * F, cut)
+        self.fake.STATE["transitions"] = [{"videoTrack": 0, "matchName": self.XD, "start": a, "end": b, "cut": cut}]
+
+    def test_a_fade_on_a_clip_starting_at_its_first_frame_is_added_centred_at_twice_the_length(self):
+        """27.1 centres a transition added at a cut with a neighbour and drops the half no clip has media for: C starts
+        at its media's first frame, so the half before the cut goes; B has 25 s after its out point for the half
+        after it. Asked for 2n frames centred, the n frames on C are what it had (live: 6 Nov 2026)."""
+        self.fake.STATE["transitionsCentreAtNeighbours"] = True
+        c = self.fake.STATE["video"][0][2]
+        c["inPoint"], c["outPoint"] = 0.0, c["end"] - c["start"]  # C starts at its media's first frame
+        self.fade(S(25), "right")  # a fade-in on C, with B right before it
+        out = ops.shift_items(self.rpc, from_s=10.0, by=1.0, label="Room", probe_media=self.probe)  # ops passes it on
+        row = out["transitions"][0]
+        self.assertEqual((row["lies"], row["status"]), ("right", "restored"))
+        self.assertIn("twice its length (30 frames)", row["note"])
+        fade = self.fake.STATE["transitions"][0]
+        self.assertAlmostEqual(fade["end"] - fade["start"], 15 * F, delta=F / 2)
+        self.assertAlmostEqual(fade["start"], S(25) + S(1.0), delta=1e-6)
+        add, = self.adds()
+        self.assertEqual((add["applyToStart"], add["forceSingleSided"]), (True, False))
+        self.assertAlmostEqual(add["durationSeconds"], 30.1 * F, delta=1e-9)
+        self.assertNotIn("remove_transition", [a for a, _ in self.calls])
+        self.assertEqual((out["undoSteps"], out["transitionsVerified"]), (2, True))  # the move and the add
+
+    def test_a_fade_out_on_a_clip_ending_at_its_last_frame_is_added_centred_too(self):
+        self.fake.STATE["transitionsCentreAtNeighbours"] = True
+        b = self.fake.STATE["video"][0][1]
+        b["inPoint"], b["outPoint"] = 60.0 - (b["end"] - b["start"]), 60.0  # B ends at its media's last frame
+        self.fade(S(25), "left")  # a fade-out on B, with C (in point 40 s) right after it
+        out = editing.shift_items(self.rpc, at=10.0, by=1.0, label="Room", probe_media=self.probe)
+        self.assertEqual([(r["lies"], r["status"]) for r in out["transitions"]], [("left", "restored")])
+        add, = self.adds()
+        self.assertEqual((add["applyToStart"], add["forceSingleSided"]), (False, False))
+        fade = self.fake.STATE["transitions"][0]
+        self.assertAlmostEqual(fade["end"], S(25) + S(1.0), delta=1e-6)
+        self.assertAlmostEqual(fade["end"] - fade["start"], 15 * F, delta=F / 2)
+
+    def test_a_fade_on_a_clip_with_media_before_its_in_point_is_left_to_the_editor(self):
+        """C has 40 s of media before its in point: Premiere would make the fade two-sided, and a transition added
+        after a move cannot be taken off again over UXP, so nothing is added; the reason says how to do it by hand."""
+        self.fake.STATE["transitionsCentreAtNeighbours"] = True
+        self.fade(S(25), "right")
+        plan = editing.shift_items(self.rpc, at=10.0, by=1.0, label="Room", probe_media=self.probe, dry_run=True)
+        self.assertEqual((plan["transitions"][0]["readd"], plan["transitions"][0]["status"]), ("by hand", "moves"))
+        out = editing.shift_items(self.rpc, at=10.0, by=1.0, label="Room", probe_media=self.probe)
+        row = out["transitions"][0]
+        self.assertEqual((row["status"], self.adds(), out["undoSteps"]), ("missing", [], 1))
+        for words in ("40.000s of media before its in point", "two-sided", "Start at Cut", "Duration to 15 frames"):
+            self.assertIn(words, row["reason"])
+        self.assertFalse(out["transitionsVerified"])
+        self.assertIn("see transitions", out["warnings"][0])
+        # what an add would have done there (the fake models the handle): centred, two-sided
+        cut = S(25) + S(1.0)
+        self.rpc("add_transition", {"videoTrack": 0, "atSeconds": cut + 1, "matchName": self.XD,
+                                    "durationSeconds": 15.1 * F, "applyToStart": True, "forceSingleSided": True})
+        fade = self.fake.STATE["transitions"][0]
+        self.assertAlmostEqual(fade["start"], cut - 7.5 * F, delta=1e-6)
+        self.assertAlmostEqual(fade["end"], cut + 7.5 * F, delta=1e-6)
+
+    def test_a_neighbour_of_unknown_length_is_not_guessed(self):
+        self.fake.STATE["transitionsCentreAtNeighbours"] = True
+        for probe in (None, lambda path: {}):  # no probe given / ffprobe could not read the file
+            with self.subTest(probe=probe):
+                self.set_timeline(*gap_timeline())
+                c = self.fake.STATE["video"][0][2]
+                c["inPoint"], c["outPoint"] = 0.0, c["end"] - c["start"]  # then B's tail decides, and is unknown
+                self.fade(S(25), "right")
+                self.calls.clear()
+                out = editing.shift_items(self.rpc, at=10.0, by=1.0, label="Room", probe_media=probe)
+                row = out["transitions"][0]
+                self.assertEqual((row["status"], self.adds()), ("missing", []))
+                self.assertIn("unknown", row["reason"])
+
+    def test_transitions_a_move_keeps_are_left_alone(self):
+        self.fake.STATE["shiftKeepsTransitions"] = True
+        out = editing.shift_items(self.rpc, at=10.0, by=1.0, label="Room")
+        self.assertEqual([r["status"] for r in out["transitions"]], ["kept", "kept", "kept"])
+        self.assertEqual((self.adds(), out["undoSteps"], out["transitionsVerified"]), ([], 1, True))
+
+    def test_a_dissolve_across_the_cut_the_move_opens_is_reported_not_guessed(self):
+        out = editing.shift_items(self.rpc, at=25.0, by=1.0, label="Room")
+        rows = {(r["track"], r["status"]) for r in out["transitions"]}
+        self.assertEqual(rows, {("V1", "split"), ("V2", "restored")})
+        self.assertFalse(out["transitionsVerified"])
+        self.assertIn("see transitions", out["warnings"][0])
+        self.assertEqual(len(self.adds()), 1)  # only b3's fade-in
+
+    def test_dry_run_lists_them_and_writes_nothing(self):
+        plan = editing.shift_items(self.rpc, at=10.0, by=1.0, label="Room", dry_run=True)
+        self.assertEqual([r["status"] for r in plan["transitions"]], ["stays", "moves", "moves"])
+        # how each would be put back if the move drops it: no neighbour left at A's end or b3's start
+        self.assertEqual([r["readd"] for r in plan["transitions"]], ["single-sided", "two-sided", "single-sided"])
+        self.assertNotIn("transitionsVerified", plan)
+        self.assertEqual((self.writes(), self.adds()), ([], []))
+        self.assertEqual(len(self.fake.STATE["transitions"]), 3)
+
+    def test_cut_range_ripple_puts_them_back_too(self):
+        out = editing.cut_range(self.rpc, start=14.0, end=20.0, label="Cut")
+        self.assertEqual([(r["track"], r["lies"], r["status"]) for r in out["transitions"]],
+                         [("V1", "left", "kept"), ("V1", "shared", "restored"), ("V2", "right", "restored")])
+        gone = S(20) - S(14)
+        self.assertEqual(self.cuts(0), [round(S(10), 6), round(S(25) - gone, 6)])  # B's end edge went to its right piece
+        self.assertEqual(self.cuts(1), [round(S(30) - gone, 6)])
+        self.assertTrue(out["transitionsVerified"])
+
+    def test_split_clip_keeps_the_transition_on_the_clip_end(self):
+        out = editing.split_clip(self.rpc, track="V1", at=20.0, label="Split")
+        self.assertEqual(self.cuts(0), [round(S(10), 6), round(S(25), 6)])
+        self.assertTrue(out.get("transitionsVerified", True))
+        self.assertNotIn("unexpectedTransitions", out)
+
 
 class ConformCaptionsTest(EditingCase):
     def setUp(self):

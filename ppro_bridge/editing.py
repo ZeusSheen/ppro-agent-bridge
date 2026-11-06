@@ -39,7 +39,8 @@ import math
 import re
 from pathlib import Path
 
-from . import framegrid, items, rendercheck
+from . import framegrid, items, paths, rendercheck
+from . import replace as _replace
 from .errors import BridgeError
 
 CLONE_MARGIN = 10.0      # s of empty timeline between the sequence end and a parked copy
@@ -192,9 +193,12 @@ def _mid(clip: dict) -> float:
 
 
 def _clip(it: dict) -> dict:
-    return {"name": it.get("name"), "start": it.get("start"), "end": it.get("end"),
-            "inPoint": it.get("inPoint"), "outPoint": it.get("outPoint"), "speed": it.get("speed", 1),
-            "mediaPath": it.get("mediaPath"), "disabled": it.get("disabled")}
+    c = {"name": it.get("name"), "start": it.get("start"), "end": it.get("end"),
+         "inPoint": it.get("inPoint"), "outPoint": it.get("outPoint"), "speed": it.get("speed", 1),
+         "mediaPath": it.get("mediaPath"), "disabled": it.get("disabled")}
+    if it.get("mediaSeconds") is not None:  # the media's length, should list_items ever report one (_media_length)
+        c["mediaSeconds"] = it["mediaSeconds"]
+    return c
 
 
 def _speed_changed(clip: dict) -> bool:
@@ -259,6 +263,11 @@ class _Run:
         self.completed: list[str] = []   # undo labels of the writes that landed
         self.parked: list[tuple] = []    # (track key, clip) copies sitting in the parking area
         self.touched: list[tuple] = []   # (track key, clip) every clip a write made, trimmed or moved
+        self.moved: list[dict] = []      # clips a shift_items step moved (B2: their transitions are checked)
+        self.transitions: list[dict] | None = None  # video transitions read before the first write (_note_transitions)
+        self.cut_out: tuple[float, float] | None = None  # cut_range's removed [a, b): transitions there are not kept
+        self.probe_media = None  # probe_media(path) -> {duration, videoDuration, …}: neighbours' handles (B2)
+        self.lengths: dict = {}  # media path -> length in seconds (None: unknown), probed once
 
     def touch(self, key, clip: dict):
         if not any(c is clip for _, c in self.touched):
@@ -433,6 +442,9 @@ def _split(run: _Run, key, clip: dict, at: float, left_end: float | None = None)
     _trim(run, key, clip, TAIL, left_end, f"{tag} [2/5] trim end to {_t(left_end)}s")
     _trim(run, key, copy, HEAD, copy["start"] + (at - s0), f"{tag} [3/5] trim head of the copy")
     right = _clone(run, key, copy, at - copy["start"], f"{tag} [4/5] clone the copy to {_t(at)}s", parked=False)
+    for t in run.transitions or []:
+        if t["left"] is clip:  # the clip's end edge (and a transition on it) now belongs to the right piece
+            t["left"] = right
     _unpark(run, key, copy, f"{tag} [5/5] remove the parked copy")
     run.parked.remove((key, copy))
     run.check_all(tag)
@@ -450,12 +462,13 @@ def _clip_at(clips: list[dict], at: float, grid: _Grid):
     return None, None
 
 
-def _start(rpc, label: str, dry_run: bool):
+def _start(rpc, label: str, dry_run: bool, probe_media=None):
     _need_label(label)
     seq = rpc("get_sequence")
     grid = _grid_of(seq)
     model = _Timeline(rpc("list_items", {"kinds": ["video", "audio"]}))
     run = _Run(rpc, grid, model, label, dry=bool(dry_run), seq_end=float(seq.get("durationSeconds") or 0.0))
+    run.probe_media = probe_media
     return run
 
 
@@ -467,12 +480,13 @@ def _notes(run: _Run) -> list[str]:
 
 # ================================================================ split_clip
 
-def split_clip(rpc, *, kind=None, track, at, label, dry_run=False, render_check=None) -> dict:
+def split_clip(rpc, *, kind=None, track, at, label, dry_run=False, render_check=None, probe_media=None) -> dict:
     """Split the clip under `at` (sequence s, snapped to the frame grid) on one track, keeping every attribute.
     `track`: "V1" / "A2", or a 0-based index with `kind` ("video" / "audio"). At a clip edge it is a no-op.
-    `render_check(rpc, pieces) -> dict`: render-check both pieces afterwards (see _render_check)."""
+    `render_check(rpc, pieces) -> dict`: render-check both pieces afterwards (see _render_check). `probe_media(path)`:
+    media lengths for putting back a moved transition next to a neighbour (see _readd_plan)."""
     key = _track_key(track, kind)
-    run = _start(rpc, label, dry_run)
+    run = _start(rpc, label, dry_run, probe_media)
     at_s = run.grid.snap(at)
     if key not in run.model.tracks:
         raise BridgeError(f"{_label(*key)} does not exist.", code="NOT_FOUND", outcome="not_committed")
@@ -487,7 +501,9 @@ def split_clip(rpc, *, kind=None, track, at, label, dry_run=False, render_check=
     _refuse_speed([(key, clip)], "split")
     report.update(name=clip["name"], clip=_view(clip))
     try:
+        _note_transitions(run, [key])
         left, right = _split(run, key, clip, at_s)
+        _restore_transitions(run, report)
     except Exception as e:
         if run.dry or not run.completed:
             raise
@@ -503,13 +519,14 @@ def split_clip(rpc, *, kind=None, track, at, label, dry_run=False, render_check=
 # ================================================================ cut_range
 
 def cut_range(rpc, *, start, end, tracks=None, ripple=True, captions=None, label, dry_run=False,
-              render_check=None) -> dict:
+              render_check=None, probe_media=None) -> dict:
     """Remove [start, end) (sequence s, snapped) from `tracks` ("V1", "A2", … or (kind, index); default every
     track) keeping them in sync; with ripple, everything at/after `end` on those tracks moves left by end − start.
     `captions`: {"track": "V3", "srt_path": "...", "offset": 0.0} conforms that caption track afterwards
     (see conform_captions). `render_check(rpc, pieces) -> dict`: render-check every piece it split, trimmed or moved
-    afterwards (see _render_check)."""
-    run = _start(rpc, label, dry_run)
+    afterwards (see _render_check). `probe_media(path)`: media lengths for putting back a moved transition next to a
+    neighbour (see _readd_plan)."""
+    run = _start(rpc, label, dry_run, probe_media)
     grid, model = run.grid, run.model
     a, b = grid.snap(start), grid.snap(end)
     if b - a < grid.frame - 1e-9:
@@ -552,6 +569,8 @@ def cut_range(rpc, *, start, end, tracks=None, ripple=True, captions=None, label
         report["notes"].append(f"{len(not_moved)} clip(s) after the cut on tracks outside `tracks` were not moved and "
                                "are now out of sync with the moved ones (see notMoved).")
     try:
+        _note_transitions(run, keys)
+        run.cut_out = (a, b)
         for key, c in splits:
             span = [_r(c["start"]), _r(c["end"])]
             _, right = _split(run, key, c, b, left_end=a)
@@ -579,6 +598,7 @@ def cut_range(rpc, *, start, end, tracks=None, ripple=True, captions=None, label
             _ripple(run, keys, ordered, b, shift)
         if cap:
             report["captions"] = _conform(run, *cap)
+        _restore_transitions(run, report)
         run.check_all("cut_range")
     except Exception as e:
         if run.dry or not run.completed:
@@ -679,7 +699,7 @@ def _held_keyframes_hint(held: list[dict]) -> str:
 
 
 def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, tracks=None, extend=None, captions=None, label, dry_run=False,
-               media_seconds=None, allow_silent=False, render_check=None) -> dict:
+               media_seconds=None, allow_silent=False, render_check=None, probe_media=None) -> dict:
     """Open up the edit point at `at` (sequence s, snapped) — breathing room, the opposite of cut_range.
 
     Everything at/after `at` on `tracks` (default every track) moves right by out_by + in_by in one shift_items
@@ -691,8 +711,9 @@ def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, tracks=None, extend=None, capt
     gives a clip's media length for the out-point check (None: Premiere checks it). Values snap to whole frames.
     An extension that would hold a keyframed Level at silence or an Opacity at 0 (see held_keyframes) is listed
     under `heldKeyframes` and refused, before anything is written, unless allow_silent. `render_check(rpc, pieces)
-    -> dict`: render-check every clip it extended or moved afterwards (see _render_check)."""
-    run = _start(rpc, label, dry_run)
+    -> dict`: render-check every clip it extended or moved afterwards (see _render_check). `probe_media(path)`: media
+    lengths for putting back a moved transition next to a neighbour (see _readd_plan)."""
+    run = _start(rpc, label, dry_run, probe_media)
     grid, model = run.grid, run.model
     t0 = grid.snap(at)
     try:
@@ -805,6 +826,7 @@ def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, tracks=None, extend=None, capt
         report["notes"].append(f"{len(not_moved)} clip(s) after the cut on tracks outside `tracks` were not moved "
                                "and are now out of sync (see notMoved).")
     try:
+        _note_transitions(run, keys)
         if after:
             ordered = sorted(after, key=lambda kc: (-kc[1]["start"], _order(kc[0])))
             for key, c in ordered:
@@ -823,6 +845,7 @@ def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, tracks=None, extend=None, capt
             _trim(run, key, c, HEAD, new_start, f"extend {_label(*key)} {c['name']} head to {_t(new_start)}s")
         if cap:
             report["captions"] = _conform(run, *cap)
+        _restore_transitions(run, report)
         run.check_all("extend_cut")
     except Exception as e:
         if run.dry or not run.completed:
@@ -902,7 +925,7 @@ def snap_edges(rpc, *, tracks=None, label, dry_run=False) -> dict:
 
 # ================================================================ shift_items
 
-def shift_items(rpc, *, at, by, tracks=None, label, dry_run=False, precise=None) -> dict:
+def shift_items(rpc, *, at, by, tracks=None, label, dry_run=False, precise=None, probe_media=None) -> dict:
     """Move every clip that starts at/after `at` (sequence s, snapped) on `tracks` (default every track) by `by`
     seconds (whole frames; negative = left), keeping those tracks in sync. It opens room before a clip where there is
     no edit point for extend_cut to open (or closes a gap). Clips crossing `at` stay put (music under it).
@@ -911,10 +934,11 @@ def shift_items(rpc, *, at, by, tracks=None, label, dry_run=False, precise=None)
     the room the same way (ping feature "shiftItemsPrecise", 0.6+; `precise` None asks the panel, True / False
     says it). An older panel's check is coarser: it counts every clip staying on a sent track that ends after `at` +
     `by` — so for it a track whose staying clip ends between there and its own first moving clip (an SFX just
-    before the cut) moves in a step of its own, from that clip."""
+    before the cut) moves in a step of its own, from that clip. `probe_media(path)`: media lengths for putting back a
+    moved transition next to a neighbour (see _readd_plan)."""
     if precise is None:
         precise = items.has_feature(rpc("ping"), "shiftItemsPrecise")
-    run = _start(rpc, label, dry_run)
+    run = _start(rpc, label, dry_run, probe_media)
     grid = run.grid
     t0, delta = grid.snap(at), grid.snap(by)
     if abs(delta) < grid.tol:
@@ -967,6 +991,7 @@ def shift_items(rpc, *, at, by, tracks=None, label, dry_run=False, precise=None)
             if group:
                 tag = f" on {', '.join(_label(*k) for k in sorted(group, key=_order))}" if alone else ""
                 _shift(run, group, [(k, c) for k, c in moving if k in group], start, delta, tag)
+        _restore_transitions(run, report)
         run.check_all("shift")
     except Exception as e:
         if run.dry or not run.completed:
@@ -983,9 +1008,252 @@ def _num_edge(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def _note_transitions(run: _Run, keys):
+    """B2 (27.1, 5 Nov 2026): a shift_items step (createMoveAction) moves the clips but not their video transitions —
+    the OTIO export afterwards shows them gone from the moved clips (a ghost may still play at the old time until the
+    sequence is reopened). So before the first move of a command, read every transition on the video tracks that
+    move, with the clips on each side of its cut; _restore_transitions puts back the ones that went."""
+    if run.transitions is not None or not any(k[0] == "video" for k in keys):
+        return
+    doc = _replace.export_otio_doc(run.rpc)
+    tol, quarter = run.grid.tol, run.grid.frame / 4
+    found = []
+    for key in sorted({k for k in keys if k[0] == "video"}, key=_order):
+        clips = run.model.clips(key)
+        for t in _replace.otio_transitions(run.rpc, key[1], doc):
+            left = next((c for c in clips if abs(c["end"] - t["at"]) <= tol), None)
+            right = next((c for c in clips if abs(c["start"] - t["at"]) <= tol), None)
+            lies = "right" if t["before"] < quarter else "left" if t["after"] < quarter else "shared"
+            found.append(dict(t, key=key, left=left, right=right, lies=lies))
+    run.transitions = found
+
+
+def _media_length(run: _Run, clip: dict) -> float | None:
+    """The length of a clip's media in seconds, or None when unknown: list_items' mediaSeconds when it has one, else
+    run.probe_media on the clip's mediaPath (the video stream's own length when ffprobe reports one; probed once)."""
+    own = clip.get("mediaSeconds")
+    if _num_edge(own) and own > 0:
+        return float(own)
+    path = clip.get("mediaPath")
+    if not path or run.probe_media is None:
+        return None
+    if path not in run.lengths:
+        info = run.probe_media(path) or {}
+        d = next((v for v in (info.get("videoDuration"), info.get("duration")) if _num_edge(v) and v > 0), None)
+        run.lengths[path] = float(d) if d is not None else None
+    return run.lengths[path]
+
+
+def _readd_plan(run: _Run, t: dict, owner: dict, cut: float, n: int) -> dict:
+    """How to put back the one-sided transition `t` (n frames) on `owner`'s edge at `cut`, as the timeline is after the
+    edits: {"mode": "single-sided" | "centred" | "by hand", "frames": frames to ask for, "note" / "reason"}.
+
+    Live on 27.1 (6 Nov 2026): at a cut with an adjacent neighbour Premiere centres an added transition even when it
+    is asked for a single-sided one (forceSingleSided), and drops whatever part has no media to cover it: the half
+    BEFORE the cut needs the incoming clip's media before its in point, the half AFTER the cut the outgoing clip's
+    media after its out point. (A 30-frame dissolve where the incoming clip starts at source 0 and the outgoing one has
+    478 s of tail came back as the 15 frames after the cut.) And a transition added after a move is invisible to UXP's
+    getTrackItems(TRANSITION), so a wrong one cannot be taken off again. So the handles decide BEFORE anything is
+    added. A fade on the clip's head (after the cut) is asked for at 2n frames centred when the clip itself has no
+    media before its in point (that half is dropped) and the outgoing neighbour has at least n frames after its out
+    point (the half that stays); a fade on its tail mirrors that. Anything else, or a length that is unknown: not added
+    (missing; the reason says how to add it by hand). No neighbour: single-sided, as asked."""
+    tol, frame = run.grid.tol, run.grid.frame
+    right = t["lies"] == "right"  # on the clip's head (its start cut); else on its tail (its end cut)
+    nb = next((c for c in run.model.clips(t["key"]) if c is not owner
+               and abs((c["end"] if right else c["start"]) - cut) <= tol), None)
+    if nb is None:
+        return {"mode": "single-sided", "frames": n}
+    name = t["name"] or t["matchName"]
+    track = _label(*t["key"])
+    by_hand = (f"Add it by hand: drag {name} onto the {'start' if right else 'end'} of the clip at {_t(cut)}s on "
+               f"{track} in the Timeline, then in Effect Controls set Alignment to "
+               f"{'Start at Cut' if right else 'End at Cut'} and Duration to {n} frames.")
+    centres = ("Premiere 27.1 centres a transition added at a cut with a neighbour, even a single-sided one, and keeps "
+               "each half only where a clip has media to cover it")
+
+    def tail(clip):
+        length = _media_length(run, clip)
+        return None if length is None or clip.get("outPoint") is None else length - clip["outPoint"]
+
+    def why_unknown(clip):
+        if run.probe_media is None:
+            return f"the length of {clip['name']}'s media is unknown (no media probe was given)"
+        if not clip.get("mediaPath"):
+            return f"{clip['name']} has no media path"
+        return f"the length of {clip['name']}'s media is unknown (ffprobe could not read {clip['mediaPath']})"
+
+    # own: the clip's handle on the side that must be dropped; other: the neighbour's handle that must fill n frames
+    if right:
+        own, own_where = owner.get("inPoint"), "before its in point"
+        other, other_where = tail(nb), "after its out point"
+        own_unknown = f"{owner['name']}'s in point is unknown"
+        other_unknown = why_unknown(nb)
+    else:
+        own, own_where = tail(owner), "after its out point"
+        other, other_where = nb.get("inPoint"), "before its in point"
+        own_unknown = why_unknown(owner)
+        other_unknown = f"{nb['name']}'s in point is unknown"
+    if own is None or other is None:
+        return {"mode": "by hand", "frames": n,
+                "reason": f"not added back: {own_unknown if own is None else other_unknown}, so what Premiere would "
+                          f"make of it at this cut cannot be told ({centres}). {by_hand}"}
+    if own >= frame - 1e-6:
+        return {"mode": "by hand", "frames": n, "handle": _r(own),
+                "reason": f"not added back: {owner['name']} has {_t(own)}s of media {own_where}, and {centres}, so it "
+                          f"would come back two-sided. {by_hand}"}
+    if other < n * frame - 1e-6:
+        return {"mode": "by hand", "frames": n, "handle": _r(other),
+                "reason": f"not added back: the neighbour {nb['name']} has only {_t(other)}s of media {other_where}, "
+                          f"short of the {n} frames the fade covers, and {centres}. {by_hand}"}
+    return {"mode": "centred", "frames": 2 * n,
+            "note": f"{owner['name']} has no media {own_where}: added centred at twice its length ({2 * n} frames), so "
+                    f"Premiere drops that half and keeps the {n} frames on the clip it had"}
+
+
+def _restore_transitions(run: _Run, report: dict):
+    """After the edits: every transition _note_transitions read next to a clip this run moved, trimmed or made must be
+    on its clip's edge again (a split hands the clip's end edge to the right piece). One that went is added back
+    there (add_transition: one undo step each) as _readd_plan says, then a second export checks them all.
+    report["transitions"]: per transition {track, name, matchName, lies, from, to, before, after, status}: kept (still
+    there), restored (added back; `note` when it was added centred at twice its length), missing (not added back, or
+    added but not found there: `reason`), split (a shared transition across a cut the edit opened: no cut is left to
+    put it on); in a dry run "moves" (its clip moves), "stays" (its clip does not, but a neighbour does) or "split",
+    with `readd`: how it would be put back should the move drop it (single-sided, two-sided, centred, by hand +
+    `readdNote`). A transition at a moment cut_range removed is not looked for. Transitions found afterwards where
+    none was expected are listed in report["unexpectedTransitions"]."""
+    if not run.transitions:
+        return
+    grid = run.grid
+    tol = grid.tol
+
+    def is_moved(c):
+        return c is not None and any(c is m for m in run.moved)
+
+    def is_touched(c):
+        return c is not None and any(c is x for _, x in run.touched)
+
+    def on_timeline(t, c):
+        return c is not None and any(c is x for x in run.model.clips(t["key"]))
+
+    rows, todo, untouched = [], [], []
+    for t in run.transitions:
+        if run.cut_out and run.cut_out[0] + tol < t["at"] < run.cut_out[1] - tol:
+            continue  # cut_range removed that moment, and the transition with it
+        left, right = t["left"], t["right"]
+        if not (is_touched(left) or is_touched(right)):
+            untouched.append(t)
+            continue
+        if t["lies"] == "shared":
+            if not (on_timeline(t, left) or on_timeline(t, right)):
+                continue
+            owner = right
+            joined = on_timeline(t, left) and on_timeline(t, right) and abs(left["end"] - right["start"]) <= tol
+            status = ("moves" if is_moved(left) or is_moved(right) else "stays") if joined else "split"
+            cut = right["start"] if on_timeline(t, right) else left["end"]
+        else:
+            owner = right if t["lies"] == "right" else left
+            if not on_timeline(t, owner):
+                continue  # its clip left the timeline (a removal): the transition went with it
+            cut = owner["start"] if t["lies"] == "right" else owner["end"]
+            status = "moves" if is_moved(owner) else "stays"
+        row = {"track": _label(*t["key"]), "name": t["name"], "matchName": t["matchName"], "lies": t["lies"],
+               "from": _r(t["at"]), "to": _r(cut), "before": _r(t["before"]), "after": _r(t["after"]),
+               "status": status}
+        if status == "split":
+            row["reason"] = (f"it lay across the cut at {_t(t['at'])}s, which this edit opened; there is no cut left "
+                             "to put it back on. Add it again by hand on the side you want (add_transition --edge).")
+        rows.append(row)
+        if status != "split":
+            todo.append((row, t, owner, cut))
+    if not rows:
+        return
+    report["transitions"] = rows
+    n_of = {id(t): round((t["before"] + t["after"]) / grid.frame) for _, t, _, _ in todo}
+    if run.dry:
+        for row, t, owner, cut in todo:
+            if t["lies"] == "shared":
+                row["readd"] = "two-sided"
+                continue
+            plan = _readd_plan(run, t, owner, cut, n_of[id(t)])
+            row["readd"] = plan["mode"]
+            if plan["mode"] != "single-sided":
+                row["readdNote"] = plan.get("note") or plan.get("reason")
+        return
+    vids = sorted({t["key"][1] for t in run.transitions})
+    half = grid.frame / 2
+
+    def there(found, t, cut):
+        return [f for f in found.get(t["key"][1], []) if f["matchName"] == t["matchName"]
+                and abs(f["at"] - cut) <= half and abs(f["before"] - t["before"]) <= 0.6 * grid.frame
+                and abs(f["after"] - t["after"]) <= 0.6 * grid.frame]
+
+    def export():
+        doc = _replace.export_otio_doc(run.rpc)
+        return {i: _replace.otio_transitions(run.rpc, i, doc) for i in vids}
+
+    found = export()
+    added = []
+    for row, t, owner, cut in todo:
+        if there(found, t, cut):
+            row["status"] = "kept"
+            continue
+        if not t["matchName"]:
+            row.update(status="missing", reason="the OTIO export names no match name for it: add it again by hand")
+            continue
+        if t["lies"] == "shared" and abs(t["before"] - t["after"]) > half:
+            row.update(status="missing", reason=f"it was off-centre ({_t(t['before'])}s before, {_t(t['after'])}s "
+                                                "after the cut), and add_transition centres a two-sided transition")
+            continue
+        n = n_of[id(t)]
+        if n < 1:
+            row.update(status="missing", reason="shorter than a frame")
+            continue
+        plan = {"mode": "two-sided", "frames": n} if t["lies"] == "shared" else _readd_plan(run, t, owner, cut, n)
+        if plan["mode"] == "by hand":
+            row.update(status="missing", reason=plan["reason"])
+            continue
+        what = f"put {t['name'] or t['matchName']} back on {row['track']} at {_t(cut)}s"
+        run.write("add_transition", {"videoTrack": t["key"][1], "atSeconds": (owner["start"] + owner["end"]) / 2,
+                                     "matchName": t["matchName"], "durationSeconds": (plan["frames"] + 0.1) / grid.fps,
+                                     "applyToStart": t["lies"] != "left",
+                                     "forceSingleSided": plan["mode"] == "single-sided"},
+                  what + (" centred at twice the length" if plan["mode"] == "centred" else ""))
+        added.append((row, t, cut, plan))
+    if added:
+        found = export()
+        for row, t, cut, plan in added:
+            if there(found, t, cut):
+                row["status"] = "restored"
+                if plan.get("note"):
+                    row["note"] = plan["note"]
+                continue
+            near = [f for f in found.get(t["key"][1], []) if f["matchName"] == t["matchName"]
+                    and abs(f["at"] - cut) <= half]
+            shows = (f" (it shows one {_t(near[0]['before'])}s before and {_t(near[0]['after'])}s after the cut "
+                     f"instead of {_t(t['before'])}s / {_t(t['after'])}s)" if near else "")
+            row.update(status="missing", reason=f"added back, but the OTIO export does not show it there{shows}. On "
+                                                "27.1 a transition added after a move is invisible to "
+                                                "remove_transition: delete a wrong one by hand in the Timeline, or "
+                                                "Edit > Undo")
+    wanted = [(t, cut) for row, t, _, cut in todo if row["status"] in ("kept", "restored")]
+    unexpected = [dict(f, track=f"V{i + 1}") for i in vids for f in found.get(i, [])
+                  if not any(t["key"][1] == i and any(f is g for g in there(found, t, cut)) for t, cut in wanted)
+                  and not any(t["key"][1] == i and abs(f["at"] - t["at"]) <= half for t in untouched)]
+    if unexpected:
+        report["unexpectedTransitions"] = unexpected
+    bad = [r for r in rows if r["status"] in ("missing", "split")]
+    report["transitionsVerified"] = not bad
+    if bad:
+        report.setdefault("warnings", []).append(
+            f"{len(bad)} video transition(s) next to the edit are not back where they were ("
+            + ", ".join(f"{r['track']} {r['from']}s {r['status']}" for r in bad[:4]) + "): see transitions.")
+
+
 def _shift(run: _Run, keys, ordered, frm: float, delta: float, tag: str = ""):
     """One shift_items step: every clip at/after `frm` on the selected tracks moves by `delta` (the model follows)."""
     grid = run.grid
+    _note_transitions(run, {k for k, _ in ordered})
     vt = sorted(k[1] for k in keys if k[0] == "video")
     at = sorted(k[1] for k in keys if k[0] == "audio")
     run.write("shift_items", {"fromSeconds": frm, "deltaSeconds": delta, "videoTracks": vt, "audioTracks": at},
@@ -993,6 +1261,7 @@ def _shift(run: _Run, keys, ordered, frm: float, delta: float, tag: str = ""):
     for key, c in ordered:
         c.update(start=grid.snap(c["start"] + delta), end=grid.snap(c["end"] + delta))
         run.touch(key, c)
+        run.moved.append(c)
     for key in {k for k, _ in ordered}:
         run.model.resort(key)
 
@@ -1002,6 +1271,7 @@ def _ripple(run: _Run, keys, ordered, b: float, shift: float):
     step). The panel must have shift_items (actions.json: cut_range calls it, so ops.cut_range refuses an older panel
     with PANEL_OUTDATED); there is no per-clip trim_clip moveTo fallback any more."""
     grid = run.grid
+    _note_transitions(run, {k for k, _ in ordered})
     vt = sorted(k[1] for k in keys if k[0] == "video")
     at = sorted(k[1] for k in keys if k[0] == "audio")
     run.write("shift_items", {"fromSeconds": b, "deltaSeconds": -shift, "videoTracks": vt, "audioTracks": at},
@@ -1009,6 +1279,7 @@ def _ripple(run: _Run, keys, ordered, b: float, shift: float):
     for key, c in ordered:
         c.update(start=grid.snap(c["start"] - shift), end=grid.snap(c["end"] - shift))
         run.touch(key, c)
+        run.moved.append(c)
     for key in {k for k, _ in ordered}:
         run.model.resort(key)
 
@@ -1094,7 +1365,7 @@ def parse_srt(text: str) -> list[dict]:
 
 
 def read_srt(path) -> list[dict]:
-    p = Path(path).expanduser()
+    p = Path(paths.check(path, what="--srt"))  # no share, device, stream or link to one: Python opens it
     if not p.is_file():
         raise BridgeError(f"SRT file not found: {p}", code="FILE_NOT_FOUND", outcome="not_committed")
     try:

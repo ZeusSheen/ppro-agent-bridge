@@ -47,6 +47,12 @@ class StartButtonTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.plugin = self.tmp / "plugin"
         self.plugin.mkdir()
+        self.bridge()  # the repo layout: <tmp> is the bridge folder the plugin folder sits in
+
+    def bridge(self, *parts):
+        """Make <tmp>/<parts> a bridge folder (what launcher.js checks before it opens start_bridge.bat there)."""
+        self.touch(*parts, "broker", "broker.py")
+        self.touch(*parts, "ppro_bridge", "__init__.py")
 
     def touch(self, *parts):
         path = self.tmp.joinpath(*parts)
@@ -77,6 +83,7 @@ class StartButtonTest(unittest.TestCase):
     def test_launcher_json_wins_over_the_repo_layout(self):
         self.touch("start_bridge.bat")
         target = self.touch("checkout", "start_bridge.bat")
+        self.bridge("checkout")
         (self.plugin / "launcher.json").write_text(json.dumps({"path": target}), encoding="utf-8")
         out = self.run_panel(broker="down", clicks=1)
         self.assertEqual([c["path"] for c in out["openPath"]], [target])
@@ -125,9 +132,51 @@ class StartButtonTest(unittest.TestCase):
                 self.assertIn("launcher.json in", message)
                 self.assertIn(words, message)
                 self.assertIn("scripts/build_ccx.py", message)
-        bom = b"\xef\xbb\xbf" + json.dumps({"path": self.touch("a.bat")}).encode()
+        self.bridge("elsewhere")
+        bom = b"\xef\xbb\xbf" + json.dumps({"path": self.touch("elsewhere", "start_bridge.bat")}).encode()
         (self.plugin / "launcher.json").write_bytes(bom)
         self.assertTrue(self.run_panel(broker="down", clicks=1)["results"][0]["ok"])  # a BOM is fine
+
+    def test_launcher_json_names_only_a_local_start_bridge_bat(self):
+        B = "\\"
+        for target, words in ((B * 2 + "host" + B + "share" + B + "start_bridge.bat", "network (UNC) path"),
+                              ("//host/share/start_bridge.bat", "network (UNC) path"),
+                              (B * 2 + "." + B + "pipe" + B + "start_bridge.bat", "device path"),
+                              (str(self.tmp / "start_bridge.bat:evil"), "data stream"),
+                              (self.touch("other.bat"), "names other.bat, not start_bridge.bat")):
+            with self.subTest(target=target):
+                (self.plugin / "launcher.json").write_text(json.dumps({"path": target}), encoding="utf-8")
+                out = self.run_panel(broker="down", clicks=1)
+                self.assertEqual(out["openPath"], [])
+                self.assertFalse(out["results"][0]["ok"])
+                self.assertIn(words, out["results"][0]["message"])
+
+    def test_only_a_bridge_folder_is_opened(self):
+        """RA-4: a start_bridge.bat in a folder that is not a bridge install (no broker\\broker.py and
+        ppro_bridge\\__init__.py) is never opened, from launcher.json or next to the plugin folder."""
+        planted = self.touch("planted", "start_bridge.bat")
+        self.touch("planted", "start_bridge.pyw")
+        (self.plugin / "launcher.json").write_text(json.dumps({"path": planted}), encoding="utf-8")
+        out = self.run_panel(broker="down", clicks=1)
+        self.assertEqual(out["openPath"], [])
+        self.assertFalse(out["results"][0]["ok"])
+        self.assertIn("is not a bridge folder", out["results"][0]["message"])
+        self.assertEqual(out["results"][0]["tried"], [{"path": planted, "error": "not a bridge folder"}])
+
+        (self.plugin / "launcher.json").unlink()
+        (self.tmp / "broker" / "broker.py").unlink()  # the repo layout, but not a bridge folder any more
+        self.touch("start_bridge.bat")
+        out = self.run_panel(broker="down", clicks=1)
+        self.assertEqual(out["openPath"], [])
+        self.assertIn("is not a bridge folder", out["results"][0]["message"])
+
+    def test_a_launcher_json_path_that_cannot_be_checked_is_not_opened(self):
+        target = self.touch("checkout", "start_bridge.bat")
+        self.bridge("checkout")
+        (self.plugin / "launcher.json").write_text(json.dumps({"path": target}), encoding="utf-8")
+        out = self.run_panel(broker="down", clicks=1, mock={"noEntryWithUrl": True})
+        self.assertEqual(out["openPath"], [])
+        self.assertIn("cannot list", out["results"][0]["message"])
 
     def test_an_open_path_error_is_shown_and_the_pyw_is_tried(self):
         bat = self.touch("start_bridge.bat")
@@ -182,8 +231,8 @@ class StartBridgePywTest(unittest.TestCase):
                 mock.patch.object(self.pyw.subprocess, "Popen") as popen, mock.patch.object(self.pyw, "tell") as tell:
             self.assertEqual(self.pyw.main(), 0)
         tell.assert_not_called()
-        self.assertEqual(popen.call_args.args[0], ["cmd", "/c", "start", "Premiere Agent Bridge",
-                                                   str(REPO / "start_bridge.bat")])
+        self.assertEqual(popen.call_args.args[0], f'cmd /d /s /c ""{REPO / "start_bridge.bat"}""')
+        self.assertTrue(popen.call_args.kwargs["executable"].lower().endswith("system32\\cmd.exe"))
         self.assertEqual(popen.call_args.kwargs["cwd"], str(REPO))
 
     def test_it_starts_nothing_while_the_broker_runs(self):
@@ -278,6 +327,50 @@ class BrokerPanelStateTest(unittest.TestCase):
         self.assertEqual(len(sock.sent), 2)
         failed = FakePanelSocket(self.broker, reply={"ok": False, "code": "INTERNAL", "error": "x"})
         self.assertEqual(self.state(failed), {"busy": False})
+
+
+class PlantedModuleTest(unittest.TestCase):
+    """RA-3: the scripts users and agents run never import a module planted beside them."""
+
+    ENTRY = ("broker/broker.py", "start_bridge.pyw", "cli/ppro.py", "cli/transcribe.py", "cli/transcript_digest.py")
+
+    def test_each_entry_script_drops_its_folder_before_any_other_import(self):
+        import ast
+        for rel in self.ENTRY:
+            with self.subTest(script=rel):
+                body = [n for n in ast.parse((REPO / rel).read_text(encoding="utf-8")).body
+                        if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))]  # the docstring
+                first = []
+                for node in body:
+                    if isinstance(node, ast.If):
+                        self.assertIn("del sys.path[0]", ast.unparse(node))
+                        break
+                    self.assertIsInstance(node, ast.Import, f"{rel}: {ast.unparse(node)} before the sys.path guard")
+                    first += [a.name for a in node.names]
+                else:
+                    self.fail(f"{rel}: no sys.path guard")
+                self.assertLessEqual(set(first), {"os", "sys"})  # loaded before any script runs
+
+    def test_a_socket_py_beside_start_bridge_pyw_is_not_imported(self):
+        tmp = Path(tempfile.mkdtemp(prefix="ppro_ra3_"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        shutil.copy(REPO / "start_bridge.pyw", tmp / "start_bridge.pyw")
+        (tmp / "start_bridge.bat").write_text("@echo off\n", encoding="ascii")
+        sentinel = tmp / "planted_ran.txt"
+        (tmp / "socket.py").write_text(f"open({str(sentinel)!r}, 'w').write('ran')\nraise ImportError('planted')\n",
+                                       encoding="utf-8")
+        import os
+        import socket
+        import sys
+        with socket.socket() as listener:  # "a broker already answers" on a free port (never 8017): it starts nothing
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            env = dict(os.environ, PPRO_BRIDGE_PORT=str(listener.getsockname()[1]))
+            # as Windows runs it (python <script>: the script's folder first on sys.path)
+            out = subprocess.run([sys.executable, str(tmp / "start_bridge.pyw")], env=env, capture_output=True,
+                                 text=True, timeout=60, cwd=str(tmp))
+        self.assertFalse(sentinel.exists(), "a socket.py planted beside start_bridge.pyw ran")
+        self.assertEqual(out.returncode, 0, out.stderr)
 
 
 if __name__ == "__main__":

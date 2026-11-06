@@ -986,6 +986,152 @@ class ExportSequenceTest(FakeCase):
         self.assertEqual(len(self.ok("export_status", {})["jobs"]), 1)
 
 
+# ---------------------------------------------------------------- export_aaf / export_xml
+
+class ExportAafXmlTest(FakeCase):
+    PRESET = "/fake/presets/Waveform Audio 48kHz 16-bit.epr"
+
+    def test_aaf_job_options_and_file(self):
+        """An AAF job like a render job (kind aaf, no preset, no events): the options given come back in the panel's
+        order; the placeholder .aaf (a Structured Storage file) is written when the job ends; one export at a time
+        across both kinds; a missing folder is EXPORT_FAILED and no job; PPRO_FAKE_AAF_RESULT fails it later."""
+        out = self.scratch / "cut.aaf"
+        start = self.ok("export_aaf", {"outputPath": str(out), "trimSources": True, "audioFormat": "aiff",
+                                       "embedAudio": False})
+        self.assertEqual((start["state"], start["started"], start["jobId"], start["optionsSet"]),
+                         ("running", True, "export-1", ["embedAudio", "audioFormat", "trimSources"]))
+        self.assertEqual((start["optionValues"]["audioFileFormat"], start["optionValues"]["embedAudio"]), (0, False))
+        self.assertFalse(out.exists())  # written when exportAAF returns
+        busy = self.fails("export_sequence", {"outputPath": str(self.scratch / "m.wav"), "presetPath": self.PRESET},
+                          "EXPORT_RUNNING")
+        self.assertEqual((busy["data"]["kind"], busy["data"]["jobId"]), ("aaf", "export-1"))
+        self.assertIn("AAF export log", busy["error"])
+        self.fails("export_aaf", {"outputPath": str(out)}, "EXPORT_RUNNING")
+        self.fails("export_xml", {"outputPath": str(self.scratch / "cut.xml")}, "EXPORT_RUNNING")
+        job = self.ok("export_status", {"jobId": "export-1"})["jobs"][0]
+        self.assertEqual((job["kind"], job["state"], job["preset"], job["events"], job["returned"]),
+                         ("aaf", "done", None, {}, True))
+        self.assertEqual(job["options"]["set"], start["optionsSet"])
+        self.assertNotIn("hint", job)
+        self.assertEqual(out.read_bytes()[:8], bytes.fromhex("d0cf11e0a1b11ae1"))
+        self.assertEqual((fake.LAST_CTX["sideEffects"], fake.TRANSACTIONS), (0, []))
+        # a render job blocks an AAF job, not an XML export
+        render = self.ok("export_sequence", {"outputPath": str(self.scratch / "m.wav"), "presetPath": self.PRESET,
+                                             "wait": False})
+        self.assertEqual(self.fails("export_aaf", {"outputPath": str(out)}, "EXPORT_RUNNING")["data"]["kind"], "render")
+        self.ok("export_xml", {"outputPath": str(self.scratch / "cut.xml")})
+        self.assertEqual(self.ok("export_status", {"jobId": render["jobId"]})["jobs"][0]["kind"], "render")
+        self.fails("export_aaf", {"outputPath": str(self.scratch / "missing" / "cut.aaf")}, "EXPORT_FAILED")
+        self.assertEqual(len(self.ok("export_status", {})["jobs"]), 2)
+        os.environ.update(PPRO_FAKE_AAF_RESULT="fail")
+        late = self.ok("export_aaf", {"outputPath": str(self.scratch / "late.aaf")})
+        job = self.ok("export_status", {"jobId": late["jobId"]})["jobs"][0]
+        self.assertEqual((job["state"], job["error"]), ("failed", "exportAAF returned false"))
+        os.environ.update(PPRO_FAKE_EXPORT_POLLS="0")  # failed within the early window: no job
+        self.assertIn("returned false", self.fails("export_aaf", {"outputPath": str(out)}, "EXPORT_FAILED")["error"])
+
+    def test_the_modal_log_holds_aaf_jobs(self):
+        """STATE["aafDialog"]: the job keeps running, writes nothing and shows the hint until the log is dismissed."""
+        out = self.scratch / "cut.aaf"
+        fake.STATE["aafDialog"] = True
+        start = self.ok("export_aaf", {"outputPath": str(out)})
+        for _ in range(3):
+            job = self.ok("export_status", {"jobId": start["jobId"]})["jobs"][0]
+            self.assertEqual(job["state"], "running")
+            self.assertIn("click", job["hint"])
+        self.assertFalse(out.exists())
+        fake.STATE["aafDialog"] = False
+        job = self.ok("export_status", {"jobId": start["jobId"]})["jobs"][0]
+        self.assertEqual((job["state"], "hint" in job, out.is_file()), ("done", False, True))
+
+    def test_xml_document(self):
+        out = self.scratch / "cut.xml"
+        self.assertEqual(self.ok("export_xml", {"outputPath": str(out)}), {"exported": True, "outputPath": str(out)})
+        text = out.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith('<?xml version="1.0"'))
+        self.assertIn('<xmeml version="4">', text)
+        self.fails("export_xml", {"outputPath": str(self.scratch / "missing" / "cut.xml")}, "EXPORT_FAILED")
+        self.fails("export_xml", {"outputPath": ""}, "BAD_PARAMS")
+        fake.STATE["sequence"] = None
+        self.fails("export_xml", {"outputPath": str(out)}, "NO_SEQUENCE")
+        self.fails("export_aaf", {"outputPath": str(self.scratch / "cut.aaf")}, "NO_SEQUENCE")
+
+
+@unittest.skipUnless(ops is not None and errors is not None, "ppro_bridge.ops is not importable yet")
+class ExportAafEndToEndTest(FakeCase):
+    """ops.export_aaf / export_xml against the fake: the job polled through Premiere's modal AAF export log (the OK
+    click is a sleep that dismisses it), the stall that carries the click-OK hint, and --job resuming the wait."""
+
+    def clicks_ok_after(self, n):
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == n:
+                fake.STATE["aafDialog"] = False
+        return sleep, sleeps
+
+    def test_waits_through_the_log_and_says_so(self):
+        out = self.scratch / "aaf" / "cut.aaf"
+        fake.STATE["aafDialog"] = True
+        calls = []
+        sleep, sleeps = self.clicks_ok_after(8)
+        data = ops.export_aaf(recording_rpc(calls), output=str(out), embed_audio=True, sleep=sleep)
+        self.assertEqual((data["exported"], data["verified"], data["dialogSuspected"]), (True, True, True))
+        self.assertIn("AAF export log", data["hint"])
+        self.assertEqual((data["optionsSet"], data["polls"], len(sleeps)), (["embedAudio"], 8, 8))  # OK at the 8th
+        self.assertEqual(data["bytes"], out.stat().st_size)
+        self.assertLessEqual(set(calls), set(spec.command("export_aaf")["calls"]) | {"ping"})
+        # quick: no hint
+        data = ops.export_aaf(recording_rpc([]), output=str(out), overwrite=True, sleep=lambda s: None)
+        self.assertNotIn("hint", data)
+        self.assertNotIn("dialogSuspected", data)
+
+    def test_a_stall_carries_the_hint_and_job_resumes(self):
+        out = self.scratch / "cut.aaf"
+        fake.STATE["aafDialog"] = True
+        with self.assertRaises(errors.BridgeError) as cm:
+            ops.export_aaf(recording_rpc([]), output=str(out), stall_seconds=10, sleep=lambda s: None)
+        e = cm.exception
+        self.assertEqual((e.code, e.outcome, e.data["jobId"], e.data["idleSeconds"]),
+                         ("EXPORT_STALLED", "unknown", "export-1", 10.0))
+        self.assertIn("click OK", e.data["hint"])
+        self.assertIn("export_aaf --job export-1", str(e))
+        self.assertIn("click", e.data["job"]["hint"])  # the panel's view says it too
+        with self.assertRaises(errors.BridgeError) as cm:  # still held: one export at a time
+            ops.export_xml(recording_rpc([]), output=str(self.scratch / "cut.xml"))
+        self.assertEqual(cm.exception.code, "EXPORT_RUNNING")
+        look = ops.export_aaf(recording_rpc([]), job="export-1", detach=True)
+        self.assertEqual((look["detached"], look["state"]), (True, "running"))
+        self.assertIn("click OK", look["hint"])
+        sleep, _ = self.clicks_ok_after(1)
+        data = ops.export_aaf(recording_rpc([]), job="export-1", sleep=sleep)
+        self.assertEqual((data["exported"], data["resumed"], data["output"]), (True, True, str(out)))
+
+    def test_failures_through_the_cli(self):
+        os.environ["PPRO_FAKE_AAF_RESULT"] = "nofile"
+        with self.assertRaises(errors.BridgeError) as cm:
+            ops.export_aaf(recording_rpc([]), output=str(self.scratch / "none.aaf"), sleep=lambda s: None)
+        self.assertEqual((cm.exception.code, cm.exception.outcome), ("EXPORT_FAILED", "not_committed"))
+        self.assertIn("was not written", str(cm.exception))
+        fake.reset()
+        os.environ["PPRO_FAKE_AAF_RESULT"] = "fail"
+        with self.assertRaises(errors.BridgeError) as cm:
+            ops.export_aaf(recording_rpc([]), output=str(self.scratch / "f.aaf"), sleep=lambda s: None)
+        self.assertEqual(cm.exception.code, "EXPORT_FAILED")
+        self.assertIn("exportAAF returned false", str(cm.exception))
+
+    def test_xml_checked(self):
+        out = self.scratch / "x" / "cut.xml"
+        data = ops.export_xml(recording_rpc([]), output=str(out))
+        self.assertEqual((data["verified"], data["xmemlVersion"], data["checks"]),
+                         (True, "4", {"xmlDeclaration": True, "xmeml": True}))
+        with self.assertRaises(errors.BridgeError) as cm:
+            ops.export_xml(recording_rpc([]), output=str(out))
+        self.assertEqual(cm.exception.code, "CONFIRM_REQUIRED")
+        self.assertTrue(ops.export_xml(recording_rpc([]), output=str(out), overwrite=True)["verified"])
+
+
 # ---------------------------------------------------------------- the library against the fake
 
 def recording_rpc(calls):
@@ -1435,10 +1581,16 @@ class OpsCallsTest(FakeCase):
             "list_presets": ({"format": "h264"}, own_presets),
             "export_video": ({"preset": "00 - Match Source - High bitrate", "output": str(s / "render" / "seq.mp4"),
                               "probe_media": vertical, "sleep": lambda seconds: None}, own_presets),
+            "export_aaf": ({"output": str(s / "aaf" / "seq.aaf"), "embed_audio": True, "handle_frames": 12,
+                            "sleep": lambda seconds: None}, None),
+            "export_xml": ({"output": str(s / "xml" / "seq.xml")}, None),
             "list_effects": ({"kind": "audio"}, None),
             "add_audio_effect": ({"track": "A1", "at": 5.0, "name": "DeNoise", "label": "denoise"}, None),
             "list_effect_presets": ({"file": str(PRESETS_FIXTURE)}, None),
             "apply_preset": ({"track": "V1", "at": 5.0, "preset": "Tinted", "file": str(PRESETS_FIXTURE)}, None),
+            "apply_ops": ({"ops": [{"op": "marker.set_comment", "name": "harness marker", "comments": "checked"}],
+                           "label": "notes", "expect_seq": "Sequence 01"}, None),
+            "query": ({"what": "clips", "track": ["V1"], "at": 5.0}, None),
         }
 
     def test_every_command_calls_only_its_spec_actions(self):

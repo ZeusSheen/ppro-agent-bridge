@@ -9,6 +9,8 @@
  *  - Command whitelist only (the actions in lib/spec.js). There is deliberately NO eval / runScript action.
  *  - Params are checked against the spec before any handler runs; unknown params are refused.
  *  - Broker is expected to bind loopback only (127.0.0.1 and ::1); the panel connects to ws://localhost.
+ *  - Pairing (lib/pairing.js): the panel proves the pairing token and runs no request, and sends nothing but the
+ *    hello and its proof, until the broker has proved the token back; a program that cannot is dropped (fail closed).
  *  - No exception may reach UXP uncaught (see "error guard").
  *
  * Modules: this file is the only one that requires local files. lib/spec.js is generated data;
@@ -49,9 +51,14 @@ const state = {
   denied: false,        // {match, builds?, reason} when this host build is on the denylist
   last: null,           // context of the last request: {action, id, sideEffects}
   specMismatch: null,   // {missing, extra} when handlers and spec.actions disagree
-  refused: null,        // {reason, closeCode, since} while the broker refuses this panel (another one is live)
+  refused: null,        // {reason, closeCode, since, kind?} while the broker refuses this panel (another one is
+                        // live), or (kind "pairing") the program on the port did not prove the pairing token
+  tokenPath: null,      // where the pairing token was read last (the log says so when it changes)
   unloading: false,
+  broker: null,         // the broker's version, from its "registered" notice
+  update: null,         // the broker's update check (lib/support.js cleanUpdate), from "registered" / "update"
 };
+const recentErrors = [];  // the last failed requests and panel errors, for the problem report (lib/support.js)
 
 /* ---------- tiny UI helpers ---------- */
 
@@ -70,6 +77,7 @@ const UI = {
   en: {
     connected: "Connected to broker",
     connecting: (url) => `Connecting to ${url} ...`,
+    pairing: "Pairing with the broker ...",
     disconnected: "Disconnected — broker not running?",
     start: "Start bridge", starting: "Starting ...", reconnect: "Reconnect",
     ready: "Ready. To start editing:",
@@ -90,10 +98,16 @@ const UI = {
       "me what is on my active sequence. If something is not set up yet, tell me in plain words what to do.",
     at: (folder) => `installed at ${folder}`,
     somewhere: "installed on this computer (the folder with start_bridge.bat)",
+    updateAvailable: (v) => `${v} available`, view: "View", skip: "Skip this version",
+    report: "Copy a problem report", issues: "GitHub Issues", close: "Close",
+    reportNote: "This is the whole report: versions, Premiere's version, capabilities, the connection and recent " +
+      "error codes. No project names, paths or token. Click the box, press Ctrl+C, and paste it into a GitHub issue.",
+    openReason: "Agent Bridge opens a GitHub page in your browser.",
   },
   zh: {
     connected: "已连接",
     connecting: (url) => `正在连接 ${url} ……`,
+    pairing: "正在与桥配对……",
     disconnected: "未连接：桥没有在运行？",
     start: "启动桥", starting: "正在启动……", reconnect: "重新连接",
     ready: "准备好了。开始剪辑只要两步：",
@@ -110,6 +124,11 @@ const UI = {
       "如果哪里还没装好，请用大白话告诉我该怎么做。",
     at: (folder) => `安装在 ${folder} `,
     somewhere: "这台电脑上（有 start_bridge.bat 的那个文件夹里）",
+    updateAvailable: (v) => `有新版本 ${v}`, view: "查看", skip: "跳过此版本",
+    report: "复制问题报告", issues: "GitHub Issues", close: "关闭",
+    reportNote: "这就是报告的全部内容：版本、Premiere 版本、功能、连接状态和最近的错误代码。没有项目名、路径和令牌。" +
+      "点一下框里，再按 Ctrl+C，贴到 GitHub Issues 里。",
+    openReason: "Agent Bridge 将在浏览器里打开一个 GitHub 页面。",
   },
 }[LANG];
 
@@ -172,6 +191,7 @@ function log(msg, cls) {
 function report(label, e) {
   try {
     log(`${label}: ${e && e.message ? e.message : String(e)}`, "err");
+    support.noteError(recentErrors, { label });  // the label only, never e
   } catch (_) { /* the log itself failed: nothing left to tell */ }
 }
 
@@ -213,6 +233,15 @@ const exportJobs = require("./lib/exportjobs.js")({ ppro, core, log });
 const capabilities = require("./lib/capabilities.js")({
   ppro, uxp, core, timeline, log, hostTable: GLOBAL.__agentBridgeHostTable,
 });
+const support = require("./lib/support.js")({ uxp, actions: Object.keys(spec.actions) });  // update notice, report
+/* UXP's own modules for the pairing token (os.homedir, fs.readFile); null where a host (or the test harness) lacks
+   one: lib/pairing.js then falls back to localFileSystem. */
+function hostModule(name) {
+  try { return require(name); } catch (e) { return null; }
+}
+const pairing = require("./lib/pairing.js")({
+  uxp, core, os: hostModule("os"), fs: hostModule("fs"), crypto: GLOBAL.crypto,
+});
 const handlerDeps = { ppro, core, timeline, projectLib, effects, exportJobs, capabilities, state, log };
 const handlerGroups = [
   require("./lib/handlers_read.js")(handlerDeps),
@@ -223,6 +252,7 @@ const handlerGroups = [
   require("./lib/handlers_transcript.js")(handlerDeps),
   require("./lib/handlers_markers.js")(handlerDeps),
   require("./lib/handlers_export.js")(handlerDeps),
+  require("./lib/handlers_ops.js")(handlerDeps),  // apply_ops / query: the whitelisted generic layer
   require("./lib/probe.js")({ ppro, uxp, core, timeline, hostInfo: capabilities.hostInfo }),
 ];
 // Tests that change Premiere exist only in dev builds; a release keeps the read-only diagnostics (probe_api).
@@ -381,7 +411,6 @@ async function handleMessage(raw, sock) {
     return null;
   }
   if (!msg || typeof msg !== "object" || !msg.id || !msg.action) return null;
-  if (sock && sock === ws && state.refused) accepted();  // a broker sends requests to its registered panel only
 
   log(`<- ${msg.action}`, "cmd");
   if (msg.action !== "ping" && !helperSeen) { helperSeen = true; refreshHint(); }
@@ -395,13 +424,15 @@ async function handleMessage(raw, sock) {
   }
 
   log(reply.ok ? `-> ${msg.action} ok` : `-> ${msg.action} FAILED: ${reply.error}`, reply.ok ? "ok" : "err");
+  if (!reply.ok) support.noteError(recentErrors, { action: msg.action, code: reply.code, outcome: reply.outcome });
   if (sock === undefined || sock === null) return reply;
   // Answer on the socket the request came in on; a reconnected socket belongs to newer requests.
   if (sock.readyState === WebSocket.OPEN) {
     try {
       sock.send(JSON.stringify(reply));
     } catch (e) {
-      report(`Reply to ${msg.action} not sent`, e);
+      // A spec action name only: the label reaches the problem report, and a request may name any text (QA-3).
+      report(`Reply to ${Object.prototype.hasOwnProperty.call(spec.actions, msg.action) ? msg.action : "a request"} not sent`, e);
     }
   } else {
     log(`Reply to ${msg.action} dropped: its connection closed`, "err");
@@ -422,20 +453,48 @@ const retryDelay = () => (refusals ? Math.min(RECONNECT_MS * 2 ** refusals, REFU
 function disconnectedText() {
   if (state.stuck) return stuckText();
   if (state.denied) return deniedText();
-  if (state.refused) return `Refused: ${state.refused.reason} — retrying in ${Math.round(retryDelay() / 1000)} s`;
+  const retry = `retrying in ${Math.round(retryDelay() / 1000)} s`;
+  if (state.refused && state.refused.kind === "pairing") return `Not paired: ${state.refused.reason} — ${retry}`;
+  if (state.refused) return `Refused: ${state.refused.reason} — ${retry}`;
   return UI.disconnected;
 }
 
-/* The broker turned this panel away (close 4409: another live panel holds the bridge; 4403: not our plugin id). */
-function noteRefusal(reason, closeCode) {
+/* The broker turned this panel away (close 4409: another live panel holds the bridge; 4403: not our plugin id; 4401:
+   the pairing proof did not match its token), or (kind "pairing") pairing failed on this side. */
+function noteRefusal(reason, closeCode, kind) {
   if (state.refused) return;
   state.refused = { reason: reason || "refused by the broker", closeCode: closeCode || null, since: Date.now() };
+  if (kind) state.refused.kind = kind;
+  if (kind === "pairing") {
+    support.noteError(recentErrors, { label: "not paired with the broker" });
+    log(`Not paired: ${state.refused.reason}.`, "err");
+    return;
+  }
+  support.noteError(recentErrors, { label: `refused by the broker (${closeCode || "?"})` });
   log(`The broker refused this panel: ${state.refused.reason}.` + (closeCode === 4409
     ? " Another Premiere window, or a second copy of this panel, holds the bridge: this one retries and takes over"
       + " once that one closes (Reconnect retries now)." : ""), "err");
 }
 
-/* Registered after all: the broker said so, or sent a request (handleMessage). */
+let pairedSock = null;  // the socket whose broker proved the pairing token: the only one whose requests run
+
+/* Pairing failed on `sock` (no token here, or the program on the port did not prove it knows the token): drop the
+   socket without running anything it sent, say why in the status line, back off and try again. */
+function failPairing(sock, reason) {
+  if (ws !== sock) return;
+  ws = null;  // its close event is no longer this panel's business
+  if (pairedSock === sock) pairedSock = null;
+  refusals += 1;
+  if (state.refused && state.refused.kind !== "pairing") state.refused = null;  // say this reason, not an older one
+  noteRefusal(reason, null, "pairing");
+  try { sock.close(); } catch (e) { /* already closed */ }
+  setStatus("", disconnectedText());
+  scheduleReconnect();
+}
+
+const unproven = (what) => `the program on ${BROKER_URL} ${what}; nothing it sent was run`;
+
+/* Registered after all: the broker proved the pairing token in its "registered" notice. */
 function accepted() {
   if (state.refused) log("The broker accepted this panel.", "ok");
   state.refused = null;
@@ -443,7 +502,8 @@ function accepted() {
   setStatus(state.stuck || state.denied ? "" : "connected", connectedText());
 }
 
-/* A broker notice, {"event": "registered"|"refused", ...} (brokers 0.6+), or null for a request (id + action). */
+/* A broker notice, {"event": "registered"|"refused"|"update", ...} (brokers 0.6+; "update" 0.7+), or null for a
+   request (id + action). */
 function brokerNotice(raw) {
   if (typeof raw !== "string" || raw.length > 4096 || raw.indexOf('"event"') < 0) return null;
   try {
@@ -472,10 +532,25 @@ function connect() {
   ws = sock;
   let refusedHere = false;  // this socket got a "refused" notice (the close code may not reach us)
 
-  sock.onopen = safely("Connect", () => {
-    if (!state.refused) setStatus(state.stuck || state.denied ? "" : "connected", connectedText());
-    log("Connected. Registering as panel.", "ok");
-    sock.send(JSON.stringify({ role: "panel", plugin: PLUGIN_ID, version: VERSION }));
+  let pair = null;  // {token, nonce, brokerNonce} of this socket's handshake (lib/pairing.js)
+
+  sock.onopen = safely("Connect", async () => {
+    if (!state.refused) {
+      setStatus(state.stuck || state.denied ? "" : "connecting", state.stuck || state.denied ? connectedText() : UI.pairing);
+    }
+    log("Connected. Pairing with the broker.", "ok");
+    const found = await pairing.readToken();
+    if (ws !== sock || sock.readyState !== WebSocket.OPEN) return;
+    if (!found.token) {
+      failPairing(sock, found.error);
+      return;
+    }
+    if (found.path !== state.tokenPath) {
+      state.tokenPath = found.path;
+      log(`Pairing token: ${found.path} (${found.via}).`);
+    }
+    pair = { token: found.token, nonce: pairing.newNonce(), brokerNonce: null };
+    sock.send(JSON.stringify({ role: "panel", plugin: PLUGIN_ID, version: VERSION, auth: pairing.SCHEME, nonce: pair.nonce }));
   });
 
   sock.onmessage = safely("Message", (evt) => {
@@ -486,9 +561,33 @@ function connect() {
         refusedHere = true;
         noteRefusal(notice.error, notice.closeCode);
         setStatus("", disconnectedText());
+      } else if (notice.event === "challenge" && ws === sock) {
+        if (!pair || pair.brokerNonce || notice.auth !== pairing.SCHEME || !pairing.validNonce(notice.nonce)) {
+          failPairing(sock, unproven("sent a pairing challenge out of turn or malformed"));
+          return;
+        }
+        pair.brokerNonce = notice.nonce;
+        sock.send(JSON.stringify({ proof: pairing.proof(pair.token, "client", pair.nonce, pair.brokerNonce) }));
       } else if (notice.event === "registered" && ws === sock) {
+        if (!pair || !pair.brokerNonce
+            || !pairing.proofMatches(notice.proof, pair.token, "broker", pair.nonce, pair.brokerNonce)) {
+          failPairing(sock, unproven(typeof notice.proof === "string" ? "sent a pairing proof that does not match "
+            + "the token file" : "did not prove the pairing token (a broker older than 0.7, or another program)"));
+          return;
+        }
+        pair.token = null;  // not needed again on this socket
+        pairedSock = sock;
+        state.broker = support.isVersion(notice.broker) ? notice.broker : null;
+        setUpdate(notice.update);
         accepted();
+      } else if (notice.event === "update" && ws === sock && pairedSock === sock) {
+        setUpdate(notice.update);
+        if (typeof notice.error === "string") log(`Skip this version: the broker refused (${notice.error}).`, "err");
       }
+      return;
+    }
+    if (pairedSock !== sock) {  // a request before (or without) the broker's proof: never run (fail closed)
+      failPairing(sock, unproven("sent a request before proving the pairing token"));
       return;
     }
     queue = queue.then(() => handleMessage(evt.data, sock)).catch((e) => report("Queue error", e));
@@ -497,7 +596,7 @@ function connect() {
   sock.onclose = safely("Disconnect", (evt) => {
     if (ws !== sock) return;  // replaced by a newer connection
     const code = evt ? evt.code : undefined;
-    if (refusedHere || code === 4409 || code === 4403) {
+    if (refusedHere || code === 4409 || code === 4403 || code === 4401) {
       if (!refusedHere) refusals += 1;
       noteRefusal(evt && evt.reason, code);
     } else {
@@ -633,10 +732,97 @@ async function startBridge() {
 document.getElementById("startBtn").addEventListener("click", safely("Start bridge", () => startBridge()));
 GLOBAL.__agentBridgeLauncher = { launcher, startBridge };
 
+/* ---------- update notice, GitHub pages, problem report (lib/support.js) ---------- */
+
+const updateEl = document.getElementById("update");
+const reportBox = document.getElementById("reportBox");
+const reportText = document.getElementById("reportText");
+const reportStatus = document.getElementById("reportStatus");
+for (const [id, key] of [["updateView", "view"], ["updateSkip", "skip"], ["reportBtn", "report"],
+  ["issuesBtn", "issues"], ["reportClose", "close"], ["reportNote", "reportNote"]]) {
+  document.getElementById(id).textContent = UI[key];
+}
+
+/* The quiet line under the header: "0.7.1 available · View · Skip this version" while the broker knows a newer
+   release that was not skipped (support.notice); hidden otherwise. */
+function refreshUpdate() {
+  const n = support.notice(state.update);
+  updateEl.style.display = n.show ? "block" : "none";
+  document.getElementById("updateText").textContent = n.show ? UI.updateAvailable(n.version) : "";
+  document.getElementById("updateViewGroup").style.display = n.view ? "inline" : "none";
+}
+
+function setUpdate(u) {
+  state.update = support.cleanUpdate(u);
+  refreshUpdate();
+}
+
+/* Open a page of this repository in the browser (support.openUrl refuses every other URL). */
+async function openPage(url) {
+  log(`Opening ${url} ...`, "cmd");
+  const error = await support.openUrl(url, UI.openReason);
+  if (error) log(`Could not open ${url}: ${error}`, "err");
+  return error;
+}
+
+document.getElementById("updateView").addEventListener("click", safely("View the release", () => {
+  const u = support.cleanUpdate(state.update);
+  return u && u.url ? openPage(u.url) : null;
+}));
+
+document.getElementById("updateSkip").addEventListener("click", safely("Skip this version", () => {
+  const msg = support.skipMessage(state.update);
+  if (!msg || !ws || ws.readyState !== WebSocket.OPEN || pairedSock !== ws) return;
+  ws.send(JSON.stringify(msg));
+  log(`Skip this version: ${msg.version} is not shown again (a newer release is).`, "ok");
+  state.update = Object.assign({}, state.update, { skipped: true });  // the broker's "update" notice confirms it
+  refreshUpdate();
+}));
+
+document.getElementById("issuesBtn").addEventListener("click", safely("Open GitHub Issues",
+  () => openPage(support.ISSUES_URL)));
+
+/* What the panel knows, as the problem report's whitelist takes it (support.buildReport). */
+function reportInfo() {
+  const open = !!ws && ws.readyState === WebSocket.OPEN && pairedSock === ws;
+  return {
+    version: VERSION, protocol: PROTOCOL, modules: MODULES,
+    build: { dev: build.dev === true, packaged: build.packaged === true },
+    broker: state.broker, hostInfo: capabilities.hostInfo(), capabilities: capabilities.snapshot().flags,
+    connection: open && !state.refused ? "connected" : (statusCls === "connecting" ? "connecting" : "disconnected"),
+    refused: state.refused ? { closeCode: state.refused.closeCode } : null,
+    stuck: state.stuck ? { action: state.stuck.action, seconds: (Date.now() - state.stuck.since) / 1000 } : null,
+    denied: state.denied ? { reason: state.denied.reason } : false,
+    update: state.update, errors: recentErrors.slice(), created: new Date().toISOString(),
+  };
+}
+
+/* "Copy a problem report": the whole text in a read-only box; a click into it selects it all (its focus handler) and
+   Ctrl+C copies it, as in the first-run box. No Copy button: the panel has no clipboard permission (UXP offers only
+   read or read-and-write; 27.1 refuses the call from a manifest below version 5), and a selection made by script from a
+   button does not take in UXP's text box (live, 6 Nov 2026: Ctrl+C then copied nothing). */
+document.getElementById("reportBtn").addEventListener("click", safely("Problem report", () => {
+  reportText.value = support.buildReport(reportInfo());
+  reportStatus.textContent = "";
+  reportBox.style.display = "block";
+  if (typeof reportBox.scrollIntoView === "function") reportBox.scrollIntoView();
+}));
+
+function selectReport() {
+  if (typeof reportText.focus === "function") reportText.focus();
+  if (typeof reportText.select === "function") reportText.select();
+}
+reportText.addEventListener("focus", safely("Select the report", selectReport));
+
+
+document.getElementById("reportClose").addEventListener("click", safely("Close the report", () => {
+  reportBox.style.display = "none";
+}));
+
 /* Test hook (the node harness loads this script in a vm context; `module` is undefined here). */
 GLOBAL.__agentBridge = {
   handlers, handleMessage, state, spec, build, teardown, safely,
-  lib: { core, timeline, project: projectLib, effects, capabilities },
+  lib: { core, timeline, project: projectLib, effects, capabilities, support, pairing },
 };
 
 log(`Agent Bridge ${VERSION} ready: ${dispatchable().length} commands ` +

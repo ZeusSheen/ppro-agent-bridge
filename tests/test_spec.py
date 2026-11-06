@@ -39,7 +39,10 @@ ERRORS = SPEC["errors"]
 OUTCOMES = list(SPEC["outcomes"])
 TYPES = {"string", "number", "integer", "boolean", "array", "object", "any"}
 SCHEMA_KEYS = {"type", "required", "default", "enum", "minimum", "maximum", "minItems", "items", "properties",
-               "additionalProperties", "pairedWith", "deprecated", "doc", "localPath", "fileName"}
+               "additionalProperties", "pairedWith", "deprecated", "doc", "localPath", "fileName", "extensions", "variantKey",
+               "variants"}
+# A variant of a tagged union (apply_ops' ops, query's what): its param schemas and documentation.
+VARIANT_KEYS = {"doc", "properties", "requireOneOf", "additionalProperties", "readBack", "evidence", "removes", "direct"}
 # Params Premiere opens as files or folders: each must be a `localPath` (no network, device or stream path), so the
 # panel refuses them itself. A new param with a name like these is a deliberate choice: mark it, or list it here.
 PATH_PARAM = re.compile(r"(?:[Pp]ath|[Dd]ir)$|^paths$")
@@ -94,10 +97,31 @@ def schema_problems(schema, path) -> list[str]:
         probs += schema_problems(schema["items"], path + "[]")
     for name, sub in (schema.get("properties") or {}).items():
         probs += schema_problems(sub, f"{path}.{name}")
+    if "variantKey" in schema:
+        probs += variant_problems(schema, path)
     if "default" in schema:
         probs += spec.check_value(schema, schema["default"], path + " default")
     if "doc" in schema and not isinstance(schema["doc"], str):
         probs.append(f"{path}: doc must be a string")
+    return probs
+
+
+def variant_problems(holder, path, base=None) -> list[str]:
+    """A tagged union (an object schema, or an action with variantKey): its tag is a base property, and every variant
+    a dict of VARIANT_KEYS with sound param schemas, its requireOneOf naming its own params."""
+    base = holder.get("properties") if base is None else base
+    key, variants = holder.get("variantKey"), holder.get("variants")
+    if not isinstance(variants, dict) or not variants:
+        return [f"{path}: variantKey without variants"]
+    probs = [] if key in (base or {}) else [f"{path}: the tag {key} is not a base property"]
+    for tag, v in variants.items():
+        where = f"{path}<{tag}>"
+        probs += [f"{where}: unknown variant key {k}" for k in v if k not in VARIANT_KEYS]
+        for name, sub in (v.get("properties") or {}).items():
+            probs += schema_problems(sub, f"{where}.{name}")
+        for group in v.get("requireOneOf", []):
+            if not set(group) <= set(v.get("properties") or {}):
+                probs.append(f"{where}: requireOneOf {group} names unknown params")
     return probs
 
 
@@ -142,7 +166,10 @@ class SpecShapeTest(unittest.TestCase):
     def test_actions(self):
         for a in ACTIONS:
             with self.subTest(action=a["name"]):
-                self.assertEqual(set(a) - ACTION_KEYS - {"requireOneOf", "vectors", "devOnly"}, set())
+                self.assertEqual(set(a) - ACTION_KEYS - {"requireOneOf", "vectors", "devOnly", "variantKey",
+                                                         "variants"}, set())
+                if "variantKey" in a:
+                    self.assertEqual(variant_problems(a, a["name"], a["params"]), [])
                 self.assertLessEqual(ACTION_KEYS, set(a))
                 self.assertIn(a["kind"], ("read", "write"))
                 self.assertEqual(a["readOnly"], a["kind"] == "read")
@@ -194,6 +221,7 @@ class SpecShapeTest(unittest.TestCase):
         self.assertEqual(sorted(marked), sorted([
             "import_media.paths", "export_frame.dir", "export_frame.name", "export_otio.outputPath",
             "relink.newPath", "export_sequence.outputPath", "export_sequence.presetPath",
+            "export_aaf.outputPath", "export_xml.outputPath",
             "api_smoke.copyPath", "api_smoke.outputDir", "api_smoke.mogrtPath"]))
 
     def test_local_path_rule(self):

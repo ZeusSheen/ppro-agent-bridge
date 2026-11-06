@@ -7,11 +7,17 @@ Rules (a JSON-Schema subset): `type` is one of string, number, integer, boolean,
 `enum`; `minimum` / `maximum`; `minItems`; `items` (array element schema); `properties` (object schema — unknown
 keys are refused unless `additionalProperties` is true); `pairedWith` (both or neither); on a string, `localPath`
 (a path Premiere will open: no network (UNC) or device path, no data stream - ppro_bridge/paths.path_problem, the
-panel's pathProblem) and `fileName` (a plain file name: no folder, drive or stream). A param sent as null
+panel's pathProblem), `fileName` (a plain file name: no folder, drive or stream) and `extensions` (it must end in
+one of them, case-insensitive: the panel's exports keep their file type whoever sends the request). A param sent as null
 counts as absent. `default` is documentation: handlers apply defaults. At action level, `requireOneOf` lists name
 groups of which at least one must be present (non-empty when it is an array). Unknown top-level params are refused.
 An action with `devOnly: true` (api_smoke) is a test that changes Premiere: only a dev build of the panel registers it
 (`panel_action_names(dev=False)` is what a release build answers with).
+Variants (a tagged union): an object schema with `variantKey` (the name of its tag param) and `variants` (tag value ->
+{properties, requireOneOf?, additionalProperties?, plus documentation keys}) is checked against the variant its tag
+names, with the schema's own `properties` (the tag's schema among them) merged under the variant's; an unknown tag is
+one problem ("must be one of ..."). An action may carry `variantKey` / `variants` too: its `params` are then the base
+properties (apply_ops' ops, query's what).
 """
 
 import json
@@ -106,6 +112,9 @@ def check_value(schema: dict, value, path: str) -> list[str]:
             (paths.name_problem(value) if schema.get("fileName") else None)
         if why:
             problems.append(f"{path}: {why}")
+        elif "extensions" in schema and not value.strip().lower().endswith(
+                tuple(e.lower() for e in schema["extensions"])):
+            problems.append(f"{path}: must end in {' or '.join(schema['extensions'])}")
     if t in ("number", "integer"):
         if "minimum" in schema and value < schema["minimum"]:
             problems.append(f"{path}: must be >= {schema['minimum']}")
@@ -117,10 +126,26 @@ def check_value(schema: dict, value, path: str) -> list[str]:
         if "items" in schema:
             for i, v in enumerate(value):
                 problems += check_value(schema["items"], v, f"{path}[{i}]")
-    if t == "object" and "properties" in schema:
+    if t == "object" and "variantKey" in schema:
+        problems += check_variant(schema, value, path)
+    elif t == "object" and "properties" in schema:
         problems += check_object(schema["properties"], value, path,
                                  additional=schema.get("additionalProperties", False))
     return problems
+
+
+def check_variant(schema: dict, obj: dict, path: str) -> list[str]:
+    """A tagged object: the variant named by obj[schema["variantKey"]], its properties merged over the schema's own."""
+    key, variants = schema["variantKey"], schema.get("variants") or {}
+    tag = obj.get(key)
+    if tag is None:
+        return [f"{path}.{key}: required"]
+    if not isinstance(tag, str) or tag not in variants:
+        return [f"{path}.{key}: must be one of {', '.join(variants)}"]
+    variant = variants[tag]
+    props = dict(schema.get("properties") or {}, **(variant.get("properties") or {}))
+    return check_object(props, obj, path, additional=variant.get("additionalProperties", False),
+                        require_one_of=variant.get("requireOneOf", ()))
 
 
 def check_object(properties: dict, obj: dict, path: str, *, additional=False, require_one_of=()) -> list[str]:
@@ -152,4 +177,7 @@ def check_params(action_name: str, params: dict | None) -> list[str]:
         params = {}
     if not isinstance(params, dict):
         return ["params: expected object"]
+    if "variantKey" in a:
+        return check_variant({"variantKey": a["variantKey"], "variants": a["variants"], "properties": a["params"]},
+                             params, "params")
     return check_object(a["params"], params, "params", require_one_of=a.get("requireOneOf", ()))

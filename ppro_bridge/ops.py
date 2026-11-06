@@ -10,27 +10,63 @@ import json
 import math
 import os
 import re
-import shutil
-import tempfile
+import sys
 import time
 from pathlib import Path
 
-from . import apiprobe, ccx, framegrid, frames, items, media, panelhash, paths, spec, transcript
-from . import editing as _editing
-from . import rendercheck as _rendercheck
-from . import review as _review
-from . import plan as _plan
-from . import replace as _replace
-from . import presets as _presets
-from . import prfpset as _prfpset
+from . import paths, spec
 from ._version import VERSION
 from .errors import BridgeError
+
+
+class _Lazy:
+    """A module imported on first use, so a command loads only the modules it needs (`ping` used to load every
+    submodule: about 150 ms of a CLI call). The first attribute read imports the module and puts the module itself
+    in this namespace under `alias`, so from then on call sites (and tests patching e.g. ops.frames.POLL) use the
+    module; an attribute set or deleted through the proxy goes to the module."""
+
+    __slots__ = ("_name", "_alias")
+
+    def __init__(self, name: str, alias: str):
+        object.__setattr__(self, "_name", name)
+        object.__setattr__(self, "_alias", alias)
+
+    def _load(self):
+        __import__(self._name)
+        module = sys.modules[self._name]
+        if globals().get(self._alias) is self:
+            globals()[self._alias] = module
+        return module
+
+    def __getattr__(self, attr):
+        return getattr(self._load(), attr)
+
+    def __setattr__(self, attr, value):
+        setattr(self._load(), attr, value)
+
+    def __delattr__(self, attr):
+        delattr(self._load(), attr)
+
+    def __repr__(self):
+        return f"<module {self._name}, not imported yet>"
+
+
+shutil, tempfile = (_Lazy(n, n) for n in ("shutil", "tempfile"))
+apiprobe, ccx, framegrid, frames, items, media, panelhash, transcript = (
+    _Lazy(f"{__package__}.{n}", n)
+    for n in ("apiprobe", "ccx", "framegrid", "frames", "items", "media", "panelhash", "transcript"))
+_editing, _rendercheck, _review, _plan, _replace, _presets, _prfpset = (
+    _Lazy(f"{__package__}.{n}", f"_{n}") for n in ("editing", "rendercheck", "review", "plan", "replace", "presets",
+                                                   "prfpset"))
 
 MARKER_COLORS = {"green": 0, "red": 1, "purple": 2, "magenta": 2, "orange": 3,
                  "yellow": 4, "white": 5, "blue": 6, "cyan": 7}
 MARKER_COLOR_NAMES = {i: n for n, i in reversed(list(MARKER_COLORS.items()))}  # index -> first name (2: purple)
 
 PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugin"  # this checkout's panel, for the stale check
+# its code hash, remembered with the files' sizes and times (panelhash.code_hash): Python's bytecode cache folder of
+# this package, and only where Python writes one (not with PYTHONDONTWRITEBYTECODE or a pycache prefix)
+CODE_HASH_CACHE = Path(__file__).resolve().parent / "__pycache__" / "panel-codehash.json"
 
 
 # ---------------------------------------------------------------- helpers
@@ -58,9 +94,21 @@ def _as_list(value) -> list | None:
 
 
 def _out_path(path) -> Path:
-    out = Path(path).expanduser().resolve()
+    out = paths.resolved(path)  # after paths.check: no link to a share on the way, a mapped drive keeps its letter
     out.parent.mkdir(parents=True, exist_ok=True)
     return out
+
+
+def _json_out(output, what: str = "--output") -> str:
+    """A JSON file the CLI writes itself: checked as Premiere's paths are (no share, device, stream or link to one)
+    and ending in .json, so a write can never replace a project, a script or a program."""
+    return paths.check(output, what=what, ext=".json")
+
+
+def _in_file(path, what: str) -> Path:
+    """A file the CLI reads itself (plan, transcript, SRT, JSON params): checked before Python opens it - a share
+    would get the user's credentials from this process as from Premiere."""
+    return Path(paths.check(path, what=what))
 
 
 def _sequence(rpc, expect_seq: str | None) -> dict:
@@ -77,6 +125,7 @@ def ping(rpc, *, probe=False) -> dict:
     """Liveness + version/protocol handshake; `compatible` and a `warning` say what to reload or restart."""
     data = rpc("ping", {"probe": True} if probe else {})
     data["cliVersion"] = VERSION
+    data.setdefault("update", None)  # the broker's update check: {latest, url, published, newer, skipped, checkedAt}
     broker = data.get("brokerVersion")
     data["brokerVersion"] = broker
     protocol = data.get("protocol") or 1
@@ -99,7 +148,8 @@ def ping(rpc, *, probe=False) -> dict:
         reason = denied.get("reason") if isinstance(denied, dict) else None
         warnings.append(f"This Premiere build is on the panel's denylist ({reason or 'no reason given'}): "
                         "the panel answers ping only.")
-    local = panelhash.code_hash(PLUGIN_DIR)
+    local = panelhash.code_hash(PLUGIN_DIR, cache=None if sys.dont_write_bytecode or sys.pycache_prefix
+                                else CODE_HASH_CACHE)
     if local:
         data["localCodeHash"] = local
         # A bundled panel (scripts/build_panel.py) has no lib/ folder, so its hash covers other files.
@@ -133,12 +183,37 @@ def get_sequence(rpc) -> dict:
     return seq
 
 
-def set_active_sequence(rpc, *, name=None, guid=None) -> dict:
+SWITCH_CONFIRM_DELAYS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.5)  # s before each get_project re-read: about 2 s in all
+
+
+def set_active_sequence(rpc, *, name=None, guid=None, sleep=time.sleep) -> dict:
     """Open another sequence of the active project in the Timeline (by exact name or guid), so later commands work on
-    it; the panel reads the switch back. Nothing in the project changes."""
+    it; the panel reads the switch back. Nothing in the project changes.
+    Then get_project must report that sequence active (`confirmed`, `confirmReads`): live on 27.1 (6 Nov 2026) the
+    second of two quick switches replied switched while Premiere stayed on the other sequence. It is read again for
+    about 2 s (SWITCH_CONFIRM_DELAYS); still another one is VERIFY_FAILED, outcome committed (Premiere may yet
+    switch), with what Premiere reports active."""
     if not name and not guid:
         raise _bad("name or guid is required")
-    return rpc("set_active_sequence", {"guid": guid} if guid else {"name": name})
+    data = rpc("set_active_sequence", {"guid": guid} if guid else {"name": name})
+    want = data.get("activeSequence")
+    if not want:
+        return data
+    reads = []
+    for delay in (0.0, *SWITCH_CONFIRM_DELAYS):
+        if delay:
+            sleep(delay)
+        reads.append((rpc("get_project") or {}).get("activeSequence"))
+        if reads[-1] == want:
+            data.update(confirmed=True, confirmReads=len(reads))
+            return data
+    raise BridgeError(f'set_active_sequence replied that "{want}" is active, but get_project still reports '
+                      f'"{reads[-1]}" after {len(reads)} reads over {sum(SWITCH_CONFIRM_DELAYS):.1f} s: Premiere did '
+                      "not switch (yet).", code="VERIFY_FAILED", outcome="committed",
+                      data={"reply": data, "activeSequence": reads[-1], "reads": reads},
+                      hint="Run get_project to see which sequence is active, then set_active_sequence again (or ask "
+                           "the user to open it in Premiere) before any write; --expect-seq / a sequence guard "
+                           "refuses a write on the wrong one.")
 
 
 def select_items(rpc, *, track=None, at=None, from_s=None, to_s=None, mode="inside", clear=False, dry_run=False,
@@ -206,6 +281,8 @@ def inspect_items(rpc, *, track=None, from_s=None, to_s=None, output=None) -> di
         params["fromSeconds"] = from_s
     if to_s is not None:
         params["toSeconds"] = to_s
+    if output:
+        _json_out(output)
     data = rpc("inspect_items", params)
     if output:
         out = _out_path(output)
@@ -221,8 +298,8 @@ def list_project_items(rpc) -> dict:
 
 
 def export_frame(rpc, *, dir, name=None, at=None, width=None, height=None) -> dict:
-    paths.check(dir, what="--dir")  # as typed: a mapped drive resolves to its UNC form and is fine
-    out_dir = Path(dir).expanduser().resolve()
+    paths.check(dir, what="--dir")  # as typed, and every link on the way (a mapped drive is fine)
+    out_dir = paths.resolved(dir)
     if name is not None:
         paths.check_name(name, what="--name", ext=".png")  # before any panel call (export_one_frame checks it again)
     if at is not None:
@@ -243,7 +320,9 @@ def export_frames(rpc, *, dir, at, width=None, height=None, sheet=None, cols=4, 
     if not times:
         raise _bad("--at needs at least one time")
     paths.check(dir, what="--dir")
-    out_dir = Path(dir).expanduser().resolve()
+    out_dir = paths.resolved(dir)
+    if sheet:
+        paths.check(sheet, what="--sheet", ext=(".jpg", ".jpeg", ".png"))
     frames.check_times_inside(rpc, times)
     out_dir.mkdir(parents=True, exist_ok=True)
     shots, results, codes = [], [], []
@@ -263,7 +342,7 @@ def export_frames(rpc, *, dir, at, width=None, height=None, sheet=None, cols=4, 
     if black:
         data["warning"] = f"All black at {', '.join(f'{t:g}' for t in black)}s. " + frames.BLACK_WARNING
     if sheet is not None:
-        sheet_path = Path(sheet).expanduser().resolve() if sheet else out_dir / "contact-sheet.jpg"
+        sheet_path = paths.resolved(sheet) if sheet else out_dir / "contact-sheet.jpg"
         made = frames.make_contact_sheet(shots, sheet_path, cols, thumb_width)
         data["sheet"] = made or "skipped (pip install pillow for contact sheets)"
     if any(r["error"] or not r["path"] for r in results):
@@ -281,8 +360,10 @@ def probe_api(rpc, *, output=None, diff=None, no_instances=False, max_members=No
     """This Premiere build's UXP API: a summary with the watch list (calls the UXP port depends on); --output saves
     the full dump, --diff compares it with an earlier one (added / removed members)."""
     old = None
+    if output:
+        _json_out(output)
     if diff:
-        p = Path(diff).expanduser()
+        p = _in_file(diff, "--diff").expanduser()
         if not p.is_file():
             raise BridgeError(f"File not found: {p.resolve()}", code="FILE_NOT_FOUND", outcome="not_committed")
         try:
@@ -330,6 +411,7 @@ def _export_transcript(rpc, output, item: dict | None) -> dict:
 
 def export_transcript(rpc, *, output, item=None) -> dict:
     """Save a clip's Premiere transcript (`item`: name or "<bin path>/<name>"; default: the first clip with one)."""
+    _json_out(output)
     items.require_command(rpc, "export_transcript")
     picked = items.resolve_item(item, rpc=rpc) if item else None
     return _export_transcript(rpc, output, picked)
@@ -365,13 +447,16 @@ def transcribe_clip(rpc, *, item, language=None, wait=600.0, output=None, poll=5
     wait = float(wait or 0)
     if wait > 0 and float(poll) <= 0:
         raise _bad("poll must be > 0 seconds")
+    if output:  # a share, a device or a link to one: refused before Speech-to-Text starts
+        _json_out(output)
     items.require_command(rpc, "transcribe_clip")
     picked = items.resolve_item(item, rpc=rpc)
     params = {"itemName": picked["name"], "binPath": picked.get("bin") or ""}
     if language:
         params["language"] = language
     if output:  # before anything starts: a bad output folder must not fail after Speech-to-Text is running
-        Path(output).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
+        _json_out(output)
+        paths.resolved(output).parent.mkdir(parents=True, exist_ok=True)
     start = rpc("transcribe_clip", params)
     if wait <= 0:
         return start
@@ -423,38 +508,75 @@ def _await_transcription(rpc, start, picked, wait, output, poll, sleep) -> dict:
 
 # ---------------------------------------------------------------- writes
 
-def import_media(rpc, *, path, bin=None, force=False, probe_media=None) -> dict:
-    """Import files into the root or a top-level bin. Files in a codec Premiere refuses (VP9, AV1, Opus …) are
-    refused first, with an ffmpeg command for each, because that import hangs the panel; `force` sends them anyway.
-    UNC paths and data streams are refused as typed (paths.check)."""
+def import_media(rpc, *, path, bin=None, force=False, probe_media=None, convert_audio=None) -> dict:
+    """Import files into the root or a top-level bin. That import hangs the panel for a codec Premiere refuses, so:
+    an audio-only file in one (FLAC, Opus, Vorbis) is converted to a 48 kHz 24-bit WAV beside it — or an earlier
+    conversion reused — and the WAV is imported in its place (`converted`); a file with a picture in one (VP9, AV1,
+    or Opus audio in a video) is refused first, with an ffmpeg command for each, and nothing is converted or
+    imported. `force` sends every file as it is. UNC paths and data streams are refused as typed (paths.check).
+    `convert_audio(path, info)` replaces media.convert_to_wav (tests)."""
     given = _as_list(path) or []
     for p in given:
         paths.check(p, what="--path")
-    files = [Path(p).expanduser().resolve() for p in given]
+    files = [paths.resolved(p) for p in given]
     if not files:
         raise _bad("Give at least one --path")
     missing = [str(p) for p in files if not p.is_file()]
     if missing:
         raise BridgeError("File(s) not found", code="FILE_NOT_FOUND", outcome="not_committed",
                           data={"missing": missing})
+    converted = []
     if not force:
         probe = probe_media or media.probe_media
-        refused = []
+        refused, to_convert = [], []
         for p in files:
             info = probe(str(p)) or {}
             codecs = media.unimportable(info)
-            if codecs:
+            if codecs and media.wav_convertible(info):
+                to_convert.append((p, info))
+            elif codecs:
                 refused.append({"path": str(p), "codecs": codecs, "transcode": media.transcode_command(p, info)})
-        if refused:
+        if refused:  # before any conversion: a refused call writes nothing
             raise BridgeError(f"Premiere does not import {', '.join(sorted({c for r in refused for c in r['codecs']}))}"
                               " (the import would hang the panel). Nothing was imported.", code="UNSUPPORTED",
                               outcome="not_committed", data={"files": refused},
                               hint="Transcode with the ffmpeg command listed for each file and import the result "
                                    "(or pass --force to send the files anyway).")
-    params = {"paths": [str(p) for p in files]}
+        convert = convert_audio or media.convert_to_wav
+        failed = []
+        for p, info in to_convert:
+            done = convert(str(p), info)
+            if done.get("error"):
+                failed.append({"path": str(p), "codecs": media.unimportable(info), "why": done["error"],
+                               "transcode": done.get("command") or media.transcode_command(p, info)})
+            else:
+                converted.append(done)
+        if failed:
+            raise BridgeError(f"Premiere does not import {', '.join(sorted({c for f in failed for c in f['codecs']}))}"
+                              " (the import would hang the panel), and converting to WAV failed: "
+                              + "; ".join(f"{Path(f['path']).name}: {f['why']}" for f in failed)
+                              + ". Nothing was imported.", code="UNSUPPORTED", outcome="not_committed",
+                              data={"files": failed, "converted": converted},
+                              hint="Run the ffmpeg command listed for each file and import the WAV (or pass --force "
+                                   "to send the file as it is).")
+    swap = {os.path.normcase(c["from"]): c["to"] for c in converted}
+    send = []
+    for p in files:
+        target = swap.get(os.path.normcase(str(p)), str(p))
+        if os.path.normcase(target) not in {os.path.normcase(s) for s in send}:  # the WAV given too: import it once
+            send.append(target)
+    params = {"paths": send}
     if bin:
         params["bin"] = bin
-    return rpc("import_media", params)
+    try:
+        reply = rpc("import_media", params)
+    except BridgeError as e:
+        if converted and (e.data is None or isinstance(e.data, dict)):  # the WAVs stay on disk: say where
+            e.data = dict(e.data or {}, converted=converted)
+        raise
+    if converted:
+        reply = dict(reply, converted=converted)
+    return reply
 
 
 def insert_clip(rpc, *, item, at=0.0, vtrack=0, atrack=0, mode="overwrite", in_s=None, out_s=None, label=None,
@@ -475,11 +597,13 @@ def insert_clip(rpc, *, item, at=0.0, vtrack=0, atrack=0, mode="overwrite", in_s
 
 
 def apply_plan(rpc, *, plan, dry_run=False, media_root=None, bin=None, no_bin=False, only=None, overwrite=False,
-               any_sequence=False, notes_as_markers=False, report=None, probe_media=None) -> dict:
-    """Run a JSON edit plan; the report's `ok` is False when any step is conflict/error/failed/unverified/aborted."""
+               any_sequence=False, notes_as_markers=False, report=None, probe_media=None, convert_audio=None) -> dict:
+    """Run a JSON edit plan; the report's `ok` is False when any step is conflict/error/failed/unverified/aborted.
+    An audio-only file Premiere refuses (FLAC …) is converted to a WAV beside it and that is imported (step
+    `convert`; a dry run writes nothing)."""
     return _plan.run_plan(plan, rpc=rpc, dry_run=dry_run, media_root=media_root, bin=bin, no_bin=no_bin, only=only,
                           overwrite=overwrite, any_sequence=any_sequence, notes_as_markers=notes_as_markers,
-                          report=report, probe_media=probe_media)
+                          report=report, probe_media=probe_media, convert_audio=convert_audio)
 
 
 def replace_clip(rpc, *, track, at, with_item, in_s=None, out_s=None, atrack=None, expect_seq=None, no_effects=False,
@@ -574,6 +698,8 @@ def set_scale(rpc, *, track, at=None, from_s=None, to_s=None, value=None, fit=Fa
         scale = media.fit_scale(how, info, seq)
         row = {"name": clip["name"], "start": clip["start"], "media": [info.get("width"), info.get("height")],
                "scaleBefore": clip.get("scaleBefore"), "value": scale}
+        if info.get("rotation"):
+            row["rotation"] = info["rotation"]  # media is the size Premiere shows (the rotation applied)
         if scale is None:
             row["error"] = "Could not read media size (is ffprobe on PATH?)"
         elif not dry_run:
@@ -749,8 +875,8 @@ def relink(rpc, *, item, to, force=False, dry_run=False, probe_media=None) -> di
     (PRECONDITION_FAILED, data.comparison) unless `force`. Read back: VERIFY_FAILED (committed) when the item's media
     path did not change. Every sequence using the item follows: `uses` counts its clips in all sequences. Not an undo
     step the bridge can label: relink back to previousPath to revert."""
-    paths.check(to, what="--to")  # as typed: a mapped drive resolves to its UNC form and is fine
-    new = Path(to).expanduser().resolve()
+    paths.check(to, what="--to")  # as typed, and every link on the way (a mapped drive is fine)
+    new = paths.resolved(to)
     if not new.is_file():
         raise BridgeError(f"File not found: {new}", code="FILE_NOT_FOUND", outcome="not_committed")
     items.require_command(rpc, "relink")
@@ -1000,7 +1126,7 @@ def remove_project_items(rpc, *, item=None, bin=None, dry_run=False, label=None)
 
 
 def _read_components(json_file) -> list:
-    p = Path(json_file).expanduser()
+    p = _in_file(json_file, "--json").expanduser()
     if not p.is_file():
         raise BridgeError(f"File not found: {p.resolve()}", code="FILE_NOT_FOUND", outcome="not_committed")
     try:
@@ -1380,20 +1506,23 @@ def _render_checker(render_check, render_dir, preset, dry_run):
 
 
 def split_clip(rpc, *, track, at, label=None, dry_run=False, expect_seq=None, render_check=False, render_dir=None,
-               preset=None) -> dict:
+               preset=None, probe_media=None) -> dict:
     """Split the clip under `at` on one track without a razor: clone past the end, trim, head-trim the copy, clone
     it to the cut, remove the parked copy (5 undo steps, no move: a move across clips renders silent / blank on
     27.1) - the two halves keep every clip attribute (effects, volume, scaling). At a clip edge it is a no-op.
     render_check: render the sequence afterwards and check both pieces play (rendercheck; render_dir keeps the files,
-    preset is the WAV .epr)."""
+    preset is the WAV .epr). probe_media (ffprobe): media lengths, when a moved transition is put back next to a
+    neighbour (B2)."""
     items.require_command(rpc, "split_clip")
     _sequence(rpc, expect_seq)
     return _editing.split_clip(rpc, track=track, at=at, label=label or f"Agent split {track} at {at}s", dry_run=dry_run,
-                               render_check=_render_checker(render_check, render_dir, preset, dry_run))
+                               render_check=_render_checker(render_check, render_dir, preset, dry_run),
+                               probe_media=probe_media or media.probe_media)
 
 
 def cut_range(rpc, *, from_s, to_s, track=None, no_ripple=False, captions=None, srt=None, srt_offset=0.0,
-              label=None, dry_run=False, expect_seq=None, render_check=False, render_dir=None, preset=None) -> dict:
+              label=None, dry_run=False, expect_seq=None, render_check=False, render_dir=None, preset=None,
+              probe_media=None) -> dict:
     """Remove [from, to) from every track (or the --track ones) and, unless no_ripple, move everything after it left
     on all those tracks by the same amount (one undo step), keeping them in sync; clips crossing an edge are split or
     trimmed, so they keep their attributes. With captions (a caption track) + srt, conform that track afterwards.
@@ -1405,7 +1534,8 @@ def cut_range(rpc, *, from_s, to_s, track=None, no_ripple=False, captions=None, 
     cap = {"track": captions, "srt_path": srt, "offset": srt_offset or 0.0} if captions else None
     return _editing.cut_range(rpc, start=from_s, end=to_s, tracks=track or None, ripple=not no_ripple, captions=cap,
                               label=label or f"Agent cut {from_s}-{to_s}s", dry_run=dry_run,
-                              render_check=_render_checker(render_check, render_dir, preset, dry_run))
+                              render_check=_render_checker(render_check, render_dir, preset, dry_run),
+                              probe_media=probe_media or media.probe_media)
 
 
 def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, track=None, extend=None, captions=None, srt=None, srt_offset=0.0,
@@ -1435,10 +1565,11 @@ def extend_cut(rpc, *, at, out_by=0.0, in_by=0.0, track=None, extend=None, capti
     return _editing.extend_cut(rpc, at=at, out_by=out_by or 0.0, in_by=in_by or 0.0, tracks=track or None,
                                extend=extend or None, captions=cap, media_seconds=media_seconds, dry_run=dry_run,
                                label=label or f"Agent open cut at {at}s", allow_silent=allow_silent,
-                               render_check=_render_checker(render_check, render_dir, preset, dry_run))
+                               render_check=_render_checker(render_check, render_dir, preset, dry_run),
+                               probe_media=probe)
 
 
-def shift_items(rpc, *, from_s, by, track=None, label=None, dry_run=False, expect_seq=None) -> dict:
+def shift_items(rpc, *, from_s, by, track=None, label=None, dry_run=False, expect_seq=None, probe_media=None) -> dict:
     """Move every clip that starts at/after `from_s` on every track (or the --track ones) by `by` seconds (whole
     frames; negative = left) in one undo step, keeping them in sync: room before a clip that has no edit point for
     extend_cut, or a gap closed. Clips crossing `from_s` stay put."""
@@ -1446,7 +1577,8 @@ def shift_items(rpc, *, from_s, by, track=None, label=None, dry_run=False, expec
     _sequence(rpc, expect_seq)
     return _editing.shift_items(rpc, at=from_s, by=by, tracks=track or None, dry_run=dry_run,
                                 label=label or f"Agent shift from {from_s}s by {by}s",
-                                precise=items.has_feature(info, "shiftItemsPrecise"))
+                                precise=items.has_feature(info, "shiftItemsPrecise"),
+                                probe_media=probe_media or media.probe_media)
 
 
 def snap_edges(rpc, *, track=None, label=None, dry_run=False, expect_seq=None) -> dict:
@@ -1485,8 +1617,12 @@ def review_cuts(rpc, *, track=None, pre_roll=0.25, post_roll=0.35, words=None, o
     shadow mix of the source audio (no Premiere render, clip volume not applied); render=True analyses Premiere's
     own mix (export_sequence + loudness). words: a transcript of the NEW mix (e.g. transcribe.py on the exported
     WAV) for word-level checks. `clean` is false when anything is flagged."""
+    if output:
+        _json_out(output)
+    if out_dir:
+        paths.check(out_dir, what="--out-dir")
     words_doc = transcript.read_transcript(words)[1] if words else None
-    work = Path(out_dir).expanduser().resolve() if out_dir else Path(tempfile.mkdtemp(prefix="ppro_review_"))
+    work = paths.resolved(out_dir) if out_dir else Path(tempfile.mkdtemp(prefix="ppro_review_"))
     work.mkdir(parents=True, exist_ok=True)
     report = _review.review_cuts(rpc, tracks=_audio_tracks(track), pre_roll=pre_roll, post_roll=post_roll,
                                  words=words_doc, out_dir=str(work), render=render, preset=preset, sliver=sliver)
@@ -1688,8 +1824,10 @@ def _resume_export(rpc, job_id, *, preset, output, format, detach, stall_seconds
         if e.code == "NOT_FOUND":
             e.data = dict(e.data or {}, note="A panel reload forgets its jobs: look for the rendered file itself.")
         raise
-    out = Path(job.get("outputPath") or "").expanduser().resolve()
-    if output and Path(output).expanduser().resolve() != out:
+    if job.get("kind") == "aaf":
+        raise _bad(f"Job {job_id} is an AAF export: export_aaf --job {job_id} waits for it. Nothing was sent.")
+    out = paths.resolved(job.get("outputPath") or "")  # QA: as --output is resolved (a mapped drive keeps its letter)
+    if output and paths.resolved(paths.check(output, what="--output")) != out:
         raise _bad(f"--output {output} is not the file job {job_id} renders ({out}). Nothing was sent.")
     try:
         info = _presets.resolve(job.get("preset"))
@@ -1744,12 +1882,14 @@ def export_video(rpc, *, preset=None, output=None, format=None, overwrite=False,
     if info["kind"] == "image":
         raise BridgeError(f'"{info["name"]}" writes a {info["format"]} (one file per frame): export_frames makes '
                           "stills. Nothing was rendered.", code="UNSUPPORTED", outcome="not_committed")
-    exts = tuple(info["extensions"] or ())
+    # A format with no extension of its own (MPEG-2, an unknown FourCC) still writes a media file: the panel's own
+    # list (actions.json export_sequence outputPath extensions), never, say, a .bat.
+    exts = tuple(info["extensions"] or ()) or tuple(spec.action("export_sequence")["params"]["outputPath"]["extensions"])
     if exts and not str(output).strip().lower().endswith(exts):
         raise _bad(f"--output {str(output)!r}: a {info['format']} preset writes {' or '.join(exts)} files. "
                    "Nothing was sent.", extensions=list(exts))
     paths.check(output, what="--output")
-    out = Path(output).expanduser().resolve()
+    out = paths.resolved(output)
     if out.is_dir():
         raise _bad(f"--output {out} is a folder: give a file name. Nothing was rendered.")
     if out.exists() and not overwrite:
@@ -1798,6 +1938,250 @@ def export_video(rpc, *, preset=None, output=None, format=None, overwrite=False,
                           "before rendering again (and Reload the panel if ping reports it stuck).")
         raise
     return _render_result(plan, out, reply, started, seq, info, warnings, round(time.time() - started, 1), probe_media)
+
+
+# ---------------------------------------------------------------- AAF and FCP XML (export_aaf, export_xml)
+
+AAF_HINT = ('Premiere may be showing its "AAF export log" window (an effect or transition that cannot go into the AAF): '
+            "exportAAF does not return until someone clicks OK there. Ask the user to click OK in Premiere, then wait "
+            "again with export_aaf --job {job}.")
+AAF_LOG_NOTE = ("The export waited with no new bytes before it ended: Premiere probably showed its modal \"AAF export "
+                "log\", which lists the effects and transitions left out of the AAF. Ask the user what it listed.")
+AAF_HINT_AFTER = 10.0  # seconds a running AAF job may go without new bytes before the reply suspects the modal log
+
+
+def _file_size(path: Path) -> int | None:
+    """The file's size from os.stat (a directory listing's size lags for a file another process holds open)."""
+    try:
+        return os.stat(path).st_size
+    except OSError:
+        return None
+
+
+def _fresh_file(out: Path, started: float) -> Path | None:
+    """`out` when it was written since `started` (two seconds of slack) and is not empty; else None (an older file of
+    that name, as with --overwrite, is not this export)."""
+    try:
+        st = os.stat(out)
+    except OSError:
+        return None
+    return out if st.st_size > 0 and st.st_mtime >= started - 2 else None
+
+
+def _check_new_output(out: Path, what: str, overwrite: bool) -> None:
+    """Refusals before anything is sent: a folder, an existing file without `overwrite`, a read-only one."""
+    if out.is_dir():
+        raise _bad(f"--output {out} is a folder: give a file name. Nothing was exported.")
+    if out.exists() and not overwrite:
+        raise BridgeError(f"{out} already exists: pass --overwrite to replace it. Nothing was exported.",
+                          code="CONFIRM_REQUIRED", outcome="not_committed", data={"output": str(out)})
+    if out.exists() and not os.access(out, os.W_OK):
+        raise BridgeError(f"{out} is read-only, so Premiere cannot replace it with the {what}. Nothing was exported.",
+                          code="BAD_PARAMS", outcome="not_committed", data={"output": str(out)})
+
+
+def _await_aaf(rpc, job: dict, out: Path, *, stall_seconds, poll, sleep) -> tuple[dict, dict]:
+    """Poll export_status every `poll` s until the AAF job ends, with no time limit, or stalls: no state change and no
+    growth of the .aaf for `stall_seconds` (stats "stalledSeconds"). stats "dialogSuspected": the job ran on for
+    AAF_HINT_AFTER s at some point without the file growing (or appearing) - Premiere's modal AAF export log, most
+    likely. A poll the broker or panel cannot answer is no news."""
+    job_id = job["jobId"]
+    stats = {"polls": 0, "missedPolls": 0, "dialogSuspected": False}
+    size = _file_size(out)
+    quiet_since, quiet_slept = time.monotonic(), 0.0
+    while job.get("state") not in EXPORT_ENDED:
+        sleep(poll)
+        quiet_slept += poll
+        try:
+            current = (rpc("export_status", {"jobId": job_id}).get("jobs") or [None])[0]
+            stats["polls"] += 1
+        except BridgeError as e:
+            if e.code == "NOT_FOUND":
+                raise BridgeError(f"AAF export job {job_id} is gone from the panel's job table (was the panel "
+                                  f"reloaded?): Premiere may still be writing {out}. Check the file before exporting "
+                                  "again.", code="EXPORT_LOST", outcome="unknown",
+                                  data={"jobId": job_id, "output": str(out), "bytes": _file_size(out),
+                                        "hint": 'If Premiere shows its "AAF export log" window, ask the user to click '
+                                                "OK there; then look for the .aaf before exporting again."}) from e
+            if e.code not in EXPORT_POLL_MISSES:
+                raise
+            stats["missedPolls"] += 1
+            current = None
+        prev, size = size, _file_size(out)
+        alive = size != prev
+        if current:
+            alive = alive or current.get("state") != job.get("state")
+            job = current
+        quiet = max(quiet_slept, time.monotonic() - quiet_since)
+        if alive:
+            quiet_since, quiet_slept = time.monotonic(), 0.0
+            continue
+        if job.get("state") == "running" and quiet >= AAF_HINT_AFTER:
+            stats["dialogSuspected"] = True
+        if quiet >= stall_seconds:
+            stats["stalledSeconds"] = round(quiet, 1)
+            break
+    return job, stats
+
+
+def _finish_aaf(rpc, plan: dict, job: dict, out: Path, started: float, *, stall_seconds, poll, sleep) -> dict:
+    """Wait for an AAF job (_await_aaf), then check the file: written since the job started and not empty (ffprobe
+    cannot read AAF). A failed job is EXPORT_FAILED, a stalled one EXPORT_STALLED (outcome unknown; --job waits again);
+    both, and a done reply whose job waited without new bytes, carry the hint about Premiere's modal AAF export log."""
+    job, stats = _await_aaf(rpc, job, out, stall_seconds=stall_seconds, poll=poll, sleep=sleep)
+    job_id = job["jobId"]
+    hint = AAF_HINT.format(job=job_id)
+    report = dict(plan, jobId=job_id, polls=stats["polls"], job=job)
+    if stats["missedPolls"]:
+        report["missedPolls"] = stats["missedPolls"]
+    state = job.get("state")
+    if state in ("failed", "cancelled"):
+        data = dict(report, output=str(out))
+        if stats["dialogSuspected"]:
+            data["hint"] = AAF_LOG_NOTE
+        raise BridgeError(f"The AAF export failed: {job.get('error')}", code="EXPORT_FAILED", outcome="not_committed",
+                          data=data)
+    if state != "done":
+        raise BridgeError(f"AAF export job {job_id}: no state change and no new bytes in {out} for "
+                          f"{stats['stalledSeconds']:.0f} s. {hint}", code="EXPORT_STALLED", outcome="unknown",
+                          data=dict(report, output=str(out), bytes=_file_size(out), hint=hint,
+                                    idleSeconds=stats["stalledSeconds"]))
+    got = _fresh_file(out, started)
+    if got is None:
+        size = _file_size(out)
+        raise BridgeError(f"Premiere reported the AAF export done, but {out} " +
+                          ("is empty." if size == 0 else "was not written." if size is None else
+                           "is older than the export (not written by it)."),
+                          code="EXPORT_FAILED", outcome="not_committed", data=dict(report, output=str(out), bytes=size))
+    elapsed = job.get("elapsedSeconds")
+    result = dict(report, exported=True, output=str(got), bytes=got.stat().st_size,
+                  exportSeconds=elapsed if isinstance(elapsed, (int, float)) else round(time.time() - started, 1),
+                  verified=True, warnings=list(plan.get("warnings") or []))
+    if stats["dialogSuspected"]:
+        result.update(dialogSuspected=True, hint=AAF_LOG_NOTE)
+    return result
+
+
+def _resume_aaf(rpc, job_id, *, output, detach, stall_seconds, poll, sleep) -> dict:
+    """export_aaf --job: the AAF job export_aaf started as `job_id` (its output comes from the job); wait for it and
+    check its file, or with detach only look at it once."""
+    items.require_command(rpc, "export_aaf")
+    try:
+        job = rpc("export_status", {"jobId": str(job_id)})["jobs"][0]
+    except BridgeError as e:
+        if e.code == "NOT_FOUND":
+            e.data = dict(e.data or {}, note="A panel reload forgets its jobs: look for the .aaf itself.")
+        raise
+    if job.get("kind") != "aaf":
+        raise _bad(f"Job {job_id} is a render, not an AAF export: export_video --job {job_id} waits for it. "
+                   "Nothing was sent.")
+    out = paths.resolved(job.get("outputPath") or "")  # QA: as --output is resolved (a mapped drive keeps its letter)
+    if output and paths.resolved(paths.check(output, what="--output")) != out:
+        raise _bad(f"--output {output} is not the file job {job_id} writes ({out}). Nothing was sent.")
+    plan = {"dryRun": False, "resumed": True, "output": str(out), "sequence": {"name": job.get("sequence")},
+            "options": job.get("options")}
+    if detach and job.get("state") not in EXPORT_ENDED:
+        out_ = dict(plan, detached=True, jobId=job["jobId"], state=job.get("state"), job=job)
+        if job.get("hint"):
+            out_["hint"] = AAF_HINT.format(job=job["jobId"])
+        return out_
+    started = (job.get("startedAt") or 0) / 1000
+    return _finish_aaf(rpc, plan, job, out, started, stall_seconds=stall_seconds, poll=poll, sleep=sleep)
+
+
+def export_aaf(rpc, *, output=None, embed_audio=None, audio_format=None, sample_rate=None, bits_per_sample=None,
+               handle_frames=None, mixdown_video=None, render_audio_effects=None, trim_sources=None, overwrite=False,
+               dry_run=False, job=None, detach=False, stall_seconds=180.0, poll=2.0, sleep=time.sleep) -> dict:
+    """Export the active sequence as an AAF inside Premiere (export_aaf: ProjectConverter.exportAAF; the project does
+    not change), as a job polled with export_status every `poll` s and no time limit. Options left at None are not
+    sent (Premiere's defaults); the panel applies the others with AAFExportOptions' setters and reports them
+    (optionsSet, optionValues). The output must end in .aaf; an existing file is refused unless `overwrite` (whether
+    Premiere then asks before replacing it is not measured), a read-only one always. Afterwards the file must have
+    been written since the export started and not be empty (ffprobe cannot read AAF).
+    Premiere 27.1 b21 opens a modal "AAF export log" when an effect or transition cannot go into the AAF, and exportAAF
+    waits until someone clicks OK: a job that runs AAF_HINT_AFTER s without new bytes makes the reply carry that hint;
+    one with no state change and no new bytes for `stall_seconds` is EXPORT_STALLED (outcome unknown, with the hint;
+    `job` resumes the wait). `detach` returns the job at once; `job` resumes one (with `detach`: one look)."""
+    stall_seconds, poll = float(stall_seconds), float(poll)
+    if stall_seconds <= 0 or poll <= 0:
+        raise _bad("--stall-seconds and the poll interval must be > 0")
+    given = {"embedAudio": embed_audio, "audioFormat": audio_format, "sampleRate": sample_rate,
+             "bitsPerSample": bits_per_sample, "handleFrames": handle_frames, "mixdownVideo": mixdown_video,
+             "renderAudioEffects": render_audio_effects, "trimSources": trim_sources}
+    options = {k: v for k, v in given.items() if v is not None}  # the panel's param names, None = not sent
+    if job:
+        if dry_run or options:
+            raise _bad("--job waits for an export already running: --dry-run and the AAF options do not go with it. "
+                       "Nothing was sent.")
+        return _resume_aaf(rpc, job, output=output, detach=detach, stall_seconds=stall_seconds, poll=poll,
+                           sleep=sleep)
+    if not output:
+        raise _bad("export_aaf needs --output (or --job <id> to wait for an AAF export already started).")
+    if options.get("audioFormat") is not None and options["audioFormat"] not in ("wav", "aiff"):
+        raise _bad(f"--audio-format must be wav or aiff, not {options['audioFormat']!r}")
+    paths.check(output, what="--output", ext=".aaf")
+    out = paths.resolved(output)
+    _check_new_output(out, "AAF", overwrite)
+    items.require_command(rpc, "export_aaf")
+    seq = rpc("get_sequence")
+    plan = {"dryRun": bool(dry_run), "output": str(out), "options": options,
+            "sequence": {k: seq.get(k) for k in ("name", "fps", "durationSeconds")}, "mode": "job"}
+    if dry_run:
+        return dict(plan, warnings=[])
+    out.parent.mkdir(parents=True, exist_ok=True)
+    started = time.time()
+    try:
+        start = rpc("export_aaf", dict(options, outputPath=str(out)))
+    except BridgeError as e:
+        if e.code in EXPORT_LOST:
+            e.data = dict(e.data or {}, output=str(out),
+                          hint='Premiere may be showing its "AAF export log" window, holding exportAAF until '
+                               "someone clicks OK: ask the user to click OK, then look for the file (and Reload the "
+                               "panel if ping reports it stuck) before exporting again.")
+        raise
+    plan.update(optionsSet=start.get("optionsSet"), optionValues=start.get("optionValues"))
+    job = {"jobId": start["jobId"], "kind": "aaf", "state": start.get("state"), "outputPath": start.get("outputPath")}
+    if detach:
+        return dict(plan, detached=True, jobId=job["jobId"], state=job["state"], warnings=[],
+                    hint=f"export_aaf --job {job['jobId']} waits for the export and checks the file (add --detach for "
+                         "one look). If it stays running, Premiere is probably showing its modal \"AAF export log\": "
+                         "ask the user to click OK there.")
+    return _finish_aaf(rpc, plan, job, out, started, stall_seconds=stall_seconds, poll=poll, sleep=sleep)
+
+
+XML_SNIFF_BYTES = 1 << 16  # how much of an FCP XML file is read to find <xmeml>
+
+
+def export_xml(rpc, *, output, overwrite=False) -> dict:
+    """Export the active sequence as Final Cut Pro 7 XML inside Premiere (export_xml: exportAsFinalCutProXML with
+    Premiere's UI suppressed, so no dialog; the project does not change), then check the file: written since the
+    request, starting with <?xml (after a BOM or blanks) and holding an <xmeml> element in its first 64 KB. The output
+    must end in .xml; an existing file is refused unless `overwrite`, a read-only one always."""
+    paths.check(output, what="--output", ext=".xml")
+    out = paths.resolved(output)
+    _check_new_output(out, "XML", overwrite)
+    items.require_command(rpc, "export_xml")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    started = time.time()
+    reply = rpc("export_xml", {"outputPath": str(out)})
+    got = _fresh_file(out, started)
+    if got is None:
+        raise BridgeError(f"Premiere reported the XML export done, but no new, non-empty file is at {out}.",
+                          code="EXPORT_FAILED", outcome="not_committed",
+                          data={"output": str(out), "bytes": _file_size(out), "reply": reply})
+    with open(got, "rb") as f:
+        head = f.read(XML_SNIFF_BYTES)
+    text = head.decode("utf-8", errors="replace").lstrip("﻿ \t\r\n")
+    version = re.search(r"<xmeml(?:\s[^>]*?\bversion\s*=\s*[\"']([^\"']*)[\"'])?[\s>/]", text)
+    checks = {"xmlDeclaration": text.startswith("<?xml"), "xmeml": bool(version)}
+    if not all(checks.values()):
+        raise BridgeError(f"{got} is not Final Cut Pro XML: " +
+                          ("it does not start with <?xml" if not checks["xmlDeclaration"] else
+                           f"no <xmeml> element in its first {XML_SNIFF_BYTES // 1024} KB") + ".",
+                          code="EXPORT_FAILED", outcome="not_committed",
+                          data={"output": str(got), "bytes": got.stat().st_size, "checks": checks})
+    return {"exported": True, "output": str(got), "bytes": got.stat().st_size, "checks": checks,
+            "xmemlVersion": version.group(1), "verified": True}
 
 
 def list_effects(rpc, *, kind=None) -> dict:
@@ -1870,3 +2254,108 @@ def apply_preset(rpc, *, track, preset, at=None, from_s=None, to_s=None, mode="i
     seq = items.check_expect_seq(rpc, expect_seq)
     return _prfpset.apply(rpc, idx, preset, at=at, frm=from_s, to=to_s, mode=mode, file=file, locale=locale,
                           ping=info, seq=seq, dry_run=dry_run, label=label)
+
+
+# ---------------------------------------------------------------- generic operations (apply_ops, query)
+
+# apply_ops' ops and query's names, from actions.json (the panel's whitelist; each op carries its own param spec).
+OP_NAMES = tuple(spec.action("apply_ops")["params"]["ops"]["items"]["variants"])
+REMOVING_OPS = frozenset(n for n, v in spec.action("apply_ops")["params"]["ops"]["items"]["variants"].items()
+                         if v.get("removes"))
+QUERY_NAMES = tuple(spec.action("query")["params"]["what"]["enum"])
+_QUERY_OPTIONS = {"clips": {"track", "at", "from_s", "to_s"}, "clip": {"track", "at", "max_keyframes"},
+                  "markers": set(), "bins": {"bin"}, "sequence": set()}
+_QUERY_FLAGS = {"track": "--track", "at": "--at", "from_s": "--from", "to_s": "--to", "bin": "--bin",
+                "max_keyframes": "--max-keyframes"}
+
+
+def read_ops(source) -> list:
+    """apply_ops' op list from a list, a JSON file, or JSON text ("[...]" or {"ops": [...]}); anything else BAD_PARAMS."""
+    doc = source
+    if isinstance(source, (str, Path)):
+        text = str(source).strip()
+        if text.startswith(("[", "{")):
+            where = "the inline JSON"
+        else:
+            p = _in_file(text, "--json").expanduser()
+            if not p.is_file():
+                raise BridgeError(f"File not found: {p.resolve()}", code="FILE_NOT_FOUND", outcome="not_committed")
+            where, text = p.name, p.read_text(encoding="utf-8-sig")
+        try:
+            doc = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise _bad(f"{where} is not valid JSON ({e})") from e
+    if isinstance(doc, dict) and set(doc) == {"ops"}:
+        doc = doc["ops"]
+    if not isinstance(doc, list) or not doc:
+        raise _bad('apply_ops needs a non-empty list of ops ([{"op": "marker.add", ...}] or {"ops": [...]}); ops: '
+                   + ", ".join(OP_NAMES))
+    return doc
+
+
+def apply_ops(rpc, *, ops, label=None, dry_run=False, expect_seq=None) -> dict:
+    """Several whitelisted small writes in ONE transaction with one undo step (the panel's apply_ops): `ops` is a list
+    of {"op": name, ...its params} (or a JSON file / JSON text holding one). Every op is checked against its spec here
+    and again in the panel, its target resolved, every Action built before anything commits; afterwards each op is
+    read back (results[i].readBack / verified). A dry run resolves and checks everything and changes nothing.
+    sequence.set_player_position runs after the transaction and is not an undo step (notUndoable)."""
+    listed = read_ops(ops)
+    params = {"ops": listed, "dryRun": bool(dry_run)}
+    if label:
+        params["undoLabel"] = label
+    problems = spec.check_params("apply_ops", params)
+    if problems:
+        raise BridgeError("apply_ops: " + "; ".join(problems), code="BAD_PARAMS", outcome="not_committed",
+                          data={"problems": problems, "ops": list(OP_NAMES)})
+    items.require_command(rpc, "apply_ops")
+    items.check_expect_seq(rpc, expect_seq)
+    result = rpc("apply_ops", params)
+    if not dry_run:
+        results = result.get("results") or []
+        if result.get("verified") is not True or len(results) != len(listed) or \
+                not all(r.get("verified") is True for r in results):
+            raise BridgeError("apply_ops committed, but not every op reads back as asked (see data.results).",
+                              code="VERIFY_FAILED", outcome="committed", data=result)
+    return result
+
+
+def query(rpc, *, what, track=None, at=None, from_s=None, to_s=None, bin=None, max_keyframes=None) -> dict:
+    """A whitelisted read by name (the panel's query): clips (on `track`s, default all; under `at` or touching
+    [from_s, to_s]), clip (one track and `at`: its components and params), markers, bins (under `bin`, a bin path),
+    sequence (frame size, fps, duration, player position, in / out point, tracks). Each takes only its own options."""
+    if what not in QUERY_NAMES:
+        raise _bad(f'Unknown query "{what}"; one of {", ".join(QUERY_NAMES)}')
+    given = {k: v for k, v in (("track", track), ("at", at), ("from_s", from_s), ("to_s", to_s), ("bin", bin),
+                               ("max_keyframes", max_keyframes)) if v is not None}
+    extra = sorted(set(given) - _QUERY_OPTIONS[what])
+    if extra:
+        takes = ", ".join(_QUERY_FLAGS[k] for k in sorted(_QUERY_OPTIONS[what])) or "no options"
+        raise _bad(f"query --what {what} takes {takes}; not {', '.join(_QUERY_FLAGS[k] for k in extra)}")
+    tracks = [str(t).strip().upper() for t in _as_list(track) or []]
+    params = {"what": what}
+    if what == "clip":
+        if len(tracks) != 1 or at is None:
+            raise _bad("query --what clip needs one --track and --at")
+        params.update(track=tracks[0], atSeconds=at)
+        if max_keyframes is not None:
+            params["maxKeyframes"] = max_keyframes
+    elif what == "clips":
+        if tracks:
+            params["tracks"] = tracks
+        if at is not None:
+            params["atSeconds"] = at
+        if from_s is not None or to_s is not None:
+            if from_s is None or to_s is None:
+                raise _bad("Give --from with --to")
+            params.update(fromSeconds=from_s, toSeconds=to_s)
+    elif what == "bins" and bin is not None:
+        params["bin"] = bin
+    problems = spec.check_params("query", params)
+    if problems:
+        raise BridgeError("query: " + "; ".join(problems), code="BAD_PARAMS", outcome="not_committed",
+                          data={"problems": problems})
+    items.require_command(rpc, "query")
+    data = rpc("query", params)
+    if what == "markers":
+        _name_colours(data.get("markers"))
+    return data

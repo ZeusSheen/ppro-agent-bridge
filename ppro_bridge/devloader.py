@@ -13,9 +13,21 @@ What this does instead: it talks to UDT's service on its command-line endpoint (
                    "breakOnStart": false}}
   service -> us   {"command": "reply", "requestId": r, "pluginSessionId": ...}   or {..., "error": ...}
   service -> us   {"command": "didRemoveRuntimeClient", "id": n, ...}            (the app went away)
-`watch()` keeps that connection and loads the panel into every Premiere that connects - after a Premiere restart too -
-and starts UDT minimized when it is not running. The broker runs it with --load-panel. Loads are development loads,
-exactly like clicking Load in UDT.
+The broker runs `watch()` with --load-panel. Loads are development loads, exactly like clicking Load in UDT.
+
+UDT runs only while the bridge loads the panel (RA-5, SECURITY_REVIEW.md): UDT's service takes a WebSocket from
+anyone - any Origin, no credential (measured 6 Nov 2026: "101 Switching Protocols" for none, http://evil.example,
+null and file://) - and can load any folder as a plugin, while a loaded panel keeps running once UDT is gone (three
+pings over 15 s after UDT's processes were killed, same loadedAt). So `watch()`:
+  - when UDT is not running and a Premiere process it has not handled appears (Adobe Premiere Pro.exe or
+    Adobe Premiere Pro (Beta).exe, polled every PREMIERE_POLL seconds without UDT), starts UDT minimized, waits for
+    that Premiere to connect, loads the panel, waits until the broker sees it answering (ANSWER_WAIT), and closes
+    UDT again (its process tree); after a failed load too. A Premiere that quits and starts again is a new process:
+    it gets a load the same way. The "did not load the panel" cases (no_load_reason) start no UDT at all.
+  - when UDT is already running (the user opened it), keeps a connection and loads into every Premiere that connects,
+    as before, and never closes it; also with --no-start (start=False), which never starts UDT.
+  - closes a UDT it started when it is stopped (the broker quits).
+  - where the process list cannot be read (not Windows), keeps the old way: starts UDT when it is down and keeps it.
 
 A load REPLACES a panel with the same plugin id that is already loaded: the old one disconnects ~30 ms before the
 load's reply and the new one registers ~0.35 s later, also when the old one came from another folder (the broker's
@@ -50,9 +62,18 @@ RETRY_SECONDS = 5.0
 # attempt that started while the broker was down can take ~1-2 s more to fail or succeed. (23:08, 2 Nov, a fresh
 # Premiere with no panel: UDT connected at 08:44.243, the load went out at 08:48.476 after the then 4 s grace.)
 LOAD_GRACE = 6.0
+PREMIERE_POLL = 3.0          # s between two looks at the process list while UDT is not running
+UDT_START_WAIT = 60.0        # s for a UDT we started to open its service
+PREMIERE_CONNECT_WAIT = 120.0  # s for Premiere (maybe still starting up) to connect to that UDT
+ANSWER_WAIT = 20.0           # s after the load for the broker to see the panel answering, before UDT is closed
+STARTUP_GRACE = 20.0         # s a Premiere that started after the broker gets for its own panel (an installed one) to
+                             # connect before UDT is started for it (its process appears long before its UXP is up)
+CLOSE_WAIT = 5.0             # s for UDT's service to go away once its processes were ended
 PLUGIN_DIR = Path(__file__).resolve().parent.parent / "plugin"
 UDT_ENV = "PPRO_UDT_EXE"
 UDT_EXE = "Adobe UXP Developer Tools.exe"
+PREMIERE_IMAGES = ("adobe premiere pro.exe", "adobe premiere pro (beta).exe")
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 log = logging.getLogger("devloader")
 
@@ -114,18 +135,64 @@ def service_up(port=DEFAULT_PORT) -> bool:
         return False
 
 
-def start_udt(exe: Path) -> None:
+def start_udt(exe: Path):
     """Start UXP Developer Tool minimized and without taking the focus, detached from the caller's console: started
     as a plain child of the broker it shared the broker window's console, so closing that window closed UDT too
-    (3 Nov 2026: UDT and its helpers were on the console's process list)."""
+    (3 Nov 2026: UDT and its helpers were on the console's process list). Returns the process (for stop_udt)."""
     info, flags = None, 0
     if os.name == "nt":
         info = subprocess.STARTUPINFO()
         info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         info.wShowWindow = 7  # SW_SHOWMINNOACTIVE
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen([str(exe)], startupinfo=info, creationflags=flags, close_fds=True,
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return subprocess.Popen([str(exe)], startupinfo=info, creationflags=flags, close_fds=True,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def stop_udt(proc) -> str | None:
+    """End a UXP Developer Tool that start_udt started: its whole process tree (Electron's helpers too; taskkill /T
+    /F by its PID, an argument list). Never anything by name, so a UDT the user opened is never touched. None when
+    done (or already gone), else why not."""
+    pid = getattr(proc, "pid", None)
+    if not isinstance(pid, int):
+        return None
+    if os.name != "nt":
+        try:
+            proc.terminate()
+        except OSError as e:
+            return str(e)
+        return None
+    try:
+        r = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=15,
+                           creationflags=_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"taskkill failed ({e})"
+    return None if r.returncode in (0, 128) else f"taskkill exit {r.returncode}"  # 128: no such process
+
+
+def premiere_pids(run=subprocess.run) -> set[int] | None:
+    """The PIDs of the running Premieres (Adobe Premiere Pro.exe, Adobe Premiere Pro (Beta).exe), from tasklist (no
+    admin rights; image names are not translated); None when the list cannot be read (not Windows, tasklist failed)."""
+    if os.name != "nt":
+        return None
+    try:
+        out = run(["tasklist", "/FO", "CSV", "/NH", "/FI", "IMAGENAME eq Adobe Premiere Pro*"], capture_output=True,
+                  text=True, errors="replace", timeout=10, creationflags=_NO_WINDOW).stdout or ""
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_tasklist(out)
+
+
+def parse_tasklist(text: str) -> set[int]:
+    """Premiere PIDs in `tasklist /FO CSV /NH` output (image name, PID, ...); other rows and the "INFO: ..." line are
+    ignored."""
+    import csv
+    import io
+    pids = set()
+    for row in csv.reader(io.StringIO(text or "")):
+        if len(row) > 1 and row[0].strip().lower() in PREMIERE_IMAGES and row[1].strip().isdigit():
+            pids.add(int(row[1].strip()))
+    return pids
 
 
 def plugin_id(plugin_dir) -> str | None:
@@ -255,14 +322,164 @@ async def load_once(plugin_dir=PLUGIN_DIR, port=DEFAULT_PORT, wait=10.0, on_even
     return results
 
 
+async def _up(port) -> bool:
+    """service_up off the event loop (a refused connect takes ~2 s on Windows: the broker must keep serving)."""
+    return await asyncio.to_thread(service_up, port)
+
+
+async def _wait_for(check, seconds: float, stop: asyncio.Event, every: float = 0.25) -> bool:
+    """True once check() (sync or async) is true within `seconds`; False on timeout or when `stop` is set."""
+    deadline = time.monotonic() + seconds
+    while not stop.is_set():
+        result = check()
+        if asyncio.iscoroutine(result):
+            result = await result
+        if result:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await _sleep_or_stop(stop, every)
+    return False
+
+
+async def _panel_answers(panel_state, plugin_dir, stop) -> bool:
+    """The broker sees a panel running this folder's code (or, when the code cannot be hashed, any panel) within
+    ANSWER_WAIT; True at once without the broker's view (devloader on its own)."""
+    if panel_state is None:
+        return True
+    want = panelhash.code_hash(plugin_dir)
+
+    async def answering():
+        try:
+            state = await asyncio.wait_for(panel_state(), 5)
+        except Exception:  # noqa: BLE001  (advice only)
+            return False
+        return bool(state) and not state.get("busy") and (want is None or state.get("codeHash") == want)
+
+    return await _wait_for(answering, ANSWER_WAIT, stop, every=0.5)
+
+
+async def _load_with_own_udt(exe, plugin_dir, port, on_event, stop, panel_state) -> bool:
+    """Start UDT, wait for Premiere to connect to it, load the panel into every Premiere there (unless no_load_reason
+    says not to), wait until the panel answers, then close UDT - whatever happened. True when a load worked."""
+    import websockets
+    on_event({"event": "udt", "state": "starting", "exe": str(exe)})
+    try:
+        proc = start_udt(exe)
+    except OSError as e:
+        on_event({"event": "udt", "state": "missing", "error": f"cannot start {exe} ({e})"})
+        return False
+    loaded, why = False, "the load failed"
+    try:
+        if not await _wait_for(lambda: _up(port), UDT_START_WAIT, stop, every=0.5):
+            why = "its service did not come up"
+            if not stop.is_set():
+                on_event({"event": "udt", "state": "unreachable",
+                          "error": f"the UXP Developer Tool it started did not open port {port} within "
+                                   f"{UDT_START_WAIT:g} s"})
+            return False
+        async with websockets.connect(f"ws://{HOST}:{port}/socket/cli", open_timeout=5) as ws:
+            on_event({"event": "udt", "state": "connected"})
+            session = _Session(ws, plugin_dir, on_event)
+            pump = asyncio.get_running_loop().create_task(session.pump())
+            try:
+                if not await _wait_for(lambda: bool(session.apps), PREMIERE_CONNECT_WAIT, stop):
+                    if not stop.is_set():
+                        why = "Premiere did not connect to it"
+                        on_event({"event": "load", "ok": False, "app": "premierepro", "appVersion": "",
+                                  "error": f"Premiere did not connect to UXP Developer Tool within "
+                                           f"{PREMIERE_CONNECT_WAIT:g} s (is UXP developer mode on?)"})
+                    return False
+                await _sleep_or_stop(stop, 1.0)  # a second Premiere (the Beta) announced with the first
+                for client_id, app in list(session.apps.items()):
+                    reason = await no_load_reason(panel_state, plugin_dir) if panel_state is not None else None
+                    if reason:
+                        on_event({"event": "load", "skipped": True, "reason": reason, "app": app.get("appId"),
+                                  "appVersion": app.get("appVersion")})
+                        why = "it had nothing to load"
+                        continue
+                    if (await session.load(client_id, app)).get("ok"):
+                        loaded = True
+                if loaded:
+                    answered = await _panel_answers(panel_state, plugin_dir, stop)
+                    why = ("the panel is loaded and answering" if answered else
+                           f"the panel is loaded (the broker did not see it answer within {ANSWER_WAIT:g} s)")
+            finally:
+                pump.cancel()
+    except (OSError, asyncio.TimeoutError, websockets.WebSocketException) as e:
+        why = "its service failed"
+        on_event({"event": "udt", "state": "unreachable", "error": str(e)})
+    except asyncio.CancelledError:  # the broker cancels its loader when it stops: UDT is closed all the same
+        why = "the broker is stopping"
+        raise
+    finally:
+        await _close_own_udt(proc, port, on_event, "the broker is stopping" if stop.is_set() else why)
+    return loaded
+
+
+async def _close_own_udt(proc, port, on_event, why):
+    error = await asyncio.to_thread(stop_udt, proc)
+
+    async def gone_now():
+        return not await _up(port)
+
+    gone = await _wait_for(gone_now, CLOSE_WAIT, asyncio.Event(), every=0.25)
+    event = {"event": "udt", "state": "closed" if gone and not error else "still-running", "reason": why}
+    if error or not gone:
+        event["error"] = error or f"its service still answers on port {port}"
+    on_event(event)
+
+
 async def watch(plugin_dir=PLUGIN_DIR, port=DEFAULT_PORT, start=True, on_event=None, stop: asyncio.Event = None,
-                panel_state=None):
-    """Keep a connection to UDT's service and load the panel into every Premiere that connects. Starts UDT
-    (minimized) when its service is down and `start`; retries every RETRY_SECONDS. Runs until `stop` is set.
-    panel_state: the broker's async view of its panel (see no_load_reason); without it every Premiere gets a load."""
+                panel_state=None, processes=None):
+    """Load the panel into every Premiere, with UXP Developer Tool running only while it loads (module doc). Runs until
+    `stop` is set. panel_state: the broker's async view of its panel (see no_load_reason); without it every Premiere
+    gets a load. processes(): the running Premieres' PIDs, or None when that cannot be told (default premiere_pids)."""
     import websockets
     on_event = on_event or (lambda e: None)
     stop = stop or asyncio.Event()
+    processes = premiere_pids if processes is None else processes
+    handled: set[int] = set()  # Premiere processes that got their load (or did not need one)
+    said = None                # the last "not-needed" / "missing" said, so a retry does not say it again
+    initial = None             # Premieres running when the bridge starts: their panel would reconnect within seconds
+    while not stop.is_set():
+        pids = await asyncio.to_thread(processes) if start else None
+        if pids is not None and await _up(port):  # a UDT the bridge did not start (the user's): follow, never close
+            await _follow(plugin_dir, port, False, on_event, stop, panel_state, until_gone=True)
+            handled |= await asyncio.to_thread(processes) or set()  # what that UDT saw needs nothing more from us
+            await _sleep_or_stop(stop, RETRY_SECONDS)
+            continue
+        if pids is not None:  # UDT is not running: the bridge starts it only to load, and closes it again
+            initial = set(pids) if initial is None else initial
+            handled &= pids  # a Premiere that quit: its PID may come back as another process
+            new = pids - handled
+            if not new:
+                await _sleep_or_stop(stop, PREMIERE_POLL)
+                continue
+            grace = LOAD_GRACE if new <= initial else STARTUP_GRACE
+            reason = await no_load_reason(panel_state, plugin_dir, grace) if panel_state is not None else None
+            exe = None if reason else find_udt()
+            if reason or exe is None:
+                event = ({"event": "udt", "state": "not-needed", "reason": reason} if reason else
+                         {"event": "udt", "state": "missing", "error": f"UXP Developer Tool not found (set {UDT_ENV})"})
+                if event != said:
+                    on_event(event)
+                said = event
+                handled |= new
+                continue
+            said = None
+            await _load_with_own_udt(exe, plugin_dir, port, on_event, stop, panel_state)
+            handled |= new
+            continue
+        # --no-start (never start UDT), or no process list to watch (the old way: start UDT when down, keep it)
+        await _follow(plugin_dir, port, start, on_event, stop, panel_state, until_gone=False)
+
+
+async def _follow(plugin_dir, port, start, on_event, stop, panel_state, until_gone=False):
+    """One connection to a UDT that runs anyway, and a load into every Premiere that connects; the bridge never closes
+    that UDT. `start`: start UDT when its service is down (only where no process list can be read). `until_gone`:
+    return once that UDT's service goes away (the user closed it), else retry until `stop`."""
+    import websockets
     started_udt = False
     said_not_needed = False
     while not stop.is_set():
@@ -289,6 +506,8 @@ async def watch(plugin_dir=PLUGIN_DIR, port=DEFAULT_PORT, start=True, on_event=N
             ws = None
             on_event({"event": "udt", "state": "unreachable", "error": str(e)})
         if ws is None:
+            if until_gone:
+                return
             await _sleep_or_stop(stop, RETRY_SECONDS)
             continue
         try:
@@ -318,6 +537,8 @@ async def watch(plugin_dir=PLUGIN_DIR, port=DEFAULT_PORT, start=True, on_event=N
                 on_event({"event": "udt", "state": "disconnected"})
         except (OSError, websockets.WebSocketException) as e:
             on_event({"event": "udt", "state": "unreachable", "error": str(e)})
+        if until_gone:
+            return
         started_udt = False
         await _sleep_or_stop(stop, RETRY_SECONDS)
 
@@ -340,7 +561,10 @@ def describe(event: dict) -> str:
     if kind == "app" and state in ("connected", "disconnected"):
         return f"{event.get('app')} {event.get('appVersion') or ''} {state} (UXP Developer Tool).".replace("  ", " ")
     if kind == "udt":
-        return {"starting": f"Starting UXP Developer Tool minimized ({event.get('exe')}).",
+        return {"starting": f"Starting UXP Developer Tool minimized ({event.get('exe')}) to load the panel.",
+                "closed": f"Closed the UXP Developer Tool the bridge started ({event.get('reason')}).",
+                "still-running": f"Could not close the UXP Developer Tool the bridge started ({event.get('error')}): "
+                                 "close it by hand.",
                 "connected": "Connected to UXP Developer Tool's service; waiting for Premiere.",
                 "disconnected": "UXP Developer Tool's service went away; retrying.",
                 "missing": f"Cannot load the panel: {event.get('error')}.",
@@ -363,18 +587,23 @@ async def _main(args) -> int:
         except asyncio.CancelledError:
             pass
         return 0
+    own = None  # a UDT started here is closed again once the load is done (RA-5)
     if not service_up(args.port):
         exe = None if args.no_start else find_udt()
         if exe is None:
             log.error("UXP Developer Tool is not running%s.", "" if args.no_start else f" and was not found (set {UDT_ENV})")
             return 1
         say({"event": "udt", "state": "starting", "exe": str(exe)})
-        start_udt(exe)
+        own = start_udt(exe)
         for _ in range(60):
             if service_up(args.port):
                 break
             await asyncio.sleep(0.5)
-    results = await load_once(args.plugin, args.port, wait=args.wait, on_event=say)
+    try:
+        results = await load_once(args.plugin, args.port, wait=args.wait, on_event=say)
+    finally:
+        if own is not None:
+            await _close_own_udt(own, args.port, say, "the load is done")
     if not results:
         log.error("No Premiere connected to UXP Developer Tool within %gs (is Premiere open?).", args.wait)
     return 0 if results and all(r["ok"] for r in results) else 1

@@ -34,6 +34,7 @@ import os
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
+import xml.parsers.expat
 from collections import Counter
 from pathlib import Path
 
@@ -299,6 +300,36 @@ def _effect(objs: dict, fp) -> dict:
 _CACHE = {}
 
 
+class _Prolog(Exception):
+    """The prolog ended (the root element started) without a document type declaration."""
+
+
+def _has_doctype(data: bytes) -> bool:
+    """Whether the XML declares a document type (where entities are defined), asked of expat itself: a byte search
+    misses one after a long comment or in UTF-16. Only the prolog is parsed (it stops at the root element), so this
+    costs next to nothing; a document expat cannot read is left for ElementTree to report."""
+    parser = xml.parsers.expat.ParserCreate()
+    found = []
+
+    def doctype(*_):
+        found.append(True)
+        raise _Prolog()
+
+    def root(*_):
+        raise _Prolog()
+
+    parser.StartDoctypeDeclHandler = doctype
+    parser.EntityDeclHandler = doctype
+    parser.StartElementHandler = root
+    try:
+        parser.Parse(data, True)
+    except _Prolog:
+        pass
+    except xml.parsers.expat.ExpatError:
+        pass
+    return bool(found)
+
+
 def read_file(path, source: str = "path") -> list[dict]:
     """Every preset in one .prfpset file, in Effects panel order: {name, bin (folders below the root, "/"-joined),
     file, source, description, effects (in Effect Controls order)}. Parsed files are cached by size and time."""
@@ -311,7 +342,7 @@ def read_file(path, source: str = "path") -> list[dict]:
     if key in _CACHE:
         return [dict(x, source=source) for x in _CACHE[key]]
     data = p.read_bytes()
-    if b"<!DOCTYPE" in data[:65536] or b"<!ENTITY" in data[:65536]:
+    if _has_doctype(data):
         raise _bad(f"{p.name}: a document type declaration is not part of a Premiere preset file; refused.")
     try:
         root = ET.fromstring(data)

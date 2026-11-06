@@ -12,6 +12,9 @@
  * start_bridge.bat in a console window of its own (the broker window users keep open). UXP's error texts are not
  * known, so any failure of the .bat tries the .pyw: a user who declined the first consent dialog gets a second one.
  * A launcher that is not there is reported without calling openPath when its folder can be listed.
+ * What is opened (RA-4): only a file named start_bridge.bat (or the .pyw beside it), never a network, device or stream
+ * path, and only in a bridge folder (broker\broker.py and ppro_bridge\__init__.py in it, seen through the folder
+ * listing); a launcher.json path whose folder cannot be listed on this build is not opened either.
  * Factory module.   deps: { uxp, core, log }
  */
 module.exports = function (deps) {
@@ -55,9 +58,9 @@ module.exports = function (deps) {
   const fileSystem = () => (uxp && uxp.storage ? uxp.storage.localFileSystem : null);
 
   /* true / false when the launcher's folder can be listed; null when this build cannot tell (openPath will). */
-  async function exists(p) {
+  /* The entries of folder `dir`, or null when this build cannot list it. */
+  async function listing(dir) {
     const lfs = fileSystem();
-    const dir = parentDir(p);
     if (!dir || !core.isFn(lfs, "getEntryWithUrl")) return null;
     let folder = null;
     for (const url of fileUrls(dir)) {
@@ -68,12 +71,35 @@ module.exports = function (deps) {
     }
     if (!folder || !core.isFn(folder, "getEntries")) return null;
     try {
-      const want = baseName(p).toLowerCase();
-      return Array.from((await folder.getEntries()) || [])
-        .some((e) => e && e.isFile && String(e.name).toLowerCase() === want);
+      return Array.from((await folder.getEntries()) || []);
     } catch (e) {
       return null;
     }
+  }
+
+  async function exists(p) {
+    const entries = await listing(parentDir(p));
+    if (entries === null) return null;
+    const want = baseName(p).toLowerCase();
+    return entries.some((e) => e && e.isFile && String(e.name).toLowerCase() === want);
+  }
+
+  /* true when folder `dir` is a bridge folder - it holds broker\broker.py and ppro_bridge\__init__.py, as a checkout,
+     the zip and the installer do -, false when it is not, null when this build cannot list it. A launcher.json that
+     names start_bridge.bat anywhere else (a folder of someone else's making) is not opened. */
+  async function bridgeFolder(dir) {
+    const top = await listing(dir);
+    if (top === null) return null;
+    const holds = async (sub, file) => {
+      const f = top.find((e) => e && e.isFolder && String(e.name).toLowerCase() === sub);
+      if (!f || !core.isFn(f, "getEntries")) return false;
+      try {
+        return Array.from((await f.getEntries()) || []).some((e) => e && e.isFile && String(e.name).toLowerCase() === file);
+      } catch (e) {
+        return false;
+      }
+    };
+    return (await holds("broker", "broker.py")) && (await holds("ppro_bridge", "__init__.py"));
   }
 
   /* ---------- which launcher ---------- */
@@ -98,6 +124,13 @@ module.exports = function (deps) {
       if (typeof p !== "string" || !isAbsolute(p)) {
         const error = `${where} has no absolute "path" (expected {"path": "<absolute path>"})`;
         return { error, source: LAUNCHER_JSON };
+      }
+      // Only a local start_bridge.bat (its .pyw beside it is derived below): never a share, a device or a stream path
+      // (opening one would reach the network with the user's credentials), and never another program's name.
+      const why = core.isFn(core, "pathProblem") ? core.pathProblem(p) : null;
+      if (why) return { error: `${where} names ${p}, ${why}`, source: LAUNCHER_JSON };
+      if (baseName(p).toLowerCase() !== DEV_LAUNCHER) {
+        return { error: `${where} names ${baseName(p)}, not ${DEV_LAUNCHER}`, source: LAUNCHER_JSON };
       }
       return { path: p, source: LAUNCHER_JSON };
     }
@@ -146,10 +179,25 @@ module.exports = function (deps) {
     }
     const candidates = [target.path];
     if (/\.bat$/i.test(target.path)) candidates.push(target.path.replace(/\.bat$/i, ".pyw"));
+    let home;  // whether the launcher's folder is a bridge folder: asked once, right before the first open
     for (const p of candidates) {
       if ((await exists(p)) === false) {
         tried.push({ path: p, error: "not found" });
         continue;
+      }
+      if (home === undefined) home = await bridgeFolder(parentDir(p));
+      // launcher.json points somewhere else: open it only in a folder seen to be a bridge folder. The layout next to
+      // the plugin folder is where this panel's own code lies; it is refused only when seen not to be one.
+      if (home === false || (home === null && target.source === LAUNCHER_JSON)) {
+        const dir = parentDir(p);
+        const why = home === false
+          ? `${dir} is not a bridge folder (no broker\\broker.py and ppro_bridge\\__init__.py in it)`
+          : `this UXP build cannot list ${dir} to check that it is a bridge folder`;
+        const fix = target.source === LAUNCHER_JSON ? " Rebuild and reinstall the package (scripts/build_ccx.py)." : "";
+        const message = `Start bridge: did not open ${p}: ${why}.${fix} ${HINT}`;
+        tried.push({ path: p, error: "not a bridge folder" });
+        log(message, "err");
+        return { ok: false, message, source: target.source, tried };
       }
       log(`Start bridge: opening ${p} (${target.source}) ...`, "cmd");
       const error = await openPath(p);
@@ -172,5 +220,5 @@ module.exports = function (deps) {
     return { ok: false, message, source: target.source, tried };
   }
 
-  return { launch, resolve, exists, parentDir, baseName, fileUrls, reasonText, LAUNCHER_JSON, DEV_LAUNCHER };
+  return { launch, resolve, exists, bridgeFolder, parentDir, baseName, fileUrls, reasonText, LAUNCHER_JSON, DEV_LAUNCHER };
 };

@@ -85,17 +85,28 @@ def _clip_under(rpc, track_idx: int, at: float) -> dict:
     return hits[0]
 
 
+def export_otio_doc(rpc) -> dict:
+    """The active sequence as a parsed OTIO export (a temporary file in a fresh private folder, deleted again: a
+    predictable name in %TEMP% could be a file planted or left there earlier, read as if Premiere had written it)."""
+    folder = Path(tempfile.mkdtemp(prefix="ppro_replace_"))
+    tmp = folder / "export.otio"
+    try:
+        rpc("export_otio", {"outputPath": str(tmp)})
+        return json.loads(tmp.read_text(encoding="utf-8-sig"))
+    finally:
+        tmp.unlink(missing_ok=True)
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
+
+
 def otio_transitions(rpc, track_idx: int, doc: dict | None = None) -> list[dict]:
     """Transitions on one video track: {matchName, name, at, before, after} — `at` is the cut point in sequence
     seconds; before/after are the seconds on each side of it. Reads a fresh OTIO export, or `doc` (a saved export)
     when given."""
     if doc is None:
-        tmp = Path(tempfile.gettempdir()) / f"ppro_replace_{os.getpid()}.otio"
-        rpc("export_otio", {"outputPath": str(tmp)})
-        try:
-            doc = json.loads(tmp.read_text(encoding="utf-8-sig"))
-        finally:
-            tmp.unlink(missing_ok=True)
+        doc = export_otio_doc(rpc)
     video = [t for t in doc["tracks"]["children"] if t.get("kind") == "Video"]
     if track_idx >= len(video):
         return []

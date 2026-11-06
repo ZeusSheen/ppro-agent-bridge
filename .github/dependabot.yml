@@ -1,0 +1,7 @@
+# Bumps of the actions .github/workflows/release.yml pins by commit SHA arrive as pull requests to review (DOC-1).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

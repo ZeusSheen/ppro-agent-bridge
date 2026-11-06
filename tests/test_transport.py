@@ -10,7 +10,7 @@ from unittest import mock
 
 import websockets
 
-from helpers import DEAD_URL, BridgeError, free_port
+from helpers import DEAD_URL, BridgeError, broker_pair, free_port
 
 from ppro_bridge import spec, transport
 
@@ -29,7 +29,7 @@ class ScriptedBroker:
 
     def _run(self):
         async def handler(ws):
-            await ws.recv()  # role
+            await broker_pair(ws)  # the pairing (a 0.7 broker's side)
             async for raw in ws:
                 msg = json.loads(raw)
                 self.received.append(msg)

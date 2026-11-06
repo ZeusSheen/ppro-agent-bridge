@@ -10,7 +10,8 @@ secrets.token_urlsafe(18) every run; the printed URL carries it):
   GET  /<secret>/             the page
   GET  /<secret>/api/state    {version, demo, platform, repo, python, pythonExe, premiereMin, checks (doctor.checks()
                               verbatim: name, ok, required, detail, fix), shortcuts {desktop, autostart},
-                              brokerRunning, busy (the action running now, or null)}
+                              brokerRunning, busy (the action running now, or null), update (update.status(): the
+                              broker's last update check as update.json and settings.json hold it; nothing is sent)}
   POST /<secret>/api/action   {"action": name} -> {ok, action, message, output (the command's last 4000 characters),
                               state}; one action at a time (409 "busy"), an unknown one is 400. Names: ACTIONS.
   POST /<secret>/api/ping     heartbeat                  POST /<secret>/api/bye    stop the server
@@ -47,6 +48,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import console, devloader, doctor
+from . import update as updates
 from ._version import VERSION
 
 PAGE = Path(__file__).resolve().with_name("setup_ui.html")
@@ -141,6 +143,16 @@ def _launch(target) -> None:
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def start_command(script) -> tuple[str, str]:
+    """(cmd.exe, command line) that run `script` (start_bridge.bat; run it with CREATE_NEW_CONSOLE for a window of
+    its own, which the script titles itself). The path is always quoted and /s keeps the quotes: a list leaves a path
+    without spaces unquoted, `start` hands a .bat to cmd /K, which drops the quotes of a path holding & or ^, and cmd
+    then splits it there (a folder named R&D). cmd.exe by its full path, not looked up in the
+    current folder; /d: no AutoRun commands."""
+    exe = os.path.join(os.environ.get("SystemRoot") or os.path.join("C:" + os.sep, "Windows"), "System32", "cmd.exe")
+    return exe, f'cmd /d /s /c ""{script}""'
+
+
 def _text(data) -> str:
     if data is None:
         return ""
@@ -164,6 +176,12 @@ class RealMachine:
 
     def checks(self, advance=True) -> list[dict]:
         return doctor.checks()
+
+    def update(self) -> dict | None:
+        try:
+            return updates.status()
+        except Exception:  # noqa: BLE001 - the footer line is not worth a failed state read
+            return None
 
     def _link(self, kind) -> Path | None:
         """Where a shortcut goes; the shell folder is asked once (through PowerShell, which takes a moment)."""
@@ -191,7 +209,7 @@ class RealMachine:
     # -- pip
 
     def _pip(self, args, done) -> tuple[bool, str, str]:
-        cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", *args]
+        cmd = [sys.executable, *console.isolated_flags(), "-m", "pip", "install", "--disable-pip-version-check", *args]
         try:
             out = subprocess.run(cmd, cwd=str(doctor.REPO), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  timeout=PIP_TIMEOUT, env=dict(os.environ, PYTHONIOENCODING="utf-8"),
@@ -274,8 +292,9 @@ class RealMachine:
             return False, "The bridge is already running.", ""
         if os.name != "nt":
             return False, "start_bridge.bat runs on Windows only: run broker/broker.py --load-panel instead.", ""
-        subprocess.Popen(["cmd", "/c", "start", "Premiere Agent Bridge", str(doctor.START_SCRIPT)],
-                         cwd=str(doctor.REPO), creationflags=_NO_WINDOW)
+        exe, line = start_command(doctor.START_SCRIPT)
+        subprocess.Popen(line, executable=exe, cwd=str(doctor.REPO),
+                         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
         deadline = time.monotonic() + START_WAIT_SECONDS
         while time.monotonic() < deadline:
             time.sleep(START_POLL_SECONDS)
@@ -337,6 +356,10 @@ class DemoMachine:
 
     def info(self) -> dict:
         return {"repo": "ppro-agent-bridge (demo)", "pythonExe": "python.exe (demo)"}
+
+    def update(self) -> dict:
+        return {"enabled": True, "off": None, "latest": VERSION, "newer": False, "skipped": False,
+                "url": None, "checkedAt": None, "text": f"up to date (latest release {VERSION}, demo)"}
 
     def checks(self, advance=True) -> list[dict]:
         with self._lock:
@@ -661,7 +684,7 @@ class SetupServer:
                 "premiereMin": doctor.version_label(doctor.premiere_min()), "checks": checks,
                 "shortcuts": self.machine.shortcuts(),
                 "brokerRunning": any(c.get("name") == "Broker" and c.get("ok") for c in checks),
-                "busy": self._busy}
+                "busy": self._busy, "update": self.machine.update() if hasattr(self.machine, "update") else None}
 
     def run_action(self, name) -> tuple[int, dict]:
         """(HTTP status, reply) for one action: 400 unknown, 409 while another runs, else 200 with ok true/false."""

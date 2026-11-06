@@ -10,7 +10,7 @@ import unittest
 
 import websockets
 
-from helpers import CLI, env, free_port, run_cli
+from helpers import CLI, broker_pair, env, free_port, run_cli
 
 
 class HangUpBroker:
@@ -25,7 +25,7 @@ class HangUpBroker:
 
     def _run(self):
         async def handler(ws):
-            await ws.recv()   # role
+            await broker_pair(ws)  # the pairing
             await ws.recv()   # the request
             await ws.close()
 

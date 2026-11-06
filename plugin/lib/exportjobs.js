@@ -16,6 +16,9 @@
  * count), or at once on dispose (panel unload). Nothing here may throw into Premiere: every listener body, promise
  * callback, timer and dispose catches everything itself and only logs (an exception reaching Premiere's event
  * dispatch can corrupt its scripting thread and crash it on the next event).
+ * export_aaf jobs (kind "aaf") share the table and the one-at-a-time rule: ProjectConverter.exportAAF's promise
+ * settles them the same way, with no listeners (no encoder render); while one runs past its hintAfterMs, its view
+ * carries its hint (27.1 b21: a modal "AAF export log" holds exportAAF until someone clicks OK).
  * Factory module.   deps: { ppro, core, log? }
  */
 module.exports = function (deps) {
@@ -189,8 +192,9 @@ module.exports = function (deps) {
       if (ok && value) {
         settle(job, "done");
       } else {
-        const why = ok ? `exportSequence returned ${job.returned} (preset ${job.preset})`
-          : `exportSequence failed (${core.errorMessage(value)}; preset ${job.preset})`;
+        const call = job.call || "exportSequence";
+        const why = ok ? `${call} returned ${job.returned}${job.preset ? ` (preset ${job.preset})` : ""}`
+          : `${call} failed (${core.errorMessage(value)}${job.preset ? `; preset ${job.preset}` : ""})`;
         const end = job.endEvent;
         const cancelled = !!end && (end.type === "cancel" ||
           (end.type === "exportMediaComplete" && end.state === operationStates().cancelled));
@@ -260,8 +264,9 @@ module.exports = function (deps) {
     /* What export_status reports (plain data). */
     view(job) {
       const end = job.finishedAt || Date.now();
-      return {
-        jobId: job.jobId, state: job.state, progress: job.progress, progressRaw: job.progressRaw,
+      const out = {
+        jobId: job.jobId, kind: job.kind || "render", state: job.state, progress: job.progress,
+        progressRaw: job.progressRaw,
         elapsedSeconds: Math.round((end - job.startedAt) / 100) / 10, outputPath: job.outputPath, preset: job.preset,
         workAreaOnly: job.workAreaOnly, sequence: job.sequence, startedAt: job.startedAt, finishedAt: job.finishedAt,
         lastEventAt: job.lastEventAt, endEvent: job.endEvent ? Object.assign({}, job.endEvent) : null, error: job.error,
@@ -270,6 +275,9 @@ module.exports = function (deps) {
         eventKeys: JSON.parse(JSON.stringify(job.eventKeys)), eventSample: JSON.parse(JSON.stringify(job.eventSample)),
         listeners: job.listeners.slice(), listenerErrors: job.listenerErrors.slice(),
       };
+      if (job.options) out.options = JSON.parse(JSON.stringify(job.options));
+      if (job.hint && job.state === "running" && end - job.startedAt >= (job.hintAfterMs || 0)) out.hint = job.hint;
+      return out;
     },
 
     /* Panel unload: every listener off now (never throws: teardown goes on to close the socket). */

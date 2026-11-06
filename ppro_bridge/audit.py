@@ -140,7 +140,11 @@ class AuditLog:
         line = {"ts": when.isoformat(timespec="milliseconds"), **record}
         try:
             text = json.dumps(line, ensure_ascii=False, default=str) + "\n"
-            self.directory.mkdir(parents=True, exist_ok=True)
+            if not self.directory.is_dir():  # created here: this user and SYSTEM only (auth.restrict_to_owner)
+                self.directory.mkdir(parents=True, exist_ok=True)
+                error = auth.restrict_to_owner(self.directory, folder=True)
+                if error:
+                    auth.ACL_ERRORS.append(error)
             with open(self.path_for(when), "a", encoding="utf-8", newline="\n") as f:
                 f.write(text)
             return True

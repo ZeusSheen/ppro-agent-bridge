@@ -45,14 +45,19 @@ Test switches (read when used, so in-process tests can set them in os.environ):
   PPRO_FAKE_EXPORT_RESULT=done|fail|cancel|silent|stall   a job ends after progress events and a complete event /
                                   with a render error / cancelled / done without any event (the promise only) /
                                   never (progress frozen)
+  PPRO_FAKE_AAF_RESULT=done|fail|nofile   an export_aaf job (ending after PPRO_FAKE_EXPORT_POLLS polls, like a render)
+                                  writes a small placeholder .aaf / returns false / reports done but writes nothing
   PPRO_FAKE_SOURCE_FLOOR=1        insert_clip floors a source in/out point to the item's frame, as Premiere does
                                   (see source_frame); off by default, so source times stay as sent
 In-process hooks: STATE (the project; clips may be bare dicts, components and transitions default lazily; an audio
 clip with "channels": 2 gets the stereo volume component, its name verified on 27.1; a project item or video clip with
 "graphic": True is a graphic or text clip: silent, with GRAPHIC_CHAIN; "layers": False on it too: a graphic whose
 layer components never arrive),
+STATE["aafDialog"] (True: Premiere's modal "AAF export log" is up - export_aaf jobs keep running, write nothing and
+show their hint until a test sets it back to False, the user's OK click),
 STUCK (set a dict {action, id, since} to make the panel stuck), FAIL_TRANSACTIONS (label substrings whose
-transaction returns false), TRANSACTIONS (labels committed since reset()), LAST_CTX (the last request's guard and
+transaction returns false), OP_FAULTS (apply_ops op name -> "build": its Action cannot be built, nothing is committed;
+"ignore": it commits without effect, so the read-back fails), TRANSACTIONS (labels committed since reset()), LAST_CTX (the last request's guard and
 side-effect count), reset().
 """
 
@@ -70,10 +75,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(1, str(REPO))
-from ppro_bridge import items as pitems, spec  # noqa: E402  (stdlib only)
+from ppro_bridge import auth, items as pitems, spec  # noqa: E402  (stdlib only)
 
 BROKER_URL = os.environ.get("PPRO_BRIDGE_URL", "ws://127.0.0.1:8017")
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 PLUGIN_ID = "org.pproagentbridge.panel"  # the real panel's manifest id: its hello names it, as this one does
 FPS = 60000 / 1001
 TIMEBASE = "4237833600"  # ticks per frame at 59.94
@@ -225,14 +230,23 @@ STATE = {
                  "guid": "fake-marker-1"}],
     "otherSequences": [],  # the project's other sequences (clone_sequence): [{name, guid, props}], no timelines
     "transitions": [],  # [{videoTrack, matchName, name, start, end, cut}] — sequence seconds
+    # "shiftKeepsTransitions": True — shift_items carries transitions along (27.1 drops them: B2)
+    # "transitionsCentreAtNeighbours": True — add_transition at a cut with a neighbour centres it even when asked
+    #   single-sided and keeps of the half over the neighbour only what its handle covers (27.1, live 6 Nov 2026)
+    # "sequenceSwitchLag": n — set_active_sequence replies "switched" but the switch lands only after n more
+    #   get_project reads (True: never), as two quick switches did live on 27.1 (6 Nov 2026)
     "jobs": [],         # Speech-to-Text jobs (lost on reset, like on a panel reload)
-    "exports": [],      # export jobs (export_sequence wait false; lost on reset too)
+    "exports": [],      # export jobs (export_sequence wait false, export_aaf; lost on reset too)
+    "aafDialog": False,  # True: the modal "AAF export log" holds every export_aaf job (a test clicks OK: False)
     "selection": [],    # the Timeline selection: clip dicts of the tracks above (select_items)
+    "bins": [],         # empty bins apply_ops created (bin paths); the others are the items' bin paths
+    "trackNames": {},   # label -> name, where apply_ops track.rename renamed a track ("Video 1" ... otherwise)
 }
 _INITIAL = copy.deepcopy(STATE)
 
 STUCK = None               # {action, id, since}: refuse everything but ping, like a panel whose watchdog fired
 FAIL_TRANSACTIONS = set()  # label substrings: such a transaction "returns false" (TRANSACTION_FAILED)
+OP_FAULTS = {}             # apply_ops op name -> "build" (its Action cannot be built) | "ignore" (it commits, changes nothing)
 TRANSACTIONS = []          # labels of the transactions committed since reset()
 PROBED_AT = None
 
@@ -516,9 +530,14 @@ def track(kind, idx):
     return tracks[idx]
 
 
+def track_name(kind, idx) -> str:
+    """A track's name: "Video 1" / "Audio 1" unless apply_ops track.rename set another (STATE["trackNames"])."""
+    return (STATE.get("trackNames") or {}).get(label_of(kind, idx)) or         f"{'Video' if kind == 'video' else 'Audio'} {idx + 1}"
+
+
 def describe(it):
     media = it.get("mediaPath") or next((p["mediaPath"] for p in STATE["items"] if p["name"] == it["name"]), None)
-    return {"name": it["name"], "start": it["start"], "end": it["end"], "inPoint": it["inPoint"],
+    return {"name": it.get("clipName") or it["name"], "start": it["start"], "end": it["end"], "inPoint": it["inPoint"],
             "outPoint": it["outPoint"], "speed": it.get("speed", 1), "disabled": bool(it.get("disabled", False)),
             "projectItem": it["name"], "mediaPath": media}
 
@@ -840,33 +859,73 @@ def h_ping(p):
 
 def h_get_project(p):
     proj = require_project()
+    pending = STATE.get("pendingSwitch")  # sequenceSwitchLag: a switch that has not landed yet
+    if pending and pending["reads"] is not True:
+        if pending["reads"] <= 0:
+            del STATE["pendingSwitch"]
+            _switch_to(pending["target"])
+        else:
+            pending["reads"] -= 1
     seq = STATE.get("sequence")
     return {"name": project_name(), "path": proj.get("path"), "activeSequence": seq["name"] if seq else None,
             "guid": proj.get("guid")}
 
 
 def _tracks(kind):
-    return [{"index": i, "label": label_of(kind, i), "name": f"{'Video' if kind == 'video' else 'Audio'} {i + 1}",
+    return [{"index": i, "label": label_of(kind, i), "name": track_name(kind, i),
              "clipCount": len(t)} for i, t in enumerate(STATE[kind])]
 
 
 def h_get_sequence(p):
     _, seq = require_sequence()
     end = max([it["end"] for t in STATE["video"] + STATE["audio"] for it in t] or [0])
-    return {"name": seq["name"], "playerPositionSeconds": 4.2, "width": 1080, "height": 1920,
+    return {"name": seq["name"], "playerPositionSeconds": seq.get("playerPosition", 4.2), "width": 1080, "height": 1920,
             "timebase": TIMEBASE, "fps": round(FPS, 3), "durationSeconds": end,
             "videoTracks": _tracks("video"), "audioTracks": _tracks("audio"), "captionTrackCount": 1,
             "guid": seq.get("guid")}
 
 
+SEQUENCE_TIMELINE = ("video", "audio", "transitions", "markers")  # what a sequence switch swaps
+
+
+def _switch_to(target):
+    """Make `target` (one of STATE["otherSequences"]) the active sequence: the active one keeps its timeline, the
+    target brings its own (a sequence the fake never opened has as many empty tracks)."""
+    seq, others = STATE.get("sequence"), STATE.setdefault("otherSequences", [])
+    saved = target.pop("timeline", None) or {"video": [[] for _ in STATE["video"]],
+                                             "audio": [[] for _ in STATE["audio"]], "transitions": [], "markers": []}
+    if seq is not None:
+        seq["timeline"] = {k: STATE[k] for k in SEQUENCE_TIMELINE}
+        others.append(seq)
+    others[:] = [s for s in others if s is not target]
+    STATE.update(saved, sequence=target, selection=[])
+
+
 def h_set_active_sequence(p):
-    """The demo project has one sequence: naming it (or its guid) is a switch that changes nothing."""
+    """Switch to a sequence of the project: the active one (a switch that changes nothing) or one of the others
+    (clone_sequence's restore points; a switch swaps the timelines). STATE["sequenceSwitchLag"] = n: the reply says
+    switched, but the switch lands only after n more get_project reads (True: never), as two quick switches did live
+    on 27.1 (6 Nov 2026)."""
     require_project()
     seq = STATE.get("sequence")
-    if seq and (p.get("guid") == seq.get("guid") if p.get("guid") else p.get("name") == seq["name"]):
+    want = [s for s in _sequences() if (s.get("guid") == p["guid"] if p.get("guid") else s["name"] == p.get("name"))]
+    if not want:
+        what = f'with guid {p["guid"]}' if p.get("guid") else f'"{p.get("name")}"'
+        raise Coded("NOT_FOUND", f"No sequence {what} in this project.",
+                    data={"sequences": [s["name"] for s in _sequences()]})
+    if len(want) > 1:
+        raise Coded("AMBIGUOUS", f'{len(want)} sequences are named "{p.get("name")}": pass guid.',
+                    data={"sequences": [{"name": s["name"], "guid": s.get("guid")} for s in want]})
+    target = want[0]
+    if target is seq:
         return {"switched": False, "activeSequence": seq["name"], "previous": seq["name"], "guid": seq.get("guid")}
-    what = f'with guid {p["guid"]}' if p.get("guid") else f'"{p.get("name")}"'
-    raise Coded("NOT_FOUND", f"No sequence {what} in this project.")
+    side_effect()
+    if STATE.get("sequenceSwitchLag"):
+        STATE["pendingSwitch"] = {"target": target, "reads": STATE["sequenceSwitchLag"]}
+    else:
+        _switch_to(target)
+    return {"switched": True, "activeSequence": target["name"], "previous": seq["name"] if seq else None,
+            "guid": target.get("guid")}
 
 
 def h_select_items(p):
@@ -913,7 +972,7 @@ def h_select_items(p):
 
 def listing(kinds) -> dict:
     """The tracks of the given kinds as list_items reports them (also what the fingerprint guard hashes)."""
-    return {kind: [{"index": i, "label": label_of(kind, i), "name": f"{'Video' if kind == 'video' else 'Audio'} {i + 1}",
+    return {kind: [{"index": i, "label": label_of(kind, i), "name": track_name(kind, i),
                     "items": [describe(it) for it in sorted(t, key=lambda x: x["start"])]}
                    for i, t in enumerate(STATE[kind])]
             for kind in ("video", "audio") if kind in kinds}
@@ -950,7 +1009,7 @@ def h_inspect_items(p):
                  for t in sorted(transitions(), key=lambda t: t["start"])
                  if kind == "video" and t["videoTrack"] == idx and t["start"] <= to + EPS and t["end"] >= frm - EPS]
         out["tracks"].append({"index": idx, "kind": kind, "label": label_of(kind, idx),
-                              "name": f"{'Video' if kind == 'video' else 'Audio'} {idx + 1}", "clips": clips,
+                              "name": track_name(kind, idx), "clips": clips,
                               "transitions": trans})
     return out
 
@@ -1489,12 +1548,21 @@ def h_add_transition(p):
     at_start = bool(p.get("applyToStart"))
     single = p.get("forceSingleSided") is not False
     cut = clip["start"] if at_start else clip["end"]
-    neighbour = any(abs((o["end"] if at_start else o["start"]) - cut) <= EPS
-                    for o in track("video", vt) if o is not clip)
-    if single or not neighbour:
+    neighbour = next((o for o in track("video", vt) if o is not clip
+                      and abs((o["end"] if at_start else o["start"]) - cut) <= EPS), None)
+    if (single and not STATE.get("transitionsCentreAtNeighbours")) or not neighbour:
         start, end = (cut, cut + dur) if at_start else (cut - dur, cut)
     else:
         start, end = cut - dur / 2, cut + dur / 2
+        if STATE.get("transitionsCentreAtNeighbours"):
+            # 27.1, live 6 Nov 2026: centred even when asked single-sided; each half stays only as far as a clip has
+            # media to cover it: the half before the cut needs the incoming clip's media before its in point, the half
+            # after it the outgoing clip's media after its out point (whole frames; none when a length is unknown)
+            incoming, outgoing = (clip, neighbour) if at_start else (neighbour, clip)
+            length = media_duration(outgoing)
+            tail = length - outgoing["outPoint"] if is_num(length) else 0.0
+            frames = lambda sec: math.floor(max(sec, 0.0) * FPS + 1e-6) / FPS  # noqa: E731
+            start, end = cut - min(dur / 2, frames(incoming["inPoint"])), cut + min(dur / 2, frames(tail))
     label = p.get("undoLabel") or f"Agent: {m} at {'start' if at_start else 'end'} of V{vt + 1} @{js_num(at)}s"
     on_track = lambda: sum(t["videoTrack"] == vt for t in transitions())  # noqa: E731
     before = on_track()
@@ -2031,9 +2099,14 @@ def h_remove_items(p):
 
 
 def _bin_chain(path: str) -> list[str]:
-    """"A/B" -> ["A", "A/B"]: the bins an item's bin path implies (the fake has no empty bins)."""
+    """"A/B" -> ["A", "A/B"]: the bins an item's bin path implies."""
     parts = [x for x in path.split("/") if x]
     return ["/".join(parts[:i + 1]) for i in range(len(parts))]
+
+
+def all_bins() -> set:
+    """Every bin path: those the items' bin paths imply, and the empty bins apply_ops created (STATE["bins"])."""
+    return {b for i in STATE["items"] for b in _bin_chain(i["bin"])} |         {b for path in STATE.get("bins") or [] for b in _bin_chain(path)}
 
 
 def h_remove_project_items(p):
@@ -2041,7 +2114,7 @@ def h_remove_project_items(p):
     a timeline clip has its name and media path (the panel compares ProjectItem ids). No sequence items here."""
     require_project()
     items = STATE["items"]
-    bins = sorted({b for i in items for b in _bin_chain(i["bin"])})
+    bins = sorted(all_bins())
     target_bins, target_items = [], []
     for raw in p.get("bins") or []:
         path = str(raw).strip("/")
@@ -2069,7 +2142,7 @@ def h_remove_project_items(p):
             for idx, t in enumerate(STATE[kind]):
                 for it in t:
                     d = describe(it)
-                    if d["name"] == i["name"] and d["mediaPath"] == i["mediaPath"]:
+                    if d["projectItem"] == i["name"] and d["mediaPath"] == i["mediaPath"]:
                         in_use.append({"item": item_ref(i), "sequence": STATE["sequence"]["name"],
                                        "track": label_of(kind, idx), "start": it["start"], "end": it["end"]})
     out = {"dryRun": bool(p.get("dryRun")), "items": listing, "inUse": in_use, "removed": [], "remaining": []}
@@ -2085,6 +2158,7 @@ def h_remove_project_items(p):
         [b for b in target_bins] + [item_ref(i) for i in target_items]) + " from the project"
     transact(label)
     STATE["items"] = [i for i in items if not any(i is g for g in gone)]
+    STATE["bins"] = [b for b in STATE.get("bins") or [] if b not in gone_bins]
     out["removed"] = [x["ref"] for x in listing]
     out["undoLabel"] = label
     return out
@@ -2273,8 +2347,15 @@ def h_shift_items(p):
         apply_trim(it, "moveTo", it["start"] + delta)
     for kind, idx in dict.fromkeys((k, i) for k, i, _ in moves):
         STATE[kind][idx] = sorted(STATE[kind][idx], key=lambda x: x["start"])
-        if kind == "video":
+        if kind == "video" and STATE.get("shiftKeepsTransitions"):
             shift_transitions(idx, frm - half, delta)
+        elif kind == "video":
+            # B2, live on 27.1 (5 Nov 2026): createMoveAction moves the clips, not their transitions; the OTIO export
+            # afterwards shows none on the moved clips (a ghost may still play at the old time). So a transition that
+            # lay on a moved clip goes (shiftKeepsTransitions in STATE: one that follows its clips, for the tests).
+            was = [(it["start"] - delta, it["end"] - delta) for k, i, it in moves if (k, i) == (kind, idx)]
+            STATE["transitions"] = [t for t in transitions() if not (t["videoTrack"] == idx and any(
+                t["start"] < e - EPS and t["end"] > b + EPS for b, e in was))]
     return {"shifted": shifted, "deltaSeconds": delta, "undoLabel": label}
 
 
@@ -2293,6 +2374,9 @@ def _export_view(job):
     out = {k: v for k, v in job.items() if not k.startswith("_")}
     end = job["finishedAt"] or now_ms()
     out["elapsedSeconds"] = round((end - job["startedAt"]) / 1000, 1)
+    if job.get("kind") == "aaf" and job["state"] == "running" and (STATE.get("aafDialog") or
+                                                                   end - job["startedAt"] >= AAF_HINT_MS):
+        out["hint"] = AAF_HINT
     return copy.deepcopy(out)
 
 
@@ -2319,6 +2403,9 @@ def _advance_exports():
     PPRO_FAKE_EXPORT_RESULT says (progress events on the way, except silent; stall never ends)."""
     need = int(os.environ.get("PPRO_FAKE_EXPORT_POLLS", "1"))
     for job in STATE.setdefault("exports", []):
+        if job.get("kind") == "aaf":
+            _advance_aaf(job, need)
+            continue
         if job["state"] != "running" or job["_result"] == "stall":
             continue
         job["_polls"] += 1
@@ -2353,12 +2440,7 @@ def h_export_sequence(p):
     job reports on it (export_status; PPRO_FAKE_EXPORT_POLLS / PPRO_FAKE_EXPORT_RESULT); one render at a time."""
     require_text(p, ["outputPath", "presetPath"])
     require_sequence()
-    busy = next((j for j in STATE.setdefault("exports", []) if j["state"] == "running"), None)
-    if busy:
-        raise Coded("EXPORT_RUNNING", f"Export job {busy['jobId']} is still rendering {busy['outputPath']} (running): "
-                                      "wait for it (export_status), or Reload the panel if Premiere is no longer "
-                                      "rendering.", data={"jobId": busy["jobId"], "outputPath": busy["outputPath"],
-                                                          "state": busy["state"]})
+    _refuse_busy()
     out, preset = Path(p["outputPath"]), p["presetPath"]
     if re.search(r"[\\/]no[\\/]such[\\/]", preset):
         raise Coded("EXPORT_FAILED", f"exportSequence failed (Unable to initialize export!; preset {preset})")
@@ -2377,8 +2459,8 @@ def h_export_sequence(p):
     events = ("RenderProgressEvent", "RenderCompleteEvent", "RenderErrorEvent", "RenderCancelEvent", "RenderQueueEvent")
     listeners = [f"{route} {name}" for name in events for route in ("EventManager(encoder)", "encoder")]
     listeners += [f"{route} OperationCompleteEvent.ExportMediaComplete" for route in ("EventManager(project)", "project")]
-    job = {"jobId": f"export-{len(jobs) + 1}", "state": "running", "progress": None, "progressRaw": None,
-           "outputPath": p["outputPath"], "preset": preset, "workAreaOnly": bool(p.get("workAreaOnly")),
+    job = {"jobId": f"export-{len(jobs) + 1}", "kind": "render", "state": "running", "progress": None,
+           "progressRaw": None, "outputPath": p["outputPath"], "preset": preset, "workAreaOnly": bool(p.get("workAreaOnly")),
            "sequence": STATE["sequence"]["name"], "startedAt": now_ms(), "finishedAt": None, "lastEventAt": None,
            "endEvent": None, "error": None, "settledBy": None, "returned": None, "pending": True, "events": {}, "routes": {},
            "eventKeys": {}, "eventSample": {}, "listeners": listeners, "listenerErrors": [],
@@ -2391,6 +2473,109 @@ def h_export_sequence(p):
             raise Coded("EXPORT_FAILED", job["error"])
     return {"exported": job["state"] == "done", "outputPath": p["outputPath"], "preset": preset,
             "jobId": job["jobId"], "started": True, "state": job["state"]}
+
+
+AAF_HINT_MS = 3000  # the panel's: an AAF job running this long may be held by the modal export log
+AAF_HINT = ('Premiere may be showing its "AAF export log" window (an effect or transition that cannot go into the AAF): '
+            "exportAAF does not return until someone clicks OK there. Ask the user to click OK in Premiere.")
+AAF_OPTIONS = ("embedAudio", "audioFormat", "sampleRate", "bitsPerSample", "handleFrames", "mixdownVideo",
+               "renderAudioEffects", "trimSources")  # the panel's order (AAF_OPTIONS in handlers_read.js)
+AAF_DEFAULTS = {"audioFileFormat": 1, "bitsPerSample": 16, "embedAudio": False, "explodeToMono": False,
+                "handleFrames": 0, "interleaveWithoutEffects": False, "mixdownVideo": False,
+                "preserveParentFolder": False, "renderAudioEffects": False, "sampleRate": 48000, "trimSources": False,
+                "videoMixdownPresetPath": ""}  # the harness mock's (not measured)
+AAF_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")  # a Structured Storage file, as an AAF is
+
+
+def _refuse_busy():
+    """The panel's refuseBusy: one export at a time."""
+    busy = next((j for j in STATE.setdefault("exports", []) if j["state"] == "running"), None)
+    if busy:
+        aaf = busy.get("kind") == "aaf"
+        raise Coded("EXPORT_RUNNING", f"Export job {busy['jobId']} is still "
+                                      f"{'exporting an AAF to' if aaf else 'rendering'} {busy['outputPath']} "
+                                      "(running): wait for it (export_status), or Reload the panel if Premiere is no "
+                                      "longer exporting." + (" " + AAF_HINT if aaf else ""),
+                    data={"jobId": busy["jobId"], "outputPath": busy["outputPath"], "state": busy["state"],
+                          "kind": busy.get("kind", "render")})
+
+
+def _write_aaf(path):
+    path.write_bytes(AAF_MAGIC + b"\0" * 504 + b"fake AAF of " + STATE["sequence"]["name"].encode("utf-8"))
+
+
+def _advance_aaf(job, need):
+    """One export_status poll of an AAF job: held while STATE["aafDialog"] is up, else it ends after `need` polls as
+    PPRO_FAKE_AAF_RESULT says (the file is written when exportAAF returns, never while the log is up)."""
+    if job["state"] != "running" or STATE.get("aafDialog"):
+        return
+    job["_polls"] += 1
+    if job["_polls"] < need:
+        return
+    result = job["_result"]
+    if result == "fail":
+        job.update(state="failed", settledBy="promise", error="exportAAF returned false", finishedAt=now_ms(),
+                   pending=False, returned=False)
+        return
+    if result != "nofile":
+        try:
+            _write_aaf(Path(job["outputPath"]))
+        except OSError as e:
+            job.update(state="failed", settledBy="promise", error=f"exportAAF returned false ({e})",
+                       finishedAt=now_ms(), pending=False, returned=False)
+            return
+    job.update(state="done", settledBy="promise", finishedAt=now_ms(), pending=False, returned=True)
+
+
+def h_export_aaf(p):
+    """An export job like export_sequence wait false, with no encoder events and no preset: the requested options are
+    "set" (optionsSet, in the panel's order; optionValues as the harness mock reads them back). A missing output
+    folder is exportAAF returning false at once (EXPORT_FAILED, no job). The .aaf is a small placeholder written when
+    the job ends (PPRO_FAKE_EXPORT_POLLS / PPRO_FAKE_AAF_RESULT); STATE["aafDialog"] holds it running meanwhile."""
+    require_text(p, ["outputPath"])
+    require_sequence()
+    _refuse_busy()
+    out = Path(p["outputPath"])
+    asked = [k for k in AAF_OPTIONS if p.get(k) is not None]
+    values = dict(AAF_DEFAULTS)
+    for k in asked:
+        key = "audioFileFormat" if k == "audioFormat" else k
+        values[key] = (0 if p[k] == "aiff" else 1) if k == "audioFormat" else p[k]
+    if not out.parent.is_dir():
+        raise Coded("EXPORT_FAILED", "exportAAF returned false")
+    jobs = STATE.setdefault("exports", [])
+    job = {"jobId": f"export-{len(jobs) + 1}", "kind": "aaf", "state": "running", "progress": None,
+           "progressRaw": None, "outputPath": p["outputPath"], "preset": None, "workAreaOnly": False,
+           "sequence": STATE["sequence"]["name"], "startedAt": now_ms(), "finishedAt": None, "lastEventAt": None,
+           "endEvent": None, "error": None, "settledBy": None, "returned": None, "pending": True, "events": {},
+           "routes": {}, "eventKeys": {}, "eventSample": {}, "listeners": [], "listenerErrors": [],
+           "options": {"set": asked, "values": values},
+           "_polls": 0, "_result": os.environ.get("PPRO_FAKE_AAF_RESULT") or "done"}
+    jobs.append(job)
+    if int(os.environ.get("PPRO_FAKE_EXPORT_POLLS", "1")) <= 0:
+        _advance_aaf(job, 0)  # ends within the panel's early window (unless the log is up)
+        if job["state"] == "failed":
+            jobs.remove(job)
+            raise Coded("EXPORT_FAILED", job["error"])
+    return {"exported": job["state"] == "done", "outputPath": p["outputPath"], "jobId": job["jobId"],
+            "started": True, "state": job["state"], "optionsSet": asked, "optionValues": values}
+
+
+def h_export_xml(p):
+    """A small FCP 7 XML document (xmeml version 4, as Premiere writes) at outputPath; a missing folder is
+    exportAsFinalCutProXML returning false. Refused while an AAF job runs, like the panel."""
+    require_text(p, ["outputPath"])
+    require_sequence()
+    if any(j.get("kind") == "aaf" and j["state"] == "running" for j in STATE.setdefault("exports", [])):
+        _refuse_busy()
+    out = Path(p["outputPath"])
+    if not out.parent.is_dir():
+        raise Coded("EXPORT_FAILED", "exportAsFinalCutProXML returned false")
+    name = STATE["sequence"]["name"].replace("&", "&amp;").replace("<", "&lt;")
+    out.write_bytes(('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n<xmeml version="4">\n'
+                     f'\t<sequence id="sequence-1">\n\t\t<name>{name}</name>\n\t</sequence>\n</xmeml>\n')
+                    .encode("utf-8"))
+    return {"exported": True, "outputPath": p["outputPath"]}
 
 
 def h_export_status(p):
@@ -2576,6 +2761,592 @@ def h_add_audio_effect(p):
     return out
 
 
+# ---------------------------------------------------------------- apply_ops / query (the whitelisted generic layer)
+
+# The panel's plugin/lib/handlers_ops.js on the fake project: each op is planned (target resolved and checked, nothing
+# changed), all are planned before one is applied, then the transaction applies them in order (one undo label), a
+# direct op (the playhead) runs after it, and every op is read back. OP_FAULTS makes an op's Action fail to build
+# (nothing is committed) or commit without effect (VERIFY_FAILED).
+OPS_MAX = 200
+OPS_UNSET = None  # an unset sequence in / out point (the panel reports Premiere's -400000 s as null)
+OPS_VALUE_TOL = 1e-4
+TRACK_LABEL = re.compile(r"([VvAa])([1-9][0-9]*)")
+PENDING_AUDIO = "verified live on video only (api_smoke, 27.1 b21); audio is pending a live test"
+MARKER_SETTERS = {  # op -> (field in _marker_view, its param, the key in a STATE marker)
+    "marker.set_name": ("name", "newName", "name"),
+    "marker.set_comment": ("comments", "comments", "comments"),
+    "marker.set_color": ("colorIndex", "colorIndex", "colorIndex"),
+    "marker.set_duration": ("duration", "durationSeconds", "durationSeconds"),
+    "marker.set_type": ("type", "type", "type"),
+}
+
+
+def _ops_name(value, param):
+    if not isinstance(value, str) or value == "":
+        raise Coded("BAD_PARAMS", f"{param} must not be empty")
+    return value
+
+
+def parse_track_label(text):
+    """"V2" -> ("video", 1, "V2"); anything else is BAD_PARAMS (the panel's parseTrack)."""
+    m = TRACK_LABEL.fullmatch(str(text))
+    if not m:
+        raise Coded("BAD_PARAMS", f'track "{text}" is not a track label (V1, V2, ... or A1, A2, ...)')
+    kind = "video" if m.group(1).upper() == "V" else "audio"
+    idx = int(m.group(2)) - 1
+    return kind, idx, label_of(kind, idx)
+
+
+def _near(a, b, tol):
+    return is_num(a) and is_num(b) and abs(a - b) <= tol
+
+
+def _ops_markers(env):
+    if "markers" not in env:
+        env["markers"] = sorted(((m, _marker_view(m)) for m in STATE["markers"]), key=lambda v: v[1]["start"])
+    return env["markers"]
+
+
+def _brief_marker(d):
+    return {"guid": d["guid"], "name": d["name"], "start": d["start"]}
+
+
+def _marker_key(d):
+    return f"marker:{d['guid'] or str(d['name']) + '@' + str(d['start'])}"
+
+
+def _marker_target(env, op):
+    views = _ops_markers(env)
+    hits = views
+    if isinstance(op.get("guid"), str) and op["guid"]:
+        hits = [h for h in hits if h[1]["guid"] == op["guid"]]
+    if isinstance(op.get("name"), str):
+        hits = [h for h in hits if h[1]["name"] == op["name"]]
+    if is_num(op.get("atSeconds")):
+        hits = [h for h in hits if abs(h[1]["start"] - op["atSeconds"]) <= env["half"]]
+    what = ", ".join(x for x in (f"guid {op['guid']}" if op.get("guid") else None,
+                                 f'named "{op["name"]}"' if isinstance(op.get("name"), str) else None,
+                                 f"at {js_num(op['atSeconds'])}s" if is_num(op.get("atSeconds")) else None) if x)
+    if not hits:
+        raise Coded("NOT_FOUND", f"No marker {what} ({len(views)} marker(s)).",
+                    data={"markers": [_brief_marker(d) for _, d in views[:50]]})
+    if len(hits) > 1:
+        raise Coded("AMBIGUOUS", f"{len(hits)} markers match ({what}): at "
+                    + ", ".join(f"{round(d['start'], 3)}s" for _, d in hits) + ". Pass atSeconds or guid.",
+                    data={"matches": [_brief_marker(d) for _, d in hits]})
+    return hits[0]
+
+
+def _marker_now(m):
+    """The marker after the commit (the fake's markers are dicts that stay in STATE until removed)."""
+    return _marker_view(m) if any(x is m for x in STATE["markers"]) else None
+
+
+def _op_marker_add(env, op):
+    _ops_name(op["name"], "name")
+    start = snap(op["atSeconds"])
+    dur = op["durationSeconds"] if is_num(op.get("durationSeconds")) else 0
+    kind, comments = op.get("type") or "Comment", op.get("comments") or ""
+    holder = {}
+
+    def apply():
+        holder["m"] = {"name": op["name"], "atSeconds": start, "durationSeconds": dur, "type": kind,
+                       "comments": comments, "guid": _next_guid("fake-marker")}
+        STATE["markers"].append(holder["m"])
+
+    def read_back():
+        d = _marker_now(holder["m"]) if holder.get("m") else None
+        if d is None:
+            return {"found": False}, False
+        return d, _near(d["duration"], dur, env["half"]) and d["type"] == kind and d["comments"] == comments
+
+    return {"target": {"marker": "new", "name": op["name"], "start": start},
+            "keys": [(f"marker:new:{op['name']}@{start}", "add")],
+            "after": {"name": op["name"], "start": start, "duration": dur, "type": kind, "comments": comments},
+            "apply": apply, "read_back": read_back}
+
+
+def _op_marker_remove(env, op):
+    m, d = _marker_target(env, op)
+
+    def apply():
+        STATE["markers"] = [x for x in STATE["markers"] if x is not m]
+
+    def read_back():
+        gone = _marker_now(m) is None
+        return {"removed": gone, "markerCount": len(STATE["markers"])}, gone
+
+    return {"target": _brief_marker(d), "keys": [(_marker_key(d), "*")], "before": d, "after": {"removed": True},
+            "apply": apply, "read_back": read_back}
+
+
+def _op_marker_setter(name):
+    field, param, key = MARKER_SETTERS[name]
+
+    def plan(env, op):
+        m, d = _marker_target(env, op)
+        want = op[param]
+        if field == "name":
+            _ops_name(want, "newName")
+
+        def apply():
+            m[key] = want
+
+        def read_back():
+            now = _marker_now(m)
+            if now is None:
+                return {"found": False}, False
+            got = now[field]
+            return {field: got}, (_near(got, want, env["half"]) if field == "duration" else got == want)
+
+        return {"target": _brief_marker(d), "keys": [(_marker_key(d), field)], "before": {field: d[field]},
+                "after": {field: want}, "apply": apply, "read_back": read_back}
+
+    return plan
+
+
+def _op_marker_move(env, op):
+    m, d = _marker_target(env, op)
+    to = snap(op["toSeconds"])
+
+    def apply():
+        m["atSeconds"] = to
+
+    def read_back():
+        now = _marker_now(m)
+        return ({"start": now["start"]}, _near(now["start"], to, env["half"])) if now else ({"found": False}, False)
+
+    return {"target": _brief_marker(d), "keys": [(_marker_key(d), "start")], "before": {"start": d["start"]},
+            "after": {"start": to}, "apply": apply, "read_back": read_back}
+
+
+def _ops_clip(op, video_only, name):
+    kind, idx, label = parse_track_label(op["track"])
+    if video_only and kind != "video":
+        raise Coded("UNSUPPORTED", f"{name} is {PENDING_AUDIO}; {label} is an audio track.")
+    clip = item_at(kind, idx, op["atSeconds"])
+    d = describe(clip)
+    return {"kind": kind, "idx": idx, "label": label, "clip": clip, "d": d, "key": f"clip:{label}@{d['start']}",
+            "target": {"track": label, "name": d["name"], "start": d["start"], "end": d["end"]}}
+
+
+def _op_clip_set_name(env, op):
+    c = _ops_clip(op, True, "clip.set_name")
+    _ops_name(op["name"], "name")
+
+    def apply():
+        c["clip"]["clipName"] = op["name"]
+
+    def read_back():
+        got = describe(item_at(c["kind"], c["idx"], op["atSeconds"]))["name"]
+        return {"name": got}, got == op["name"]
+
+    return {"target": c["target"], "keys": [(c["key"], "name")], "before": {"name": c["d"]["name"]},
+            "after": {"name": op["name"]}, "apply": apply, "read_back": read_back}
+
+
+def _op_clip_set_disabled(env, op):
+    c = _ops_clip(op, True, "clip.set_disabled")
+    if capabilities().get("trackItemDisable") is False:
+        raise Coded("UNSUPPORTED", "clip.set_disabled needs the trackItemDisable capability "
+                                   "(VideoClipTrackItem#createSetDisabledAction), which this Premiere build lacks.")
+
+    def apply():
+        c["clip"]["disabled"] = op["disabled"]
+
+    def read_back():
+        got = describe(item_at(c["kind"], c["idx"], op["atSeconds"]))["disabled"]
+        return {"disabled": got}, got == op["disabled"]
+
+    return {"target": c["target"], "keys": [(c["key"], "disabled")], "before": {"disabled": c["d"]["disabled"]},
+            "after": {"disabled": op["disabled"]}, "apply": apply, "read_back": read_back}
+
+
+def _op_value(v, where):
+    """param.set's value -> (kind, plain): a number, a boolean or a point; anything else is BAD_PARAMS."""
+    if is_num(v):
+        return "number", v
+    if isinstance(v, bool):
+        return "boolean", v
+    if isinstance(v, list) and len(v) == 2 and all(is_num(x) for x in v):
+        return "point", {"x": v[0], "y": v[1]}
+    if isinstance(v, dict) and len(v) == 2 and is_num(v.get("x")) and is_num(v.get("y")):
+        return "point", {"x": v["x"], "y": v["y"]}
+    raise Coded("BAD_PARAMS", f"{where}: value {json.dumps(v)} is not a number, a boolean or a point ([x, y] or "
+                              "{x, y}); strings and colours are not ops (unverified over UXP)")
+
+
+def _kind_of(v):
+    if isinstance(v, bool):
+        return "boolean"
+    if is_num(v):
+        return "number"
+    if _is_point(v):
+        return "point"
+    return None
+
+
+def _same_value(got, kind, want):
+    if kind == "number":
+        return is_num(got) and abs(got - want) <= OPS_VALUE_TOL * max(1, abs(want))
+    if kind == "boolean":
+        return got is want
+    return _is_point(got) and abs(got["x"] - want["x"]) <= OPS_VALUE_TOL and abs(got["y"] - want["y"]) <= OPS_VALUE_TOL
+
+
+def _ops_param(c, op, here):
+    comps = chain(c["clip"], c["kind"])
+    names = [x["matchName"] for x in comps]
+    occ = op.get("occurrence") or 1
+    found = [x for x in comps if x["matchName"] == op["matchName"]]
+    if occ > len(found):
+        raise Coded("NOT_FOUND", f"{c['label']} @{js_num(op['atSeconds'])}s has {len(found)} {op['matchName']} "
+                                 f"component(s) (chain: {', '.join(names)}); param.set writes components the clip "
+                                 "already has (add effects with set_params or add_audio_effect).",
+                    data={"chain": names})
+    params = found[occ - 1]["params"]
+    if op["index"] >= len(params):
+        raise Coded("NOT_FOUND", f"{here}: {op['matchName']}[{occ}] has no param #{op['index']} (it has {len(params)}).")
+    return params[op["index"]]
+
+
+def _op_param_set(env, op):
+    c = _ops_clip(op, False, "param.set")
+    occ = op.get("occurrence") or 1
+    here = f"{c['label']} @{js_num(op['atSeconds'])}s {op['matchName']}[{occ}]#{op['index']}"
+    kind, want = _op_value(op["value"], here)
+    prm = _ops_param(c, op, here)
+    if prm.get("keyframed") and prm.get("keyframes"):
+        raise Coded("KEYFRAMED", f"{here} is keyframed; a static value would be hidden by its keyframes "
+                                 "(remove_keyframes takes them off).")
+    current = start_value(prm)
+    have = _kind_of(current)
+    if have and have != kind:
+        raise Coded("BAD_PARAMS", f"{here}: the param holds a {have}, not a {kind} ({json.dumps(op['value'])})")
+    animated = bool(prm.get("keyframed"))
+
+    def apply():
+        prm["value"] = copy.deepcopy(want)
+        prm["keyframed"] = False  # animation on with no keys: switched off in the same transaction
+        scale = motion_scale(c["clip"]) if c["kind"] == "video" else None
+        if scale is prm and is_num(want):
+            c["clip"]["scale"] = want
+
+    def read_back():
+        again = _ops_param({"clip": item_at(c["kind"], c["idx"], op["atSeconds"]), "kind": c["kind"],
+                            "label": c["label"]}, op, here)
+        got, on = copy.deepcopy(start_value(again)), bool(again.get("keyframed"))
+        return {"value": got, "animated": on}, not on and _same_value(got, kind, want)
+
+    target = dict(c["target"], matchName=op["matchName"], occurrence=occ, index=op["index"], param=prm["name"])
+    return {"target": target, "keys": [(f"{c['key']}:{op['matchName']}[{occ}]#{op['index']}", "value")],
+            "before": {"value": copy.deepcopy(current), "animated": animated}, "after": {"value": want},
+            "apply": apply, "read_back": read_back}
+
+
+def _op_set_in_out(env, op):
+    seq = STATE["sequence"]
+    in_s = snap(op["inSeconds"]) if is_num(op.get("inSeconds")) else None
+    out_s = snap(op["outSeconds"]) if is_num(op.get("outSeconds")) else None
+    if in_s is not None and out_s is not None and out_s <= in_s:
+        raise Coded("BAD_PARAMS", "outSeconds must be after inSeconds (on the frame grid)")
+    before = {"inPoint": seq.get("inPoint", OPS_UNSET), "outPoint": seq.get("outPoint", OPS_UNSET)}
+    after, keys = {}, []
+    if in_s is not None:
+        after["inPoint"] = in_s
+        keys.append(("sequence", "inPoint"))
+    if out_s is not None:
+        after["outPoint"] = out_s
+        keys.append(("sequence", "outPoint"))
+
+    def apply():
+        seq.update(after)
+
+    def read_back():
+        got = {"inPoint": seq.get("inPoint", OPS_UNSET), "outPoint": seq.get("outPoint", OPS_UNSET)}
+        return got, all(_near(got[k], v, env["half"]) for k, v in after.items())
+
+    return {"target": {"sequence": seq["name"]}, "keys": keys, "before": before, "after": after, "apply": apply,
+            "read_back": read_back}
+
+
+def _op_player_position(env, op):
+    seq = STATE["sequence"]
+    at = snap(op["atSeconds"])
+
+    def apply():
+        seq["playerPosition"] = at
+
+    def read_back():
+        got = seq.get("playerPosition", 4.2)
+        return {"playerPositionSeconds": got}, _near(got, at, env["half"])
+
+    return {"target": {"sequence": seq["name"]}, "keys": [("sequence", "playerPosition")],
+            "before": {"playerPositionSeconds": seq.get("playerPosition", 4.2)}, "after": {"playerPositionSeconds": at},
+            "apply": apply, "read_back": read_back}
+
+
+def _op_track_rename(env, op):
+    kind, idx, label = parse_track_label(op["track"])
+    if kind != "video":
+        raise Coded("UNSUPPORTED", f"track.rename is {PENDING_AUDIO}; {label} is an audio track.")
+    _ops_name(op["name"], "name")
+    track(kind, idx)  # NOT_FOUND past the last track
+    before = track_name(kind, idx)
+
+    def apply():
+        STATE.setdefault("trackNames", {})[label] = op["name"]
+
+    def read_back():
+        got = track_name(kind, idx)
+        return {"name": got}, got == op["name"]
+
+    return {"target": {"track": label}, "keys": [(f"track:{label}", "name")], "before": {"name": before},
+            "after": {"name": op["name"]}, "apply": apply, "read_back": read_back}
+
+
+def _bin_path(p) -> str:
+    return "/".join(s for s in str(p or "").split("/") if s)
+
+
+def _join_bin(a, b) -> str:
+    return f"{a}/{b}" if a else b
+
+
+def _bin_where(path) -> str:
+    return f'bin "{path}"' if path else "the root bin"
+
+
+def _ops_bin_name(name, param):
+    _ops_name(name, param)
+    if "/" in name:
+        raise Coded("BAD_PARAMS", f'{param} "{name}" contains "/", which bin paths use')
+    return name
+
+
+def _ops_require_bin(path):
+    at = ""
+    for seg in path.split("/") if path else []:
+        at = _join_bin(at, seg)
+        if at not in all_bins():
+            raise Coded("NOT_FOUND", f'No bin "{at}" in the project.')
+
+
+def _op_bin_create(env, op):
+    _ops_bin_name(op["name"], "name")
+    parent = _bin_path(op.get("parent"))
+    _ops_require_bin(parent)
+    path = _join_bin(parent, op["name"])
+    if path in all_bins():
+        raise Coded("PRECONDITION_FAILED", f'{_bin_where(parent)} already holds a bin named "{op["name"]}".')
+
+    def apply():
+        STATE.setdefault("bins", []).append(path)
+
+    def read_back():
+        found = path in all_bins()
+        return {"path": path, "found": found}, found
+
+    return {"target": {"parent": parent}, "keys": [(f"bin:{path}", "create")], "after": {"path": path},
+            "apply": apply, "read_back": read_back}
+
+
+def _op_bin_rename(env, op):
+    path = _bin_path(op["bin"])
+    if not path:
+        raise Coded("BAD_PARAMS", "bin: the root bin cannot be renamed")
+    _ops_bin_name(op["newName"], "newName")
+    parent, old = path.rpartition("/")[0], path.rpartition("/")[2]
+    _ops_require_bin(path)
+    to = _join_bin(parent, op["newName"])
+    if op["newName"] != old and to in all_bins():
+        raise Coded("PRECONDITION_FAILED", f'{_bin_where(parent)} already holds a bin named "{op["newName"]}".')
+
+    def moved(b):
+        return to + b[len(path):] if b == path or b.startswith(path + "/") else b
+
+    def apply():
+        for it in STATE["items"]:
+            it["bin"] = moved(it["bin"])
+        STATE["bins"] = [moved(b) for b in STATE.get("bins") or []]
+
+    def read_back():
+        bins = all_bins()
+        return {"path": to, "found": to in bins}, to in bins and (to == path or path not in bins)
+
+    return {"target": {"bin": path}, "keys": [(f"bin:{path}", "name"), (f"bin:{to}", "create")],
+            "before": {"path": path}, "after": {"path": to}, "apply": apply, "read_back": read_back}
+
+
+OPS = {  # op -> (needs, plan, direct): the panel's OPS table, in actions.json order
+    "marker.add": ("sequence", _op_marker_add, False),
+    "marker.remove": ("sequence", _op_marker_remove, False),
+    **{name: ("sequence", _op_marker_setter(name), False) for name in MARKER_SETTERS},
+    "marker.move": ("sequence", _op_marker_move, False),
+    "clip.set_name": ("sequence", _op_clip_set_name, False),
+    "clip.set_disabled": ("sequence", _op_clip_set_disabled, False),
+    "param.set": ("sequence", _op_param_set, False),
+    "sequence.set_in_out": ("sequence", _op_set_in_out, False),
+    "sequence.set_player_position": ("sequence", _op_player_position, True),
+    "track.rename": ("sequence", _op_track_rename, False),
+    "bin.create": ("project", _op_bin_create, False),
+    "bin.rename": ("project", _op_bin_rename, False),
+}
+
+
+def _ops_conflicts(planned):
+    seen = []
+    for p in planned:
+        for target, prop in p["keys"]:
+            clash = next((s for s in seen if s["target"] == target and (s["prop"] == prop or "*" in (s["prop"], prop))),
+                         None)
+            if clash:
+                how = "touch" if "*" in (clash["prop"], prop) else f"set {prop} of"
+                raise Coded("BAD_PARAMS", f"ops[{clash['index']}] ({clash['op']}) and ops[{p['index']}] ({p['op']}) both "
+                                          f"{how} {target}; split them into two requests")
+        seen += [{"index": p["index"], "op": p["op"], "target": t, "prop": pr} for t, pr in p["keys"]]
+
+
+def _ops_label(ops_list):
+    names = ", ".join(dict.fromkeys(o["op"] for o in ops_list))
+    if len(names) > 80:
+        names = names[:77] + "..."
+    return f"Agent: {len(ops_list)} op{'' if len(ops_list) == 1 else 's'} ({names})"
+
+
+def h_apply_ops(p):
+    ops_list = p["ops"]
+    if len(ops_list) > OPS_MAX:
+        raise Coded("BAD_PARAMS", f"apply_ops takes at most {OPS_MAX} ops in one request ({len(ops_list)} given); split it.")
+    if any(OPS[o["op"]][0] == "sequence" for o in ops_list):
+        require_sequence()
+    else:
+        require_project()
+    env = {"half": 0.5 / FPS}
+    planned = []
+    for i, op in enumerate(ops_list):
+        needs, plan, direct = OPS[op["op"]]
+        try:
+            step = plan(env, op)
+        except Coded as e:
+            raise Coded(e.code, f"ops[{i}] {op['op']}: {e}", e.outcome, e.data) from e
+        planned.append(dict(step, index=i, op=op["op"], direct=direct))
+    _ops_conflicts(planned)
+    label = p.get("undoLabel") or _ops_label(ops_list)
+    tx = [s for s in planned if not s["direct"]]
+    direct = [s for s in planned if s["direct"]]
+
+    def result(s):
+        r = {"index": s["index"], "op": s["op"], "ok": True, "target": s["target"]}
+        if "before" in s:
+            r["before"] = copy.deepcopy(s["before"])
+        r["after"] = copy.deepcopy(s["after"])
+        if s["direct"]:
+            r["undoable"] = False
+        return r
+
+    out = {"dryRun": bool(p.get("dryRun")), "count": len(ops_list), "results": [result(s) for s in planned],
+           "undoLabel": label}
+    if direct:
+        out["notUndoable"] = [s["op"] for s in direct]
+    if p.get("dryRun"):
+        return out
+    if tx:
+        broken = next((s for s in tx if OP_FAULTS.get(s["op"]) == "build"), None)
+        if broken:
+            raise Coded("INTERNAL", f"ops[{broken['index']}] {broken['op']}: its action could not be built, so nothing "
+                                    "was committed: fake build failure (OP_FAULTS)")
+        transact(label, actions=len(tx))
+        for s in tx:
+            if OP_FAULTS.get(s["op"]) != "ignore":
+                s["apply"]()
+    for s in direct:
+        side_effect()
+        s["apply"]()
+    for r, s in zip(out["results"], planned):
+        read_back, verified = s["read_back"]()
+        r["readBack"], r["verified"] = copy.deepcopy(read_back), verified is True
+    out["verified"] = all(r["verified"] for r in out["results"])
+    if not out["verified"]:
+        off = ", ".join(f"ops[{r['index']}] {r['op']}" for r in out["results"] if not r["verified"])
+        raise Coded("VERIFY_FAILED", f"{off} did not read back as asked (results[].readBack). The ops committed as "
+                                     f'"{label}": look before retrying (Edit > Undo takes the step back).',
+                    outcome="committed", data=out)
+    return out
+
+
+def _q_clips(p):
+    has_at, has_range = is_num(p.get("atSeconds")), is_num(p.get("fromSeconds"))
+    if has_at and has_range:
+        raise Coded("BAD_PARAMS", "Give atSeconds or fromSeconds + toSeconds, not both.")
+    if has_range and p["toSeconds"] < p["fromSeconds"]:
+        raise Coded("BAD_PARAMS", "toSeconds must not be before fromSeconds.")
+    wanted = [parse_track_label(t) for t in p.get("tracks") or []]
+    _, seq = require_sequence()
+    if not wanted:
+        wanted = [(kind, i, label_of(kind, i)) for kind in ("video", "audio") for i in range(len(STATE[kind]))]
+    tracks, done = [], set()
+    for kind, idx, label in wanted:
+        if label in done:
+            continue
+        done.add(label)
+        clips = []
+        for it in sorted(track(kind, idx), key=lambda x: x["start"]):
+            if has_at and not overlaps(it, p["atSeconds"], p["atSeconds"]):
+                continue
+            if has_range and not overlaps(it, p["fromSeconds"], p["toSeconds"]):
+                continue
+            clips.append(describe(it))
+        tracks.append({"label": label, "kind": kind, "index": idx, "name": track_name(kind, idx), "clips": clips})
+    return {"what": "clips", "sequence": seq["name"], "tracks": tracks}
+
+
+def _q_clip(p):
+    kind, idx, label = parse_track_label(p["track"])
+    _, seq = require_sequence()
+    clip = item_at(kind, idx, p["atSeconds"])
+    d = describe(clip)
+    d["components"] = inspect_chain(clip, p.get("maxKeyframes") or 50, kind)
+    return {"what": "clip", "sequence": seq["name"], "track": label, "clip": d}
+
+
+def _q_markers(p):
+    _, seq = require_sequence()
+    markers = sorted((_marker_view(m) for m in STATE["markers"]), key=lambda d: d["start"])
+    return {"what": "markers", "sequence": seq["name"], "count": len(markers), "markers": markers}
+
+
+def _q_bins(p):
+    require_project()
+    root = _bin_path(p.get("bin"))
+    bins = all_bins()
+    if root and root not in bins:
+        raise Coded("NOT_FOUND", f'No bin "{root}" in the project. Bins: ' + (" | ".join(sorted(bins)) or "none"))
+    rows = [{"path": b, "kind": "bin", "name": b.rpartition("/")[2], "bin": b.rpartition("/")[0]} for b in bins]
+    rows += [{"path": _join_bin(i["bin"], i["name"]), "kind": "clip", "name": i["name"], "bin": i["bin"],
+              "mediaPath": i["mediaPath"]} for i in STATE["items"]]
+    rows = [r for r in rows if not root or r["path"].startswith(root + "/")]
+    rows.sort(key=lambda r: (r["path"].count("/"), r["kind"] != "bin", r["path"]))
+    return {"what": "bins", "bin": root, "count": len(rows), "entries": rows}
+
+
+def _q_sequence(p):
+    _, seq = require_sequence()
+    end = max([it["end"] for t in STATE["video"] + STATE["audio"] for it in t] or [0])
+    return {"what": "sequence", "sequence": seq["name"], "guid": seq.get("guid"),
+            "frameSize": {"width": 1080, "height": 1920}, "timebase": TIMEBASE, "fps": round(FPS, 3),
+            "durationSeconds": end, "playerPositionSeconds": seq.get("playerPosition", 4.2),
+            "inPoint": seq.get("inPoint", OPS_UNSET), "outPoint": seq.get("outPoint", OPS_UNSET),
+            "videoTracks": _tracks("video"), "audioTracks": _tracks("audio")}
+
+
+QUERIES = {"clips": _q_clips, "clip": _q_clip, "markers": _q_markers, "bins": _q_bins, "sequence": _q_sequence}
+
+
+def h_query(p):
+    return QUERIES[p["what"]](p)
+
+
 HANDLERS = {  # in actions.json order
     "ping": h_ping,
     "get_project": h_get_project,
@@ -2615,9 +3386,13 @@ HANDLERS = {  # in actions.json order
     "trim_clip": h_trim_clip,
     "export_sequence": h_export_sequence,
     "export_status": h_export_status,
+    "export_aaf": h_export_aaf,
+    "export_xml": h_export_xml,
     "list_effects": h_list_effects,
     "add_audio_effect": h_add_audio_effect,
     "shift_items": h_shift_items,
+    "apply_ops": h_apply_ops,
+    "query": h_query,
     "probe_api": h_probe_api,
     "api_smoke": h_api_smoke,
 }
@@ -2633,6 +3408,7 @@ def reset():
     HANDLERS.update(_DEFAULT_HANDLERS)
     STUCK, PROBED_AT = None, None
     FAIL_TRANSACTIONS.clear()
+    OP_FAULTS.clear()
     TRANSACTIONS.clear()
     CTX, LAST_CTX = _fresh_ctx(), _fresh_ctx()
 
@@ -2717,11 +3493,22 @@ async def answer(ws, msg):
 
 
 async def main():
+    """Pair with the broker as the real panel does (ppro_bridge/auth.py "Pairing": the token file, read with
+    auth.read_token, is proved and never sent), then answer requests, and only once the broker proved the token
+    back. PPRO_FAKE_LEGACY_HELLO=1 says the hello of a 0.6 panel instead (no pairing; for the broker's legacy rule)."""
     import websockets
 
-    async with websockets.connect(BROKER_URL) as ws:
-        await ws.send(json.dumps({"role": "panel", "plugin": PLUGIN_ID, "version": VERSION}))
-        print(f"fake panel {VERSION} registered at {BROKER_URL}", flush=True)
+    legacy = os.environ.get("PPRO_FAKE_LEGACY_HELLO") == "1"
+    token, nonce, broker_nonce = auth.read_token(), auth.new_nonce(), None
+    proven = legacy  # a legacy hello gets no proof: this fake then trusts the broker, as a 0.6 panel did
+    # The broker's limit for a paired client (16 MiB), not websockets' default 1 MiB: a 2 MB transcript import must
+    # reach the fake as it reaches the panel (QA-7).
+    async with websockets.connect(BROKER_URL, max_size=16 * 1024 * 1024) as ws:
+        hello = {"role": "panel", "plugin": PLUGIN_ID, "version": VERSION}
+        if not legacy:
+            hello.update(auth=auth.SCHEME, nonce=nonce)
+        await ws.send(json.dumps(hello))
+        print(f"fake panel {VERSION} said hello at {BROKER_URL}", flush=True)
         tasks = set()
         try:
             async for raw in ws:
@@ -2732,10 +3519,25 @@ async def main():
                     continue
                 if isinstance(msg, dict) and msg.get("event") == "refused":
                     print(f"refused by the broker: {msg.get('error')}", flush=True)
+                if isinstance(msg, dict) and msg.get("event") == "challenge" and not legacy and broker_nonce is None:
+                    broker_nonce = msg.get("nonce") if auth.valid_nonce(msg.get("nonce")) else None
+                    if broker_nonce is None or not token:
+                        print("not paired: no usable challenge or no token", flush=True)
+                        raise SystemExit(1)
+                    await ws.send(json.dumps({"proof": auth.proof(token, "client", "panel", nonce, broker_nonce)}))
+                    continue
                 if isinstance(msg, dict) and msg.get("event") == "registered":
+                    if not legacy and not auth.proof_matches(msg.get("proof"), token, "broker", "panel", nonce,
+                                                             broker_nonce):
+                        print("not paired: the broker did not prove the pairing token", flush=True)
+                        raise SystemExit(1)
+                    proven = True
                     print("registered by the broker", flush=True)  # tests/helpers.Bridge waits for this line
                 if not isinstance(msg, dict) or not msg.get("id") or not msg.get("action"):
                     continue  # the panel drops these too (and shows broker notices: {"event": ...})
+                if not proven:
+                    print(f"dropped {msg.get('action')}: the broker has not proved the pairing token", flush=True)
+                    continue
                 if CONCURRENT:  # like an unqueued panel: start each request as it arrives
                     task = asyncio.get_running_loop().create_task(answer(ws, msg))
                     tasks.add(task)

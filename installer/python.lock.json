@@ -1,0 +1,23 @@
+{
+  "comment": [
+    "The Python that the installer bundles (scripts/build_installer.py reads this file). The build downloads the",
+    "zip only with --download, and refuses it unless its SHA-256 is the one below; a cached copy is checked again",
+    "on every build. 3.14 is the line python.org still ships Windows binaries for (3.12.10 and 3.13.17 were the last",
+    "of theirs; later 3.12 / 3.13 releases are source-only security releases), so the bundle moved to it in 0.7",
+    "(DOC-3). A later 3.14.x needs a new url and sha256 here; another minor version also the pth name, python_version",
+    "and abi below, and the binary wheels in requirements.lock replaced."
+  ],
+  "python": {
+    "version": "3.14.10",
+    "url": "https://www.python.org/ftp/python/3.14.10/python-3.14.10-embeddable-amd64.zip",
+    "sha256": "b553e7dac884469b40e0740bb527271c3378f700b427e0485835f1bb6424361c",
+    "pth": "python314._pth",
+    "source": "python.org's Windows release index https://www.python.org/ftp/python/index-windows.json, entry id pythonembed-3.14-64 (sort-version 3.14.10), read 2026-11-06. python.org also publishes a Sigstore bundle for the file."
+  },
+  "wheels": {
+    "python_version": "3.14",
+    "implementation": "cp",
+    "abi": "cp314",
+    "platform": "win_amd64"
+  }
+}

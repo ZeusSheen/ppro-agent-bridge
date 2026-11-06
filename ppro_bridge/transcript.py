@@ -15,6 +15,7 @@ import math
 import re
 from pathlib import Path
 
+from . import paths
 from .errors import BridgeError
 
 FALLBACK_LANGUAGE = "??-??"
@@ -70,8 +71,9 @@ def upgrade_legacy_languages(doc: dict) -> list[str]:
 
 def read_transcript(path) -> tuple[str, dict]:
     """(text, parsed object) of a transcript file (UTF-8, BOM tolerated). FILE_NOT_FOUND / TRANSCRIPT_INVALID
-    (not JSON, or not a JSON object); IO_ERROR when it cannot be read."""
-    p = Path(path).expanduser()
+    (not JSON, or not a JSON object); IO_ERROR when it cannot be read. BAD_PARAMS for a network, device or stream
+    path, or one through a link to such a place (paths.check): Python would open it with the user's credentials."""
+    p = Path(paths.check(path, what="transcript"))
     if not p.is_file():
         raise BridgeError(f"File not found: {p.resolve()}", code="FILE_NOT_FOUND", outcome="not_committed")
     try:

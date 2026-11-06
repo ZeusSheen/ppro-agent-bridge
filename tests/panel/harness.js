@@ -36,16 +36,27 @@
  *   connection    stdin {steps: [...], ...as call}: drives the socket main.js opened at load (a stub) and the page.
  *                 Steps: {open: true} | {message: string or object} | {close: {code, reason} or null} |
  *                 {throwingMessage: true} (an event whose data getter throws) | {click: element id} |
+ *                 {pair: true | {token?, brokerProof?: "bad"|"none", stop?: "challenge", update?}} (play a 0.7
+ *                 broker: send the challenge, check the panel's proof (out.pairing), send "registered" with the
+ *                 broker's proof - wrong with "bad", none with "none" - unless stop: "challenge") |
  *                 {fire: "error"|"unhandledrejection"|"beforeunload"|..., message?} (global listeners) | {safely: "sync"|"async"} (a throwing callback
  *                 wrapped by main.js's safely) | {runTimer: ms} (runs the newest timer of that delay now) | {wait: ms}
  *                 -> {ok, sockets: [{url, readyState, sent: [JSON-parsed]}], status, dot, log: [lines],
- *                     delays: [setTimeout ms during the steps], refused, prevented: n, escaped: [what a step threw]}
+ *                     pairing: [{nonce, proofOk}] (one per pair step), fsReads: [paths the panel's fs.readFile got],
+ *                     delays: [setTimeout ms during the steps], refused, prevented: n, escaped: [what a step threw],
+ *                     update: {display, text, view} (the update notice), report: {display, text, status, selected}
+ *                     (the problem report box), openExternal: [{url, developerText, result}], clipboard: [texts]}
+ *                 clipboard (any command): "ok" gives the page a navigator.clipboard whose writeText records the
+ *                 text, "deny" one whose writeText throws (no manifest permission); absent: no navigator at all.
+ *   support       stdin {calls: [{fn, args}], ...as call}: lib/support.js functions called with args (awaited)
+ *                 -> {ok, results: [return values]}
  * `call` / `batch` add "violations" (mock lock-scope breaches) only when there were any.
  * The panel loads as a dev build whatever plugin/lib/build.js says (so a release export's own tests check the same
  * panel), as a release build with `dev: false`: the one dev flag in build.js (or in a bundle) is rewritten in memory
  * the way scripts/build_ccx.py packages it, and loading fails unless it took. `buildJs` is the whole text of a
  * lib/build.js to load instead (a .ccx package's, say); then nothing is rewritten.
  */
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
@@ -76,7 +87,7 @@ function parseArgs(argv) {
       throw new Error(`unexpected argument ${argv[i]}`);
     }
   }
-  if (!out.command) throw new Error("usage: harness.js <describe|call|batch|capabilities|timebase|connection|launcher> [--bundle PATH]");
+  if (!out.command) throw new Error("usage: harness.js <describe|call|batch|capabilities|timebase|connection|launcher|support> [--bundle PATH]");
   return out;
 }
 
@@ -93,7 +104,9 @@ function readStdin() {
 
 function element() {
   return {
-    className: "", textContent: "", childNodes: [], scrollTop: 0, scrollHeight: 0, listeners: {},
+    className: "", textContent: "", childNodes: [], scrollTop: 0, scrollHeight: 0, listeners: {}, style: {}, selected: 0,
+    select() { this.selected += 1; },
+    focus() {},
     get firstChild() { return this.childNodes[0] || null; },
     appendChild(c) { this.childNodes.push(c); return c; },
     removeChild(c) { const i = this.childNodes.indexOf(c); if (i >= 0) this.childNodes.splice(i, 1); return c; },
@@ -180,6 +193,13 @@ function loadPanel(req, mainPath) {
   };
   if (req.hostTable !== undefined) sandbox.__agentBridgeHostTable = req.hostTable;
   if (req.broker !== undefined) sandbox.WebSocket = brokerWebSocket(req.broker, mocks);
+  mocks.record.clipboard = [];
+  if (req.clipboard === "ok" || req.clipboard === "deny") {
+    sandbox.navigator = { clipboard: { async writeText(text) {
+      if (req.clipboard === "deny") throw new Error("Permission denied: clipboard");
+      mocks.record.clipboard.push(text);
+    } } };
+  }
   sandbox.document.getElementById("startBtn").style = {};  // main.js shows / hides it through style.display
   sandbox.document.getElementById("guide").style = {};     // ... and the first-run steps
   const context = vm.createContext(sandbox);
@@ -188,6 +208,7 @@ function loadPanel(req, mainPath) {
   sandbox.require = function require(name) {
     if (name === "premierepro") return mocks.ppro;
     if (name === "uxp") return mocks.uxp;
+    if ((name === "os" || name === "fs") && mocks[name]) return mocks[name];  // UXP's modules (the pairing token)
     if (LIB_REQUIRE.test(name)) {
       if (!modules[name]) {
         const file = path.join(pluginDir, name.slice(2));
@@ -217,9 +238,31 @@ function loadPanel(req, mainPath) {
 
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+const parseSent = (x) => { try { return JSON.parse(x); } catch (e) { return x; } };
+const hmacHex = (key, text) => crypto.createHmac("sha256", Buffer.from(key, "utf8")).update(text, "utf8").digest("hex");
+const BROKER_NONCE = "ab".repeat(32);
+
+/* The {pair} step: a 0.7 broker's side of the hello (ppro_bridge/auth.py "Pairing") on socket `sock`. */
+async function pairStep(sock, opts, mocks, counts) {
+  const hello = sock.sent.map(parseSent).find((m) => m && typeof m === "object" && m.role === "panel");
+  if (!hello) throw new Error("the panel sent no hello to pair with");
+  const token = typeof opts.token === "string" ? opts.token : mocks.pairingToken;
+  const at = sock.sent.length;
+  sock.onmessage({ data: JSON.stringify({ event: "challenge", auth: "hmac-sha256", nonce: BROKER_NONCE, broker: "0.0.0" }) });
+  for (let i = 0; i < 3; i += 1) await tick();
+  const answer = sock.sent.slice(at).map(parseSent).find((m) => m && typeof m === "object" && has(m, "proof"));
+  const want = hmacHex(token, `ppro-agent-bridge/1 client panel ${hello.nonce} ${BROKER_NONCE}`);
+  counts.pairing.push({ nonce: hello.nonce, proofOk: !!answer && answer.proof === want });
+  if (opts.stop === "challenge") return;
+  const registered = { event: "registered", broker: typeof opts.broker === "string" ? opts.broker : "0.0.0",
+    update: has(opts, "update") ? opts.update : null };
+  if (opts.brokerProof === "bad") registered.proof = "0".repeat(64);
+  else if (opts.brokerProof !== "none") registered.proof = hmacHex(token, `ppro-agent-bridge/1 broker panel ${hello.nonce} ${BROKER_NONCE}`);
+  sock.onmessage({ data: JSON.stringify(registered) });
+}
 
 /* One `connection` step against the newest socket and the page (see the header). */
-async function connectionStep(bridge, page, step, counts) {
+async function connectionStep(bridge, page, step, counts, mocks) {
   const sock = page.sockets[page.sockets.length - 1];
   if (step.open) {
     sock.readyState = StubWebSocket.OPEN;
@@ -229,6 +272,8 @@ async function connectionStep(bridge, page, step, counts) {
     const evt = { type: step.fire, preventDefault() { counts.prevented += 1; } };
     Object.assign(evt, step.fire === "error" ? { error, message: error.message } : { reason: error });
     for (const fn of page.listeners[step.fire] || []) fn(evt);
+  } else if (step.pair) {
+    await pairStep(sock, step.pair === true ? {} : step.pair, mocks, counts);
   } else if (has(step, "message")) {
     sock.onmessage({ data: typeof step.message === "string" ? step.message : JSON.stringify(step.message) });
   } else if (step.throwingMessage) {
@@ -351,23 +396,29 @@ async function run(args, req) {
     case "connection": {
       const page = loaded.page;
       const from = page.delays.length;
-      const counts = { prevented: 0 };
+      const counts = { prevented: 0, pairing: [] };
       const escaped = [];
       for (const step of req.steps || []) {
         try {
-          await connectionStep(bridge, page, step, counts);
+          await connectionStep(bridge, page, step, counts, mocks);
         } catch (e) {
           escaped.push(String(e && e.message ? e.message : e));
         }
         for (let i = 0; i < 3; i += 1) await tick();
       }
-      const parse = (x) => { try { return JSON.parse(x); } catch (e) { return x; } };
+      const parse = parseSent;
       const text = (id) => page.document.getElementById(id);
       return withViolations({
-        ok: true, escaped, prevented: counts.prevented, refused: bridge.state.refused,
+        ok: true, escaped, prevented: counts.prevented, refused: bridge.state.refused, pairing: counts.pairing,
+        fsReads: mocks.record.fsReads.slice(),
         sockets: page.sockets.map((s) => ({ url: s.url, readyState: s.readyState, sent: s.sent.map(parse) })),
         status: text("statusText").textContent, dot: text("dot").className, brand: text("brand").className, hint: text("hint").textContent, guide: text("guide").style.display, prompt: text("prompt").value,
         log: text("log").childNodes.map((n) => n.textContent), delays: page.delays.slice(from),
+        update: { display: text("update").style.display || null, text: text("updateText").textContent,
+          view: text("updateViewGroup").style.display || null },
+        report: { display: text("reportBox").style.display || null, text: text("reportText").value || "",
+          status: text("reportStatus").textContent, selected: text("reportText").selected },
+        openExternal: mocks.record.openExternal.slice(), clipboard: mocks.record.clipboard.slice(),
       }, mocks);
     }
     case "capabilities": {
@@ -378,13 +429,25 @@ async function run(args, req) {
     }
     case "launcher":
       return withViolations(await launcherRun(bridge, mocks, loaded.page, req), mocks);
+    case "support": {
+      const lib = bridge.lib.support;
+      const results = [];
+      for (const c of req.calls || []) {
+        if (typeof lib[c.fn] !== "function") throw new Error(`support has no function "${c.fn}"`);
+        results.push(await lib[c.fn](...(c.args || [])));
+      }
+      return { ok: true, results: JSON.parse(JSON.stringify(results === undefined ? null : results)) };
+    }
     default:
-      throw new Error(`unknown command "${args.command}" (describe, call, batch, capabilities, timebase, connection, launcher)`);
+      throw new Error(`unknown command "${args.command}" (describe, call, batch, capabilities, timebase, connection, launcher, support)`);
   }
 }
 
+/* One JSON line, ASCII only (non-ASCII as \u escapes): a reader that decodes stdout with the console's code page
+   (GBK on a Chinese Windows) still parses it. */
 function emit(obj, code) {
-  process.stdout.write(JSON.stringify(obj) + "\n", () => process.exit(code));
+  const text = JSON.stringify(obj).replace(/[\u007f-￿]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+  process.stdout.write(text + "\n", () => process.exit(code));
 }
 
 async function main() {

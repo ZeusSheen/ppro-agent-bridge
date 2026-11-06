@@ -27,6 +27,38 @@ def tmp() -> Path:
     return Path(d.name)
 
 
+class PairingPrimitivesTest(unittest.TestCase):
+    """auth.py "Pairing": HMAC-SHA256 without OpenSSL, nonces, and proofs bound to side, role and both nonces."""
+
+    def test_hmac_is_the_standard_one(self):
+        import hashlib
+        import hmac
+        for key, msg in ((b"k", b"m"), (b"x" * 64, b""), (b"y" * 65, b"z" * 200), ("é".encode() * 40, b"\0\1")):
+            self.assertEqual(auth.hmac_sha256(key, msg), hmac.new(key, msg, hashlib.sha256).digest())
+
+    def test_nonces(self):
+        nonces = {auth.new_nonce() for _ in range(100)}
+        self.assertEqual(len(nonces), 100)
+        self.assertTrue(all(auth.valid_nonce(n) for n in nonces))
+        for bad in (None, "", "ab" * 31, "AB" * 32, "g" * 64, "ab" * 33, 12):
+            self.assertFalse(auth.valid_nonce(bad), bad)
+
+    def test_proofs_are_bound_to_everything(self):
+        a, b = auth.new_nonce(), auth.new_nonce()
+        p = auth.proof(GOOD, "client", "panel", a, b)
+        self.assertEqual(len(p), 64)
+        self.assertTrue(auth.proof_matches(p, GOOD, "client", "panel", a, b))
+        for args in ((GOOD, "broker", "panel", a, b), (GOOD, "client", "controller", a, b),
+                     (GOOD, "client", "panel", b, a), ("u" * 40, "client", "panel", a, b)):
+            self.assertFalse(auth.proof_matches(p, *args), args[1:3])
+        for given in (None, "", p.upper(), p[:-1], 5, p + "0"):
+            self.assertFalse(auth.proof_matches(given, GOOD, "client", "panel", a, b), given)
+        self.assertFalse(auth.proof_matches(p, None, "client", "panel", a, b))
+        self.assertFalse(auth.proof_matches(p, GOOD, "client", "panel", "bad", b))
+        with self.assertRaises(ValueError):
+            auth.proof(GOOD, "server", "panel", a, b)
+
+
 class TokenTest(unittest.TestCase):
     def setUp(self):
         self.dir = tmp()
@@ -70,6 +102,27 @@ class TokenTest(unittest.TestCase):
         self.assertTrue(auth.matches(GOOD, GOOD))
         for given in (None, "", GOOD[:-1], 123, ["t" * 40]):
             self.assertFalse(auth.matches(given, GOOD), given)
+
+    @unittest.skipUnless(os.name == "nt", "Windows ACLs")
+    def test_a_created_token_file_and_folder_are_this_users_only(self):
+        """DOC-6: the file (and a folder ensure_token makes) gets an ACL of its own - this user and SYSTEM, nothing
+        inherited - before the token is written; measured with icacls on a temp folder only."""
+        import subprocess
+        auth.ACL_ERRORS.clear()
+        auth.ensure_token()
+        self.assertEqual([e for e in auth.ACL_ERRORS if e], [])
+        sid = auth._user_sid()
+        self.assertTrue(sid and sid.startswith("S-1-"))
+        for path in (self.dir / "sub", self.dir / "sub" / "token"):
+            out = subprocess.run(["icacls", str(path)], capture_output=True, text=True, errors="replace").stdout
+            entries = [line for line in out.splitlines() if ":(" in line]
+            self.assertEqual(len(entries), 2, out)        # the user and SYSTEM
+            self.assertFalse(any("(I)" in e for e in entries), out)  # nothing inherited from the temp folder
+        log = audit.AuditLog(self.dir / "new-audit")
+        self.assertTrue(log.write({"event": "start"}))
+        out = subprocess.run(["icacls", str(self.dir / "new-audit")], capture_output=True, text=True,
+                             errors="replace").stdout
+        self.assertFalse(any("(I)" in line for line in out.splitlines() if ":(" in line), out)
 
     def test_default_location(self):
         os.environ.pop(auth.TOKEN_FILE_ENV, None)
@@ -230,7 +283,7 @@ class BrokerAuthTest(unittest.TestCase):
         reply, _ = asyncio.run(raw(self.bridge.url, controller_hello()))
         self.assertTrue(reply["ok"], reply)  # the fake panel (no token) is still registered
         panels = [r for r in audit_lines() if r.get("event") == "panel" and r.get("state") == "registered"]
-        self.assertIn("missing", {r["token"] for r in panels})
+        self.assertIn("proved", {r["token"] for r in panels})  # the fake panel paired (RA-1)
 
     def test_every_request_leaves_one_line(self):
         rid = str(uuid.uuid4())

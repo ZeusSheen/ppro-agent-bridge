@@ -417,6 +417,7 @@ b, strong { font-weight: 650; }
 /* ---------- footer, toast ---------- */
 .foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 12px 26px 16px; font-size: 12px; color: var(--muted); }
 .credit { flex: 1 1 260px; min-width: 0; }
+.update-line { flex: 0 1 auto; min-width: 0; }
 .toast {
   position: fixed; left: 50%; bottom: 22px; z-index: 10;
   display: flex; align-items: center; gap: 10px; max-width: calc(100% - 32px);
@@ -569,6 +570,7 @@ b, strong { font-weight: 650; }
 
   <footer class="foot">
     <span class="credit" data-t="credit">Icons: Material Line Icons (Vjacheslav Trushkin) and SVG Spinners (Utkarsh Verma), MIT</span>
+    <span class="update-line" id="updateLine" role="status" hidden></span>
     <button type="button" class="btn small ghost" id="folderBtn" data-action="open-folder" hidden><span class="ic" data-ic="folder" aria-hidden="true"></span><span data-t="openFolder">Open the bridge folder</span></button>
   </footer>
 </div>
@@ -688,6 +690,11 @@ const STRINGS = {
     lostHelp: 'If you closed its console window, double-click setup_bridge.bat again.',
     goTo: 'Go to that step',
     openFolder: 'Open the bridge folder',
+    'update.off': 'Update check: off',
+    'update.none': 'Updates: not checked yet (the bridge asks GitHub once a day)',
+    'update.newer': 'Version {v} is available',
+    'update.skipped': 'Version {v} is available (skipped)',
+    'update.current': 'Up to date (latest release {v})',
     credit: 'Icons: Material Line Icons (Vjacheslav Trushkin) and SVG Spinners (Utkarsh Verma), MIT',
     on: 'On',
     off: 'Off',
@@ -863,6 +870,11 @@ const STRINGS = {
     lostHelp: '如果你关掉了它的命令行窗口，请再双击一次 setup_bridge.bat。',
     goTo: '去那一步',
     openFolder: '打开桥接文件夹',
+    'update.off': '更新检查：已关闭',
+    'update.none': '更新：还没检查（桥每天问一次 GitHub）',
+    'update.newer': '有新版本 {v}',
+    'update.skipped': '有新版本 {v}（已跳过）',
+    'update.current': '已是最新版（最新发布 {v}）',
     credit: '图标：Material Line Icons（Vjacheslav Trushkin）与 SVG Spinners（Utkarsh Verma），MIT 许可',
     on: '开',
     off: '关',
@@ -1534,7 +1546,20 @@ function updateRail() {
   const p = ready / total;
   $('#fill').style.transform = p <= 0 ? 'translateX(calc(-100% - 4px))' : 'translateX(' + ((p - 1) * 100).toFixed(2) + '%)';
 }
+/** One line about the update check (state.update: update.status() on the Python side). */
+function updateText(u) {
+  if (!u || typeof u !== 'object') return '';
+  if (u.enabled === false) return P('update.off');
+  const v = typeof u.latest === 'string' && /^\d{1,4}\.\d{1,4}\.\d{1,4}$/.test(u.latest) ? u.latest : '';
+  if (!v) return P('update.none');
+  if (u.newer === true) return P(u.skipped === true ? 'update.skipped' : 'update.newer', { v });
+  return P('update.current', { v });
+}
 function renderTop() {
+  const line = $('#updateLine');
+  const text = updateText(state && state.update);
+  line.hidden = !text;
+  line.textContent = text;
   const v = $('#version');
   const ver = state && state.version ? String(state.version) : '';
   v.hidden = !ver;

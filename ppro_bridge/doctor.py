@@ -10,7 +10,8 @@ ffmpeg/ffprobe (scaling, listening report), Pillow (contact sheets), faster-whis
 install the requirements; shortcuts to start_bridge.bat with the bridge's icon on the desktop and in the Start menu;
 start it at login (a shortcut in the Startup folder). Developer mode and UXP Developer Tool are turned on / installed by the user (Creative Cloud, admin rights):
 the report says how. Installed packages are read from disk on every check, so a check after a pip install in the
-same process (the setup window) sees the new versions.
+same process (the setup window) sees the new versions. The report ends with one line about the broker's update check
+(update.status(): what update.json and settings.json hold; nothing is sent from here).
 
 The command line also asks Creative Cloud's plugin installer (UPIA, read-only `/list all`) whether the panel is
 installed as a .ccx (scripts/build_ccx.py) for a Premiere Pro it knows - optional, for .ccx installs only; --no-upia
@@ -37,7 +38,8 @@ import threading
 import time
 from pathlib import Path
 
-from . import auth, ccx, devloader
+from . import auth, ccx, console, devloader
+from . import update as updates
 
 REPO = Path(__file__).resolve().parent.parent
 START_SCRIPT = REPO / "start_bridge.bat"
@@ -371,6 +373,26 @@ def ccx_check(listing=None, manifest=None, installs=None, dirs=None) -> dict:
     return _ok(CCX_CHECK, f"not installed as .ccx (UXP Developer Tool loads the panel); {knows}", required=False)
 
 
+def data_folder_check() -> dict:
+    """The folder the pairing token lives in (auth.token_path's: it follows PPRO_BRIDGE_TOKEN_FILE), looked at, never
+    created (QA-4: a check, and every test that runs one, must not make the user's real data folder): there and
+    writable, or not there yet with a writable parent (the broker makes it on its first start)."""
+    folder = auth.token_path().parent
+    fix = "check the permissions of your user folder (%USERPROFILE%)"
+    try:
+        if folder.is_dir():
+            return (_ok("Bridge data folder", str(folder)) if os.access(folder, os.W_OK) else
+                    _bad("Bridge data folder", f"{folder} is not writable", fix))
+        if folder.exists():
+            return _bad("Bridge data folder", f"{folder} is not a folder", fix)
+        parent = next((p for p in folder.parents if p.exists()), None)
+        if parent is not None and parent.is_dir() and os.access(parent, os.W_OK):
+            return _ok("Bridge data folder", f"{folder} (made when the bridge first starts)")
+        return _bad("Bridge data folder", f"{folder} cannot be made: {parent} is not writable", fix)
+    except OSError as e:
+        return _bad("Bridge data folder", str(e), fix)
+
+
 def checks(upia=False) -> list[dict]:
     """Every check: {name, ok, required, detail, fix}. `upia`: also ask UPIA about a .ccx install (ccx_check)."""
     importlib.invalidate_caches()  # packages pip installed since the last check
@@ -396,12 +418,7 @@ def checks(upia=False) -> list[dict]:
     out.append(_ok("Premiere Pro (UXP)", "; ".join(with_uxp)) if with_uxp else
                _bad("Premiere Pro (UXP)", "; ".join(installs) or "not found",
                     f"Premiere Pro {version_label(minimum)} or newer (or the Beta)"))
-    try:
-        folder = auth.data_dir()
-        folder.mkdir(parents=True, exist_ok=True)
-        out.append(_ok("Bridge data folder", str(folder)))
-    except OSError as e:
-        out.append(_bad("Bridge data folder", str(e), "check the permissions of your user folder (%USERPROFILE%)"))
+    out.append(data_folder_check())
     out.append(_ok("Start script", str(START_SCRIPT)) if START_SCRIPT.is_file() else
                _bad("Start script", f"{START_SCRIPT} is missing", "re-extract the bridge"))
     out.append(_ok("Broker", f"running on 127.0.0.1:{BROKER_PORT}", required=False) if broker_running() else
@@ -418,6 +435,14 @@ def checks(upia=False) -> list[dict]:
     return out
 
 
+def update_line() -> str:
+    """One line about the broker's update check, as update.json and settings.json hold it (nothing is sent)."""
+    try:
+        return f"  Updates: {updates.status()['text']}"
+    except Exception as e:  # noqa: BLE001 - the report goes on without it
+        return f"  Updates: unknown ({type(e).__name__})"
+
+
 def report(results) -> str:
     lines = []
     for r in results:
@@ -432,7 +457,8 @@ def report(results) -> str:
 # ---------------------------------------------------------------- fixes
 
 def install_deps() -> int:
-    return subprocess.call([sys.executable, "-m", "pip", "install", "-r", str(REPO / "requirements.txt")])
+    return subprocess.call([sys.executable, *console.isolated_flags(), "-m", "pip", "install", "-r",
+                            str(REPO / "requirements.txt")])
 
 
 def _special_folder(name: str) -> Path:
@@ -446,21 +472,26 @@ def _special_folder(name: str) -> Path:
 
 
 def _ps_quote(text) -> str:
-    """A PowerShell single-quoted string (a ' in a folder name is doubled)."""
-    return "'" + str(text).replace("'", "''") + "'"
+    """A PowerShell single-quoted string. PowerShell ends such a string at any of ' ‘ ’ ‚ ‛ (U+0027, U+2018-U+201B),
+    and a doubled one stands for itself, so every one of them is doubled - a folder named "Bob’s" must not end the
+    string. make_shortcut passes its paths as environment variables instead and needs none of this."""
+    return "'" + re.sub("(['‘’‚‛])", r"\1\1", str(text)) + "'"
 
 
 def make_shortcut(folder: Path, minimized=False) -> Path:
     """A .lnk to start_bridge.bat in `folder` with the bridge's icon (WScript.Shell through PowerShell). The console
-    window it opens takes the shortcut's icon too."""
+    window it opens takes the shortcut's icon too. The paths reach PowerShell as environment variables, never inside
+    the script text, so no folder name can change what the script does."""
     link = Path(folder) / SHORTCUT_NAME
     style = 7 if minimized else 1
-    icon = f"$s.IconLocation = {_ps_quote(f'{ICON},0')}; " if ICON.is_file() else ""
-    script = (f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut({_ps_quote(link)}); "
-              f"$s.TargetPath = {_ps_quote(START_SCRIPT)}; $s.WorkingDirectory = {_ps_quote(START_SCRIPT.parent)}; "
-              f"$s.WindowStyle = {style}; $s.Description = 'Start the Premiere Agent Bridge'; {icon}$s.Save()")
+    icon = "$s.IconLocation = $env:PAB_SHORTCUT_ICON; " if ICON.is_file() else ""
+    script = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:PAB_SHORTCUT_LINK); "
+              "$s.TargetPath = $env:PAB_SHORTCUT_TARGET; $s.WorkingDirectory = $env:PAB_SHORTCUT_DIR; "
+              f"$s.WindowStyle = {int(style)}; $s.Description = 'Start the Premiere Agent Bridge'; {icon}$s.Save()")
+    env = dict(os.environ, PAB_SHORTCUT_LINK=str(link), PAB_SHORTCUT_TARGET=str(START_SCRIPT),
+               PAB_SHORTCUT_DIR=str(START_SCRIPT.parent), PAB_SHORTCUT_ICON=f"{ICON},0")
     out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                         capture_output=True, text=True, timeout=30)
+                         capture_output=True, text=True, timeout=30, env=env)
     if out.returncode != 0 or not link.is_file():
         raise OSError(f"could not create {link}: {out.stderr.strip()}")
     return link
@@ -511,6 +542,7 @@ def main(argv=None) -> int:
 
     results = checks(upia=not args.no_upia)
     print("Premiere Agent Bridge - setup check\n" + report(results))
+    print(update_line())
     missing_deps = any(r["name"] == "websockets" and not r["ok"] for r in results)
     if args.install_deps or (args.interactive and missing_deps and _ask("\nInstall the Python requirements now?")):
         install_deps()

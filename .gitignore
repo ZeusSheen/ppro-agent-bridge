@@ -38,6 +38,9 @@ desktop.ini
 dist/
 *.ccx
 
+# The installer's own Python (python\ in an installed bridge; the suite also runs in that layout)
+python/
+
 # Local research output (not part of the release)
 research_notes/
 reports/

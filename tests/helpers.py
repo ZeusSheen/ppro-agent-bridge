@@ -43,14 +43,92 @@ atexit.register(shutil.rmtree, STATE, True)
 os.environ["PPRO_BRIDGE_TOKEN_FILE"] = str(STATE / "token")
 os.environ["PPRO_AUDIT_DIR"] = str(STATE / "audit")
 os.environ.pop("PPRO_BRIDGE_TOKEN", None)
+# No test asks GitHub: brokers start with the update check off, and settings.json / update.json live in the
+# throwaway folder too (tests/test_update.py turns the check on against a local server).
+os.environ["PPRO_UPDATE_CHECK"] = "0"
+os.environ["PPRO_SETTINGS_DIR"] = str(STATE / "settings")
+
+# QA-4: and no test in this process touches the user's real folder at all - not even a mkdir: every open, mkdir,
+# listdir, scandir, remove, rename or rmtree of it or of anything inside it fails the call (an audit hook stays for
+# the whole run; subprocesses get the folders above through env()).
+REAL_DATA_DIR = os.path.normcase(os.path.abspath(os.path.join(os.path.expanduser("~"), ".ppro-agent-bridge")))
+_GUARDED_EVENTS = {"open", "os.mkdir", "os.listdir", "os.scandir", "os.remove", "os.rename", "os.rmdir",
+                   "shutil.rmtree", "shutil.copyfile", "shutil.move", "os.truncate", "os.utime", "os.chmod"}
+
+
+def _under_real_data(value) -> bool:
+    if isinstance(value, int) or value is None:
+        return False
+    try:
+        p = os.path.normcase(os.path.abspath(os.fsdecode(value)))
+    except (TypeError, ValueError):
+        return False
+    return p == REAL_DATA_DIR or p.startswith(REAL_DATA_DIR + os.sep)
+
+
+def _guard_real_data(event, args):
+    if event in _GUARDED_EVENTS and any(_under_real_data(a) for a in args[:2]):
+        raise PermissionError(f"a test reached the real {REAL_DATA_DIR} ({event}): point it at a temp folder")
+
+
+sys.addaudithook(_guard_real_data)
 
 from ppro_bridge import auth, spec  # noqa: E402
 from ppro_bridge.errors import BridgeError  # noqa: E402
 
+auth.ensure_token()  # the test token, in STATE: stand-in brokers and the CLI pair with it from the start
+
 
 def controller_hello() -> str:
-    """The role message a raw-WebSocket test sends: a controller with the test brokers' token."""
+    """The role message a raw-WebSocket test sends: a controller with the test brokers' token (the 0.5 / 0.6 hello,
+    which the broker still takes from controllers; the CLI pairs instead, see controller_pair)."""
     return json.dumps({"role": "controller", "token": auth.read_token()})
+
+
+PANEL_PLUGIN_ID = "org.pproagentbridge.panel"
+PANEL_VERSION = (REPO / "VERSION").read_text(encoding="utf-8").strip()
+
+
+def panel_hello(**extra) -> dict:
+    """A paired panel's hello (auth.py "Pairing"): role, plugin id, version, scheme and a fresh nonce."""
+    return dict({"role": "panel", "plugin": PANEL_PLUGIN_ID, "version": PANEL_VERSION, "auth": auth.SCHEME,
+                 "nonce": auth.new_nonce()}, **extra)
+
+
+async def panel_pair(ws, hello=None, token=None, timeout=10) -> dict:
+    """Play the panel's side of the hello on a websockets connection: send `hello` (default panel_hello()), answer
+    the challenge with the proof of `token` (default the test token) and return the broker's next notice
+    ("registered" with its proof checked: AssertionError if it does not match; or "refused"). A notice that comes
+    instead of the challenge (refused at once) is returned as it is."""
+    import asyncio
+    hello = panel_hello() if hello is None else hello
+    token = auth.read_token() if token is None else token
+    await ws.send(json.dumps(hello))
+    first = json.loads(await asyncio.wait_for(ws.recv(), timeout))
+    if first.get("event") != "challenge":
+        return first
+    await ws.send(json.dumps({"proof": auth.proof(token, "client", "panel", hello["nonce"], first["nonce"])}))
+    notice = json.loads(await asyncio.wait_for(ws.recv(), timeout))
+    if notice.get("event") == "registered":
+        assert auth.proof_matches(notice.get("proof"), token, "broker", "panel", hello["nonce"], first["nonce"]), \
+            f"the broker's proof does not match: {notice}"
+    return notice
+
+
+async def broker_pair(ws, token=None, timeout=10) -> dict:
+    """Play a 0.7 broker's side of a controller's hello (stand-in brokers in tests): receive the hello, send the
+    challenge, check the proof (AssertionError if wrong) and send "authenticated" with the broker's proof. Returns
+    the hello."""
+    import asyncio
+    token = auth.read_token() if token is None else token
+    hello = json.loads(await asyncio.wait_for(ws.recv(), timeout))
+    nonce = auth.new_nonce()
+    await ws.send(json.dumps({"event": "challenge", "auth": auth.SCHEME, "nonce": nonce, "broker": "9.9.9"}))
+    answer = json.loads(await asyncio.wait_for(ws.recv(), timeout))
+    assert auth.proof_matches(answer.get("proof"), token, "client", "controller", hello.get("nonce"), nonce), answer
+    await ws.send(json.dumps({"event": "authenticated", "broker": "9.9.9",
+                              "proof": auth.proof(token, "broker", "controller", hello["nonce"], nonce)}))
+    return hello
 
 
 def env(**extra) -> dict:

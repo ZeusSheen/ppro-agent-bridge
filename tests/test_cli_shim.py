@@ -16,6 +16,10 @@ from ppro_bridge._version import VERSION
 
 
 def py(*args, cwd, timeout=60):
+    if args and args[0] == "-c":
+        # `python -c` puts the current folder first on sys.path; the installer's Python (a ._pth: isolated) does not,
+        # so the folder goes in explicitly - the shims are tested under both (QA-2).
+        args = ("-c", f"import sys; sys.path.insert(0, {str(cwd)!r})\n" + args[1], *args[2:])
     return subprocess.run([sys.executable, *args], cwd=str(cwd), env=env(), capture_output=True, text=True,
                           encoding="utf-8", timeout=timeout)
 
@@ -145,7 +149,20 @@ class ParserTest(unittest.TestCase):
     def test_subcommands_are_the_spec_commands(self):
         sub = next(a for a in cli.build_parser()._actions if a.dest == "action")
         self.assertEqual(sorted(sub.choices), sorted(spec.command_names()))
-        self.assertEqual(len(sub.choices), 54)
+        self.assertEqual(len(sub.choices), 58)  # 0.7: + export_aaf, export_xml, apply_ops, query
+
+    def test_one_subcommand_parser_is_the_same_as_in_the_full_one(self):
+        """main builds only the parser of the command argv names (start-up time): same help, same arguments."""
+        full = next(a for a in cli.build_parser()._actions if a.dest == "action").choices
+        for name in spec.command_names():
+            alone = next(a for a in cli.build_parser(only=name)._actions if a.dest == "action").choices
+            self.assertEqual(list(alone), [name])
+            self.assertEqual(alone[name].format_help(), full[name].format_help(), name)
+            self.assertEqual([a.dest for a in alone[name]._actions], [a.dest for a in full[name]._actions], name)
+        out = py("ppro.py", "no_such_command", cwd=CLI)  # anything else: the whole parser, as before
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("invalid choice: 'no_such_command'", out.stderr)
+        self.assertIn("ping", out.stderr)
 
     def test_dest_names_are_ops_keywords(self):
         import inspect

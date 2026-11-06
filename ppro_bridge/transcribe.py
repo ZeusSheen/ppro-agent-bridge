@@ -24,7 +24,7 @@ import unicodedata
 import uuid
 from pathlib import Path
 
-from . import transcript
+from . import paths, transcript
 from .console import utf8_stdio
 from .errors import BridgeError
 
@@ -126,7 +126,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run(args) -> int:
-    media = Path(args.media).expanduser().resolve()
+    # Checked as Premiere's paths are (no share, device, stream or link to one: ffmpeg would open it with the
+    # user's credentials); the output is a .json, checked before minutes of transcription.
+    media = paths.resolved(paths.check(args.media, what="media"))
+    paths.check(args.output, what="--output", ext=".json")
     if not media.is_file():
         raise BridgeError(f"File not found: {media}", code="FILE_NOT_FOUND", outcome="not_committed")
     override = None
@@ -178,7 +181,7 @@ def _run(args) -> int:
         raise BridgeError(f"Whisper found no speech in {media.name}; nothing was written.", code="NO_SPEECH",
                           outcome="not_committed")
 
-    out = Path(args.output).expanduser().resolve()
+    out = paths.resolved(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(json.dumps(doc, ensure_ascii=False, indent=1).encode("utf-8"))
 

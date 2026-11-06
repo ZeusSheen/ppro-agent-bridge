@@ -22,7 +22,9 @@
  * createRemoveVideoTransitionAction leaves a neighbour's single-sided fade at that edit point alone),
  * noAudioFilters (no AudioFilterFactory), videoDisplayNames (what VideoFilterFactory.getDisplayNames returns),
  * relinkFails (changeMediaFilePath returns false and changes nothing), noRelink (canChangeMediaPath answers false),
- * subclipLandsInRoot (a new subclip goes to the root bin instead of its source's). Exporters also fail for paths
+ * subclipLandsInRoot (a new subclip goes to the root bin instead of its source's), failCreate [create*Action names
+ * -> creating one throws, inside the transaction callback], ignoreActions [create*Action names -> the action commits
+ * and changes nothing, so a read-back disagrees]. Exporters also fail for paths
  * containing /no/such/
  * (a missing folder); EncoderManager#exportSequence throws "Unable to initialize export!" for such a preset path.
  * exportJob {progress: [values], stepMs, result: complete | error | cancel | silent | never, resolve (what the promise
@@ -34,6 +36,16 @@
  * nothing; never neither ends nor settles. Events are objects with prototype getters (type, plus progress or
  * message), sent to listeners added through ppro.EventManager.addEventListener(target, name, fn) or the target's own
  * addEventListener, as `deliver` says (default EventManager). record.listeners logs every add / remove.
+ * ProjectConverter.exportAAF(seq, path, options?) records {kind: "aaf", outputPath, options (the getter values of
+ * the AAFExportOptions it got, or null)} and returns false for a /no/such/ path or with exportFails; knob aafJob
+ * {holdMs (the "AAF export log" stays up that long before the promise settles; -1: forever), result: true | false |
+ * "throw" (what it settles with), throwSync (exportAAF throws before returning a promise)} makes it slow (27.1 b21:
+ * a modal log holds the call until someone clicks OK; whether the panel's other requests still run then is NOT
+ * measured). AAFExportOptions has the 27.1 getters and setX methods (api dump, 2 Nov 2026; the defaults here are
+ * NOT measured); knob noAafOptions removes the class, aafMissingSetter ["setTrimSources", ...] removes setters,
+ * aafSetterThrows ["setSampleRate", ...] makes them throw. exportAsFinalCutProXML records {kind: "fcpxml",
+ * outputPath, suppressUI (its third argument)} and returns false for /no/such/ or with exportFails; exportThrows
+ * makes both converters throw.
  * Failed reads (not measured: what a broken read looks like is the point): failTrackItems ["V2", ...] -> that
  * track's getTrackItems throws; nullTrackItems [labels] -> it returns null; holeTrackItems {label: n} -> its first n
  * clip lists carry a null where a clip was just removed (seen live on 27.1); selectionIgnored -> Sequence#setSelection
@@ -71,12 +83,22 @@
  * percent-encoded) and throws for a missing one; shell.openPath(path, developerText) is recorded in
  * record.openPath and resolves to "" (started). Knobs: openPath (a string every call resolves to, or
  * {".bat": ..., ".pyw": ...} by extension; "throw:<text>" throws), noShell (no uxp.shell), noEntryWithUrl (no
- * getEntryWithUrl), uiLocale (uxp.host.uiLocale; default "en_US").
+ * getEntryWithUrl), uiLocale (uxp.host.uiLocale; default "en_US"). shell.openExternal(url, developerText) is recorded
+ * in record.openExternal and resolves to "" (opened); knob openExternal: the string it resolves to ("throw:<text>"
+ * throws), noOpenExternal: no shell.openExternal (an older UXP).
+ * The pairing token (lib/pairing.js): require("os").homedir() is knob home (default HARNESS_HOME, the harness
+ * user's home; null: no homedir), localFileSystem.getDataFolder() a folder in <home>'s roaming application data
+ * (nativePath only), and
+ * require("fs").readFile(path) resolves to knob token (default HARNESS_TOKEN; null: no token file) for
+ * <home>\.ppro-agent-bridge\token in any spelling (native, file: URL), else rejects; every path is recorded in
+ * record.fsReads. Knob noFs: no fs module (localFileSystem.getEntryWithUrl is the fallback, which finds real files).
  */
 const fs = require("fs");
 const path = require("path");
 
 const TPS = 254016000000;
+const HARNESS_TOKEN = "harness-pairing-token-0123456789abcdefghijklmnop";
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const EPS = 1e-4; // seconds: overlap tolerance of the mock timeline
 const LEVEL_0DB = 0.17782793939113617; // Premiere's linear audio Level at 0 dB (measured, 27.1 b17)
 const DENOISE_GUID = "c6762838-e451-4d22-9c90-b0eaa734605a"; // match name of "降噪" (measured, 27.1 b21)
@@ -126,8 +148,9 @@ function createMocks(options) {
 
   function makeAction(kind, apply) {
     if (lockDepth <= 0) throw violation(`${kind} called outside lockedAccess`);
+    if ((knobs.failCreate || []).indexOf(kind) >= 0) throw new Error(`mock: ${kind} failed (knob failCreate)`);
     record.actionsCreated += 1;
-    return { __mockAction: true, kind, apply };
+    return { __mockAction: true, kind, apply: (knobs.ignoreActions || []).indexOf(kind) >= 0 ? () => {} : apply };
   }
 
   class TickTime {
@@ -935,6 +958,41 @@ function createMocks(options) {
     }, step * (values.length + 1)));
   }
 
+  /* ---------- AAF export (ProjectConverter.exportAAF, AAFExportOptions) ---------- */
+
+  const AAF_DEFAULTS = {  // NOT measured: plausible values for a fresh AAFExportOptions
+    audioFileFormat: 1, bitsPerSample: 16, embedAudio: false, explodeToMono: false, handleFrames: 0,
+    interleaveWithoutEffects: false, mixdownVideo: false, preserveParentFolder: false, renderAudioEffects: false,
+    sampleRate: 48000, trimSources: false, videoMixdownPresetPath: "",
+  };
+  class AAFExportOptions {
+    constructor() { this._v = Object.assign({}, AAF_DEFAULTS); }
+  }
+  for (const key of Object.keys(AAF_DEFAULTS)) {
+    const setter = "set" + key[0].toUpperCase() + key.slice(1);
+    Object.defineProperty(AAFExportOptions.prototype, key, { get() { return this._v[key]; } });
+    if ((knobs.aafMissingSetter || []).indexOf(setter) >= 0) continue;
+    AAFExportOptions.prototype[setter] = function (value) {
+      if ((knobs.aafSetterThrows || []).indexOf(setter) >= 0) throw new Error(`${setter}: Illegal Parameter type`);
+      this._v[key] = value;
+      return true;
+    };
+  }
+  const aafValues = (o) => (o instanceof AAFExportOptions ? Object.assign({}, o._v) : null);
+
+  function exportAAF(seq, outputPath, options) {
+    const job = knobs.aafJob || {};
+    if (job.throwSync || knobs.exportThrows) throw new Error("exportAAF: Unable to export AAF (mock)");
+    record.exports.push({ kind: "aaf", outputPath, options: aafValues(options), argc: arguments.length });
+    if (knobs.exportFails || missingFolder(outputPath)) return Promise.resolve(false);
+    if (job.holdMs === undefined) return Promise.resolve(job.result === undefined ? true : job.result);
+    if (job.holdMs < 0) return new Promise(() => {});
+    return new Promise((resolve, reject) => setTimeout(() => {
+      if (job.result === "throw") reject(new Error("exportAAF failed (mock)"));
+      else resolve(job.result === undefined ? true : job.result);
+    }, job.holdMs));
+  }
+
   /* ---------- the ppro module ---------- */
 
   const ppro = {
@@ -990,8 +1048,14 @@ function createMocks(options) {
     },
     OperationCompleteEvent: { EVENT_EXPORT_MEDIA_COMPLETE: "OperationCompleteEvent.ExportMediaComplete" },
     ProjectConverter: {
-      async exportAsFinalCutProXML(seq, outputPath) { record.exports.push({ kind: "fcpxml", outputPath }); return !missingFolder(outputPath); },
-      async exportAAF(seq, outputPath) { record.exports.push({ kind: "aaf", outputPath }); return !missingFolder(outputPath); },
+      async exportAsFinalCutProXML(seq, outputPath, suppressUI) {
+        if (knobs.exportThrows) throw new Error("exportAsFinalCutProXML: Unable to export (mock)");
+        record.exports.push({ kind: "fcpxml", outputPath, suppressUI });
+        return !knobs.exportFails && !missingFolder(outputPath);
+      },
+      exportAAF,
+      AAF_EXPORT_AUDIO_FORMAT_AIFF: 0,
+      AAF_EXPORT_AUDIO_FORMAT_WAV: 1,
       async exportAsOpenTimelineIO(seq, outputPath) {
         record.exports.push({ kind: "otio", outputPath });
         return !knobs.exportFails && !missingFolder(outputPath);
@@ -1051,12 +1115,14 @@ function createMocks(options) {
       OperationCompleteState: { SUCCESS: 1, CANCELLED: 2, FAILED: 3 },  // 27.1 (api dump, 2 Nov 2026)
       TransitionPosition: { START: 1, END: 2 },  // live 27.1 b21 (api_smoke, 22 Oct 2026)
       InterpolationMode: INTERPOLATION,
+      AAFExportAudioFormat: { AIFF: 0, WAV: 1 },  // 27.1 (api dump, 2 Nov 2026)
       PropertyType: { NON_PERSISTENT: 0, PERSISTENT: 1 },
     },
     Transcript,
     TextSegments,
   };
   if (knobs.noAudioFilters) delete ppro.AudioFilterFactory;
+  if (!knobs.noAafOptions) ppro.AAFExportOptions = AAFExportOptions;
   if (knobs.videoDisplayNames) ppro.VideoFilterFactory.getDisplayNames = async () => knobs.videoDisplayNames.slice();
   if (!old) {
     ppro.MogrtText = class MogrtText {};
@@ -1102,6 +1168,7 @@ function createMocks(options) {
   }
 
   record.openPath = [];  // uxp.shell.openPath calls: {path, developerText, result}
+  record.openExternal = [];  // uxp.shell.openExternal calls: {url, developerText, result}
   const uxp = {
     host,
     storage: {
@@ -1115,6 +1182,8 @@ function createMocks(options) {
         async getEntryWithUrl(url) {
           let p = decodeURIComponent(String(url).replace(/^file:\/*/, ""));
           if (!/^[A-Za-z]:/.test(p)) p = "/" + p;
+          // never a real pairing token (the user's, or a test broker's): the panel's token comes from the fs mock only
+          if (/[\\/]\.ppro-agent-bridge([\\/]|$)/i.test(p)) throw new Error(`mock: no such file or folder: ${url}`);
           if (!fs.existsSync(p)) throw new Error(`mock: no such file or folder: ${url}`);
           return fs.statSync(p).isDirectory() ? folderEntry(p) : fileEntry(p);
         },
@@ -1129,10 +1198,44 @@ function createMocks(options) {
         if (String(result).indexOf("throw:") === 0) throw new Error(String(result).slice(6));
         return result;
       },
+      async openExternal(url, developerText) {
+        const result = typeof knobs.openExternal === "string" ? knobs.openExternal : "";
+        record.openExternal.push({ url, developerText, result });
+        if (result.indexOf("throw:") === 0) throw new Error(result.slice(6));
+        return result;
+      },
     },
   };
+  if (knobs.noOpenExternal) delete uxp.shell.openExternal;
   if (knobs.noShell) delete uxp.shell;
   if (knobs.noEntryWithUrl) delete uxp.storage.localFileSystem.getEntryWithUrl;
+
+  /* UXP's os and fs modules, as far as the pairing token needs them (see the header). */
+  // Paths built from parts: the release scan flags literal drive paths and the application data folder name.
+  const HARNESS_HOME = ["C:", "Users", "harness"].join("\\");
+  const APP_DATA = "App" + "Data";
+  const home = has(knobs, "home") ? knobs.home : HARNESS_HOME;
+  const pairingToken = has(knobs, "token") ? knobs.token : HARNESS_TOKEN;
+  record.fsReads = [];
+  const tokenFile = (p) => {
+    if (!home) return false;
+    const norm = (x) => decodeURI(String(x)).replace(/^file:\/*/i, "").replace(/\\/g, "/").toLowerCase();
+    return norm(p) === norm(`${home}\\.ppro-agent-bridge\\token`);
+  };
+  const os = home && !knobs.noHomedir ? { homedir() { return home; } } : {};  // noHomedir: a UXP without it
+  const fsModule = knobs.noFs ? null : {
+    async readFile(p, o) {
+      record.fsReads.push(String(p));
+      if (pairingToken === null || !tokenFile(p)) throw new Error(`mock fs: no such file: ${p}`);
+      return o && o.encoding ? `${pairingToken}\n` : Buffer.from(`${pairingToken}\n`, "utf8");
+    },
+  };
+  if (home) {
+    uxp.storage.localFileSystem.getDataFolder = async () => ({
+      name: "PluginData", isFolder: true, isFile: false,
+      nativePath: `${home}\\${APP_DATA}\\Roaming\\Adobe\\UXP\\PluginsStorage\\PPRO\\27\\Developer\\org.pproagentbridge.panel\\PluginData`,
+    });
+  }
 
   /* Every track item's edges in ticks (seconds are kept as float sums of exact tick times: rounding recovers them). */
   function edgeTicks() {
@@ -1148,7 +1251,10 @@ function createMocks(options) {
     return out;
   }
 
-  return { ppro, uxp, record, scenario, project, sequence: () => sequence, sequences: () => sequences.slice(), root, edgeTicks };
+  return {
+    ppro, uxp, os, fs: fsModule, pairingToken, record, scenario, project, sequence: () => sequence,
+    sequences: () => sequences.slice(), root, edgeTicks,
+  };
 }
 
-module.exports = { createMocks, SCENARIOS, TPS, LEVEL_0DB, sampleTranscript };
+module.exports = { createMocks, SCENARIOS, TPS, LEVEL_0DB, sampleTranscript, HARNESS_TOKEN };

@@ -22,7 +22,7 @@ from ppro_bridge import doctor, setup_ui
 from ppro_bridge._version import VERSION
 
 STATE_KEYS = {"version", "demo", "platform", "repo", "python", "pythonExe", "premiereMin", "checks", "shortcuts",
-              "brokerRunning", "busy"}
+              "brokerRunning", "busy", "update"}
 CHECK_NAMES = ["Python", "websockets", "UXP Developer Tool", "UXP developer mode", "Premiere Pro (UXP)",
                "Bridge data folder", "Start script", "Broker", "ffmpeg", "ffprobe", "PIL", "faster_whisper"]
 POST_HEADERS = {"X-Bridge-Setup": "1", "Content-Type": "application/json"}
@@ -404,9 +404,23 @@ class RealMachineTest(unittest.TestCase):
                 mock.patch.object(setup_ui, "START_POLL_SECONDS", 0.01):
             ok, message, _ = self.machine.run("start-bridge")
         self.assertTrue(ok, message)
-        self.assertEqual(popen.call_args.args[0],
-                         ["cmd", "/c", "start", "Premiere Agent Bridge", str(doctor.START_SCRIPT)])
+        self.assertEqual(popen.call_args.args[0], f'cmd /d /s /c ""{doctor.START_SCRIPT}""')
+        self.assertTrue(popen.call_args.kwargs["executable"].lower().endswith("system32\\cmd.exe"))
         self.assertEqual(popen.call_args.kwargs["cwd"], str(doctor.REPO))
+
+    @unittest.skipUnless(os.name == "nt", "cmd is Windows only")
+    def test_start_command_keeps_a_path_with_cmd_characters_whole(self):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "R&D^x"  # no space: a list would leave it unquoted, and cmd would split it at &
+            folder.mkdir()
+            bat = folder / "probe.bat"
+            bat.write_text("@echo whole>\"%~dp0seen.txt\"\r\n", encoding="ascii")
+            exe, line = setup_ui.start_command(bat)
+            subprocess.run(line, executable=exe, cwd=tmp, timeout=30,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            self.assertEqual((folder / "seen.txt").read_text(encoding="ascii").strip(), "whole")
 
     @unittest.skipUnless(os.name == "nt", "start_bridge.bat is Windows only")
     def test_start_bridge_says_when_the_broker_does_not_answer(self):
@@ -425,7 +439,8 @@ class RealMachineTest(unittest.TestCase):
         self.assertTrue(ok, message)
         self.assertEqual(output, "Successfully installed websockets-15.0.1\n")
         cmd = run.call_args.args[0]
-        self.assertEqual(cmd[:4], [sys.executable, "-m", "pip", "install"])
+        flags = setup_ui.console.isolated_flags()  # -I under the installer's Python (QA-8)
+        self.assertEqual(cmd[:4 + len(flags)], [sys.executable, *flags, "-m", "pip", "install"])
         self.assertEqual(cmd[-2:], ["-r", str(doctor.REPO / "requirements.txt")])
         self.assertEqual(run.call_args.kwargs["cwd"], str(doctor.REPO))
         self.assertEqual(run.call_args.kwargs["timeout"], 900)

@@ -148,6 +148,57 @@ class PanelHashTest(unittest.TestCase):
         (d / "main.js").write_bytes(b"x")
         self.assertIsNone(panelhash.code_hash(d))
 
+    def plugin(self, age=10.0):
+        plugin = tmpdir()
+        (plugin / "lib").mkdir()
+        for name in ("index.html", "main.js", "manifest.json", "lib/a.js", "lib/b.js"):
+            (plugin / name).write_bytes(name.encode("utf-8"))
+            self.age(plugin / name, age)
+        return plugin
+
+    def age(self, path, seconds):
+        t = time.time() - seconds
+        os.utime(path, (t, t))
+
+    def test_the_cache_skips_unchanged_files_and_notices_a_change(self):
+        plugin, cache = self.plugin(), tmpdir() / "c" / "hash.json"
+        h = panelhash.code_hash(plugin, cache=cache)
+        self.assertEqual(h, panelhash.code_hash(plugin))
+        self.assertEqual(json.loads(cache.read_text(encoding="utf-8"))["hash"], h)
+        with mock.patch.object(Path, "read_bytes", side_effect=AssertionError("read the files")):
+            self.assertEqual(panelhash.code_hash(plugin, cache=cache), h)
+        (plugin / "lib" / "b.js").write_bytes(b"lib/b.jz")  # same size
+        self.age(plugin / "lib" / "b.js", 5.0)
+        changed = panelhash.code_hash(plugin, cache=cache)
+        self.assertEqual(changed, panelhash.code_hash(plugin))
+        self.assertNotEqual(changed, h)
+        (plugin / "lib" / "c.js").write_bytes(b"new")  # a new file: recomputed, not cached (written just now)
+        added = panelhash.code_hash(plugin, cache=cache)
+        self.assertEqual(added, panelhash.code_hash(plugin))
+        self.assertEqual(json.loads(cache.read_text(encoding="utf-8"))["hash"], changed)
+        for junk in (b"not json", b"[]", json.dumps({"hash": "zz"}).encode()):
+            cache.write_bytes(junk)
+            self.assertEqual(panelhash.code_hash(plugin, cache=cache), added)
+
+    def test_files_written_just_now_are_not_cached(self):
+        plugin, cache = self.plugin(age=0.0), tmpdir() / "hash.json"
+        self.assertTrue(panelhash.code_hash(plugin, cache=cache))
+        self.assertFalse(cache.exists())
+
+    def test_ping_caches_only_where_python_writes_bytecode(self):
+        plugin, cache = self.plugin(), tmpdir() / "pycache" / "panel-codehash.json"
+        rpc = stub_rpc({"ping": ping_reply(codeHash="00000000")})
+        with mock.patch.object(ops, "PLUGIN_DIR", plugin), mock.patch.object(ops, "CODE_HASH_CACHE", cache):
+            with mock.patch.object(ops.sys, "dont_write_bytecode", True):
+                ops.ping(rpc)
+            self.assertFalse(cache.exists())
+            with mock.patch.object(ops.sys, "dont_write_bytecode", False), \
+                    mock.patch.object(ops.sys, "pycache_prefix", None):
+                first, again = ops.ping(rpc), ops.ping(rpc)
+        self.assertTrue(cache.exists())
+        self.assertEqual(first["localCodeHash"], panelhash.code_hash(plugin))
+        self.assertEqual((again["localCodeHash"], again["stale"]), (first["localCodeHash"], True))
+
 
 class TranscribeClipTest(unittest.TestCase):
     START = {"started": True, "jobId": "j1", "itemName": "a.mp4", "binPath": "", "language": "en-US"}
@@ -676,6 +727,43 @@ class ProbeMediaTest(unittest.TestCase):
         self.assertEqual(framegrid.short_picture(info, 30.0), 9.5)
         self.assertIsNone(framegrid.short_picture(dict(info, videoDuration=9.99), 30.0))  # under 1.5 frames short
 
+    def test_cover_art_is_not_a_picture(self):
+        # every FLAC in the user's music folder carries an mjpeg attached picture: still an audio-only file
+        out = json.dumps({"streams": [{"codec_type": "audio", "codec_name": "flac", "disposition": {"attached_pic": 0}},
+                                      {"codec_type": "video", "codec_name": "mjpeg", "width": 600, "height": 600,
+                                       "avg_frame_rate": "0/0", "disposition": {"attached_pic": 1}}],
+                          "format": {"duration": "171.626304"}})
+        info = self.probe(subprocess.CompletedProcess(["ffprobe"], 0, stdout=out, stderr=""))
+        self.assertEqual(info, {"hasAudio": True, "coverArt": True, "audioCodecs": ["flac"], "duration": 171.626304})
+        self.assertTrue(media.audio_only(info))
+        self.assertTrue(media.wav_convertible(info))
+        self.assertFalse(media.wav_convertible({"hasAudio": True, "audioCodecs": ["aac"]}))  # an .m4a imports
+        self.assertFalse(media.wav_convertible({"videoCodec": "h264", "width": 1920, "hasAudio": True,
+                                                "audioCodecs": ["opus"]}))  # a picture: refused, not converted
+        self.assertFalse(media.audio_only({}))  # ffprobe could not tell
+
+    def test_a_rotated_clip_is_measured_as_shown(self):
+        # Sony vertical footage (5 Nov 2026): stored 3840x2160 with a 90-degree display matrix; Premiere shows 2160x3840
+        for side, tags, turn in (([{"side_data_type": "Display Matrix", "rotation": -90}], {}, 270),
+                                 ([], {"rotate": "90"}, 90), ([{"rotation": 90.0}], {}, 90)):
+            out = json.dumps({"streams": [{"codec_type": "video", "codec_name": "h264", "width": 3840, "height": 2160,
+                                           "avg_frame_rate": "60000/1001", "nb_frames": "300",
+                                           "side_data_list": side, "tags": tags}],
+                              "format": {"duration": "5.005"}})
+            info = self.probe(subprocess.CompletedProcess(["ffprobe"], 0, stdout=out, stderr=""))
+            self.assertEqual((info["width"], info["height"], info["rotation"], info["codedSize"]),
+                             (2160, 3840, turn, [3840, 2160]))
+            seq = {"width": 1080, "height": 1920}
+            self.assertEqual((media.fit_scale("fit", info, seq), media.fit_scale("fill", info, seq)), (50.0, 50.0))
+        upside = json.dumps({"streams": [{"codec_type": "video", "width": 1920, "height": 1080, "avg_frame_rate": "25/1",
+                                          "side_data_list": [{"rotation": 180}]}], "format": {"duration": "1"}})
+        info = self.probe(subprocess.CompletedProcess(["ffprobe"], 0, stdout=upside, stderr=""))
+        self.assertEqual((info["width"], info["height"], info["rotation"]), (1920, 1080, 180))
+        self.assertNotIn("codedSize", info)
+        plain = json.dumps({"streams": [{"codec_type": "video", "width": 1920, "height": 1080, "avg_frame_rate": "25/1",
+                                         "tags": {"rotate": "junk"}}], "format": {"duration": "1"}})
+        self.assertNotIn("rotation", self.probe(subprocess.CompletedProcess(["ffprobe"], 0, stdout=plain, stderr="")))
+
     def test_a_still_has_no_picture_length(self):
         out = json.dumps({"streams": [{"codec_type": "video", "codec_name": "png", "width": 1080, "height": 1920,
                                        "avg_frame_rate": "25/1", "nb_frames": "1", "duration": "0.040000"}],
@@ -713,6 +801,70 @@ class OtherOpsTest(unittest.TestCase):
         ops.import_media(rpc, path=[str(ok), str(yt)], force=True, probe_media=probes.get)
         self.assertEqual(len(dict(rpc.calls)["import_media"]["paths"]), 2)
 
+    FLAC = {"hasAudio": True, "coverArt": True, "audioCodecs": ["flac"], "duration": 171.626304}
+
+    def test_import_media_converts_flac_and_imports_the_wav(self):
+        # 6 Nov 2026: a FLAC got Premiere's modal "file format not supported" dialog and importFiles never settled
+        folder = tmpdir()
+        song, ok = folder / "Sheep May Safely Graze.flac", folder / "ok.mov"
+        song.write_bytes(b"x")
+        ok.write_bytes(b"x")
+        probes = {str(song.resolve()): self.FLAC, str(ok.resolve()): {"videoCodec": "prores", "width": 1080}}
+        made = []
+
+        def convert(path, info):
+            made.append(path)
+            wav = os.path.splitext(path)[0] + ".wav"
+            return {"from": path, "to": wav, "reused": False, "codecs": ["flac"],
+                    "command": media.wav_command_line(path, wav)}
+
+        rpc = stub_rpc({"import_media": lambda p: {"imported": True, "count": len(p["paths"]), "bin": None,
+                                                   "newItems": [Path(x).name for x in p["paths"]]}})
+        reply = ops.import_media(rpc, path=[str(ok), str(song)], bin="Music", probe_media=probes.get,
+                                 convert_audio=convert)
+        self.assertEqual(made, [str(song.resolve())])
+        sent = dict(rpc.calls)["import_media"]
+        self.assertEqual(sent["paths"], [str(ok.resolve()), str(folder.resolve() / "Sheep May Safely Graze.wav")])
+        self.assertEqual(reply["newItems"], ["ok.mov", "Sheep May Safely Graze.wav"])
+        self.assertEqual([(c["from"], c["reused"]) for c in reply["converted"]], [(str(song.resolve()), False)])
+
+        # --force sends the FLAC as it is, and converts nothing
+        made.clear()
+        ops.import_media(rpc, path=[str(song)], force=True, probe_media=probes.get, convert_audio=convert)
+        self.assertEqual((made, rpc.calls[-1][1]["paths"]), ([], [str(song.resolve())]))
+
+    def test_import_media_refuses_flac_it_cannot_convert(self):
+        folder = tmpdir()
+        song = folder / "song.flac"
+        song.write_bytes(b"x")
+        rpc = stub_rpc({"import_media": {"imported": True}})
+        failing = lambda path, info: {"from": path, "error": "ffmpeg is not on PATH (install ffmpeg)"}  # noqa: E731
+        with self.assertRaises(BridgeError) as cm:
+            ops.import_media(rpc, path=[str(song)], probe_media={str(song.resolve()): self.FLAC}.get,
+                             convert_audio=failing)
+        e = cm.exception
+        self.assertEqual((e.code, e.outcome), ("UNSUPPORTED", "not_committed"))
+        self.assertIn("flac", str(e))
+        cmd = e.data["files"][0]["transcode"]
+        self.assertIn("-af aresample=48000:resampler=soxr -c:a pcm_s24le", cmd)
+        self.assertTrue(cmd.endswith(f'"{folder.resolve() / "song.wav"}"'), cmd)
+        self.assertEqual(rpc.calls, [])
+
+    def test_a_picture_refusal_comes_before_any_conversion(self):
+        folder = tmpdir()
+        yt, song = folder / "yt.mp4", folder / "song.flac"
+        yt.write_bytes(b"x")
+        song.write_bytes(b"x")
+        probes = {str(yt.resolve()): {"videoCodec": "vp9", "width": 1920, "hasAudio": True, "audioCodecs": ["opus"]},
+                  str(song.resolve()): self.FLAC}
+        made = []
+        with self.assertRaises(BridgeError) as cm:
+            ops.import_media(stub_rpc({}), path=[str(song), str(yt)], probe_media=probes.get,
+                             convert_audio=lambda p, i: made.append(p) or {"from": p, "to": p + ".wav"})
+        self.assertEqual(cm.exception.code, "UNSUPPORTED")
+        self.assertEqual([f["path"] for f in cm.exception.data["files"]], [str(yt.resolve())])
+        self.assertEqual(made, [])  # nothing written for a call that is refused
+
     def test_remove_project_items_reads_back_and_never_takes_the_root(self):
         left = {"ping": ping_reply(), "remove_project_items": lambda p: {"dryRun": False, "items": [], "inUse": [],
                                                                          "removed": [], "remaining": ["PAB_TEST_06"]}}
@@ -730,6 +882,14 @@ class OtherOpsTest(unittest.TestCase):
         cmd = media.transcode_command("m/a.mp4", {"videoCodec": "h264", "audioCodecs": ["opus"]})
         self.assertIn("-c:v copy", cmd)
         self.assertEqual(media.unimportable({}), [])  # ffprobe could not tell: not refused
+
+    def test_flac_gets_a_wav_command(self):
+        info = {"hasAudio": True, "audioCodecs": ["flac"], "duration": 2.0}
+        self.assertEqual(media.unimportable(info), ["flac"])
+        cmd = media.transcode_command("m/song.flac", info)
+        src, out = os.path.abspath("m/song.flac"), os.path.abspath("m/song.wav")
+        self.assertEqual(cmd, f'ffmpeg -i "{src}" -vn -af aresample=48000:resampler=soxr -c:a pcm_s24le "{out}"')
+
 
     def test_marker_colours(self):
         rpc = stub_rpc({"add_marker": lambda p: {"added": True, **p}})
@@ -764,6 +924,62 @@ class OtherOpsTest(unittest.TestCase):
                 fn(rpc)
             self.assertEqual((cm.exception.code, cm.exception.outcome), ("SEQUENCE_MISMATCH", "not_committed"))
             self.assertEqual([a for a, _ in rpc.calls if a not in ("ping", "get_sequence")], [])
+
+
+@unittest.skipUnless(media.shutil.which("ffmpeg") and media.shutil.which("ffprobe"), "needs ffmpeg and ffprobe")
+class WavConversionTest(unittest.TestCase):
+    """media.convert_to_wav with the real ffmpeg: a FLAC with cover art becomes a 48 kHz 24-bit WAV beside it."""
+
+    def make_flac(self, folder: Path) -> Path:
+        run = lambda *a: subprocess.run(["ffmpeg", "-v", "error", "-y", *a], check=True, cwd=folder)  # noqa: E731
+        run("-f", "lavfi", "-i", "sine=f=440:d=0.5:sample_rate=44100", "-c:a", "flac", "a.flac")
+        run("-f", "lavfi", "-i", "color=c=red:s=16x16", "-frames:v", "1", "c.png")
+        run("-i", "a.flac", "-i", "c.png", "-map", "0:a", "-map", "1:v", "-c:a", "copy", "-c:v", "mjpeg",
+            "-disposition:v", "attached_pic", "song.flac")
+        return folder / "song.flac"
+
+    def stream(self, path):
+        out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+                              "stream=codec_name,sample_rate,channels", "-of", "json", str(path)],
+                             capture_output=True, text=True, check=True).stdout
+        return json.loads(out)["streams"][0]
+
+    def test_converts_then_reuses(self):
+        folder = tmpdir()
+        song = self.make_flac(folder)
+        info = media.probe_media(str(song))
+        self.assertTrue(media.wav_convertible(info), info)
+        done = media.convert_to_wav(song, info)
+        self.assertNotIn("error", done)
+        wav = folder / "song.wav"
+        self.assertEqual((done["to"], done["reused"]), (str(wav.resolve()), False))
+        self.assertEqual(self.stream(wav), {"codec_name": "pcm_s24le", "sample_rate": "48000", "channels": 1})
+        self.assertFalse((folder / "song.wav.part").exists())
+        again = media.convert_to_wav(song, info)
+        self.assertEqual((again["to"], again["reused"]), (str(wav.resolve()), True))
+
+    def test_another_wav_of_that_name_is_left_alone(self):
+        folder = tmpdir()
+        song = self.make_flac(folder)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=d=2", "song.wav"], check=True,
+                       cwd=folder)  # the user's own, longer WAV
+        before = (folder / "song.wav").read_bytes()
+        done = media.convert_to_wav(song, media.probe_media(str(song)))
+        self.assertEqual((done["to"], done["reused"]), (str((folder / "song (48k).wav").resolve()), False))
+        self.assertEqual((folder / "song.wav").read_bytes(), before)
+
+    def test_a_failed_conversion_leaves_nothing(self):
+        folder = tmpdir()
+        song = self.make_flac(folder)
+
+        def broken(cmd, **kw):
+            Path(cmd[-1]).write_bytes(b"half a file")
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="Conversion failed!\n")
+
+        done = media.convert_to_wav(song, media.probe_media(str(song)), run=broken)
+        self.assertEqual(done["error"], "Conversion failed!")
+        self.assertIn("pcm_s24le", done["command"])
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ["a.flac", "c.png", "song.flac"])
 
 
 class MarkersAndRestorePointsTest(unittest.TestCase):
@@ -1096,6 +1312,11 @@ class AgainstTheFakeTest(unittest.TestCase):
         out = tmpdir()
         one = ops.export_frame(self.rpc, dir=out, at=1.5)
         self.assertEqual((one["pixelWidth"], one["pixelHeight"]), (108, 192))
+        try:
+            import PIL  # noqa: F401
+        except ImportError:  # Pillow is optional (the installer's Python has none): no black-frame check then
+            self.assertNotIn("black", one)
+            return
         self.assertFalse(one["black"])
         self.assertNotIn("warning", one)
         self.assertGreaterEqual(one["exportSeconds"], 0)
@@ -1856,6 +2077,264 @@ class ExportJobTest(unittest.TestCase):
         self.assertIn("forgets its jobs", cm.exception.data["note"])
 
 
+class ExportAafTest(unittest.TestCase):
+    """export_aaf: a job polled every 2 s (a fake sleep here) with no time limit; the file must be new and not empty;
+    a job that waits with no new bytes is most likely held by Premiere's modal "AAF export log" (27.1 b21), so the
+    reply - and a stall's error - says to click OK there."""
+
+    def setUp(self):
+        self.out = tmpdir() / "aaf" / "cut.aaf"
+        self.sleeps = []
+
+    def view(self, state="running", **kw):
+        return dict({"jobId": "export-1", "kind": "aaf", "state": state, "outputPath": str(self.out), "preset": None,
+                     "sequence": "Seq", "error": None, "startedAt": int(time.time() * 1000) - 1000,
+                     "elapsedSeconds": 12.5, "options": {"set": [], "values": {}}}, **kw)
+
+    def panel(self, steps, files=(), start_state="running", start_bytes=None, ping=None, start=None):
+        """export_aaf starts export-1 (writing start_bytes first, when given); the n-th export_status poll writes
+        files[n] bytes (None: leaves the file), then answers steps[n] (a view, or a BridgeError to raise); the last
+        step repeats."""
+        polls = {"n": 0}
+
+        def started(p):
+            if start_bytes is not None:
+                self.out.write_bytes(b"\0" * start_bytes)
+            return {"exported": start_state == "done", "outputPath": p["outputPath"], "jobId": "export-1",
+                    "started": True, "state": start_state, "optionsSet": [k for k in p if k != "outputPath"],
+                    "optionValues": {}}
+
+        def status(p):
+            n = polls["n"]
+            polls["n"] += 1
+            if n < len(files) and files[n] is not None:
+                self.out.write_bytes(b"\0" * files[n])
+            step = steps[min(n, len(steps) - 1)]
+            if isinstance(step, BridgeError):
+                raise step
+            return {"jobs": [step]}
+
+        return stub_rpc({"ping": ping or ping_reply(), "get_sequence": dict(SEQ, durationSeconds=60.0),
+                         "export_aaf": start or started, "export_status": status})
+
+    def export(self, rpc, **kw):
+        return ops.export_aaf(rpc, **dict({"output": str(self.out), "sleep": self.sleeps.append}, **kw))
+
+    def failure(self, rpc, code, outcome, **kw):
+        with self.assertRaises(BridgeError) as cm:
+            self.export(rpc, **kw)
+        self.assertEqual((cm.exception.code, cm.exception.outcome), (code, outcome), cm.exception)
+        return cm.exception
+
+    def test_polled_until_done_then_the_file_is_checked(self):
+        rpc = self.panel([self.view(), self.view(), self.view("done")], files=[None, None, 2048])
+        data = self.export(rpc)
+        self.assertEqual((data["exported"], data["verified"], data["bytes"], data["polls"], data["jobId"]),
+                         (True, True, 2048, 3, "export-1"))
+        self.assertEqual((data["exportSeconds"], data["mode"], data["output"]), (12.5, "job", str(self.out)))
+        self.assertEqual(self.sleeps, [2.0] * 3)
+        self.assertEqual([a for a, _ in rpc.calls], ["ping", "get_sequence", "export_aaf"] + ["export_status"] * 3)
+        self.assertEqual(dict(rpc.calls)["export_aaf"], {"outputPath": str(self.out)})  # no option: none sent
+        self.assertNotIn("hint", data)  # 4 s without bytes is no sign of the log yet
+
+    def test_only_the_options_given_are_sent(self):
+        rpc = self.panel([self.view("done")], start_state="done", start_bytes=100)
+        data = self.export(rpc, embed_audio=False, audio_format="aiff", sample_rate=48000, bits_per_sample=24,
+                           handle_frames=12, trim_sources=True)
+        self.assertEqual(dict(rpc.calls)["export_aaf"], {"outputPath": str(self.out), "embedAudio": False,
+                                                         "audioFormat": "aiff", "sampleRate": 48000,
+                                                         "bitsPerSample": 24, "handleFrames": 12, "trimSources": True})
+        self.assertEqual((data["polls"], self.sleeps), (0, []))
+        self.assertEqual(data["optionsSet"], ["embedAudio", "audioFormat", "sampleRate", "bitsPerSample",
+                                              "handleFrames", "trimSources"])
+
+    def test_waiting_without_new_bytes_suspects_the_modal_log(self):
+        """Running for over 10 s with no new bytes: the done reply says the log was probably up (ask what it listed)."""
+        rpc = self.panel([self.view()] * 7 + [self.view("done")], files=[None] * 7 + [4096])
+        data = self.export(rpc)
+        self.assertEqual((data["exported"], data["dialogSuspected"], data["polls"]), (True, True, 8))
+        self.assertIn("AAF export log", data["hint"])
+
+    def test_a_stall_says_click_ok(self):
+        """No state change and no new bytes for --stall-seconds: EXPORT_STALLED (unknown) with the click-OK hint."""
+        e = self.failure(self.panel([self.view()]), "EXPORT_STALLED", "unknown", stall_seconds=20)
+        self.assertEqual((e.data["jobId"], e.data["idleSeconds"], e.data["bytes"]), ("export-1", 20.0, None))
+        self.assertIn("click OK", e.data["hint"])
+        self.assertIn("AAF export log", str(e))
+        self.assertIn("export_aaf --job export-1", str(e))
+        self.assertEqual(len(self.sleeps), 10)
+
+    def test_a_growing_file_keeps_it_alive(self):
+        rpc = self.panel([self.view()] * 14 + [self.view("done")], files=[100 * (n + 1) for n in range(15)])
+        data = self.export(rpc, stall_seconds=6)
+        self.assertEqual((data["exported"], data["polls"], data["bytes"]), (True, 15, 1500))
+        self.assertNotIn("dialogSuspected", data)
+
+    def test_failed_and_missing_files(self):
+        failed = self.view("failed", error="exportAAF returned false")
+        e = self.failure(self.panel([self.view(), failed]), "EXPORT_FAILED", "not_committed")
+        self.assertIn("exportAAF returned false", str(e))
+        e = self.failure(self.panel([self.view("done")], start_state="done"), "EXPORT_FAILED", "not_committed")
+        self.assertIn("was not written", str(e))
+        e = self.failure(self.panel([self.view("done")], start_state="done", start_bytes=0), "EXPORT_FAILED",
+                         "not_committed")
+        self.assertIn("is empty", str(e))
+        self.out.write_bytes(b"old export")
+        old = time.time() - 3600
+        os.utime(self.out, (old, old))
+        e = self.failure(self.panel([self.view("done")], start_state="done"), "EXPORT_FAILED", "not_committed",
+                         overwrite=True)
+        self.assertIn("older than the export", str(e))
+
+    def test_refusals_send_nothing(self):
+        def refused(code, **kw):
+            rpc = stub_rpc({})
+            with self.assertRaises(BridgeError) as cm:
+                ops.export_aaf(rpc, **kw)
+            self.assertEqual((cm.exception.code, cm.exception.outcome, rpc.calls), (code, "not_committed", []))
+            return str(cm.exception)
+        self.assertIn("UNC", refused("BAD_PARAMS", output=r"\\nas\share\cut.aaf"))
+        self.assertIn(".aaf", refused("BAD_PARAMS", output=str(self.out.with_suffix(".mp4"))))
+        self.assertIn("stream", refused("BAD_PARAMS", output=str(self.out) + ":x"))
+        self.assertIn("wav or aiff", refused("BAD_PARAMS", output=str(self.out), audio_format="mp3"))
+        self.assertIn("--output", refused("BAD_PARAMS"))
+        self.assertIn("--job", refused("BAD_PARAMS", job="export-1", embed_audio=True))
+        folder = tmpdir() / "x.aaf"
+        folder.mkdir()
+        self.assertIn("folder", refused("BAD_PARAMS", output=str(folder)))
+        self.out.parent.mkdir(parents=True, exist_ok=True)
+        self.out.write_bytes(b"x")
+        self.assertIn("--overwrite", refused("CONFIRM_REQUIRED", output=str(self.out)))
+        os.chmod(self.out, stat.S_IREAD)
+        self.addCleanup(os.chmod, self.out, stat.S_IREAD | stat.S_IWRITE)
+        self.assertIn("read-only", refused("BAD_PARAMS", output=str(self.out), overwrite=True))
+
+    def test_an_older_panel_and_a_dry_run(self):
+        old = stub_rpc({"ping": ping_reply(actions=[a for a in spec.action_names() if a != "export_aaf"])})
+        with self.assertRaises(BridgeError) as cm:
+            ops.export_aaf(old, output=str(self.out))
+        self.assertEqual((cm.exception.code, cm.exception.data["missing"]), ("PANEL_OUTDATED", ["export_aaf"]))
+        rpc = self.panel([self.view()])
+        data = self.export(rpc, dry_run=True, handle_frames=5)
+        self.assertEqual((data["dryRun"], data["options"], data["sequence"]["name"]), (True, {"handleFrames": 5}, "Seq"))
+        self.assertEqual([a for a, _ in rpc.calls], ["ping", "get_sequence"])
+        self.assertFalse(self.out.parent.exists())
+
+    def test_detach_then_job(self):
+        rpc = self.panel([self.view(), self.view(hint="Premiere may be showing ..."), self.view("done")],
+                         files=[None, None, 512])
+        first = self.export(rpc, detach=True)
+        self.assertEqual((first["detached"], first["jobId"], first["state"]), (True, "export-1", "running"))
+        self.assertIn("export_aaf --job export-1", first["hint"])
+        look = ops.export_aaf(rpc, job="export-1", detach=True)
+        self.assertEqual((look["detached"], look["state"], look["resumed"]), (True, "running", True))
+        self.assertNotIn("hint", look)
+        look = ops.export_aaf(rpc, job="export-1", detach=True)
+        self.assertIn("click OK", look["hint"])  # the panel's view carried a hint
+        data = ops.export_aaf(rpc, job="export-1", sleep=self.sleeps.append)
+        self.assertEqual((data["exported"], data["resumed"], data["bytes"]), (True, True, 512))
+        self.assertEqual(self.sleeps, [])  # the job had ended by the time --job looked
+        with self.assertRaises(BridgeError) as cm:
+            ops.export_aaf(rpc, job="export-1", output=str(tmpdir() / "other.aaf"))
+        self.assertEqual(cm.exception.code, "BAD_PARAMS")
+
+    def test_job_kinds_do_not_mix(self):
+        render = dict(self.view(), kind="render", preset="/fake/h264.epr")
+        rpc = stub_rpc({"ping": ping_reply(features=["exportJobs"]), "export_status": {"jobs": [render]}})
+        with self.assertRaises(BridgeError) as cm:
+            ops.export_aaf(rpc, job="export-1")
+        self.assertEqual(cm.exception.code, "BAD_PARAMS")
+        self.assertIn("export_video --job export-1", str(cm.exception))
+        rpc = stub_rpc({"ping": ping_reply(features=["exportJobs"]), "export_status": {"jobs": [self.view()]}})
+        with self.assertRaises(BridgeError) as cm:
+            ops.export_video(rpc, job="export-1")
+        self.assertEqual(cm.exception.code, "BAD_PARAMS")
+        self.assertIn("export_aaf --job export-1", str(cm.exception))
+
+    def test_a_start_that_times_out_or_a_lost_job(self):
+        def timeout(p):
+            raise BridgeError("export_aaf: Panel did not answer within 120s", "PANEL_TIMEOUT", "unknown")
+        e = self.failure(self.panel([self.view()], start=timeout), "PANEL_TIMEOUT", "unknown")
+        self.assertEqual(e.data["output"], str(self.out))
+        self.assertIn("click OK", e.data["hint"])
+        gone = BridgeError("export_status: No export job export-1 in this panel (none)", "NOT_FOUND", "not_committed")
+        e = self.failure(self.panel([self.view(), gone]), "EXPORT_LOST", "unknown")
+        self.assertIn("click OK", e.data["hint"])
+        busy = BridgeError("export_status: busy", "BRIDGE_BUSY", "not_committed")
+        data = self.export(self.panel([busy, self.view("done")], files=[None, 64]))
+        self.assertEqual((data["missedPolls"], data["polls"]), (1, 1))
+
+    def test_cli_flags(self):
+        import contextlib
+        import io
+        calls = []
+        rpc = stub_rpc({"ping": ping_reply(), "get_sequence": SEQ,
+                        "export_aaf": lambda p: (self.out.write_bytes(b"AAF"),
+                                                 {"exported": True, "outputPath": p["outputPath"], "jobId": "export-1",
+                                                  "started": True, "state": "done", "optionsSet": [],
+                                                  "optionValues": {}})[1]}, calls)
+        self.out.parent.mkdir(parents=True, exist_ok=True)
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            code = cli.main(["export_aaf", "--output", str(self.out), "--no-embed-audio", "--audio-format", "wav",
+                             "--handle-frames", "8", "--mixdown-video"], rpc=rpc)
+        self.assertEqual(code, 0, printed.getvalue())
+        self.assertEqual(dict(calls)["export_aaf"], {"outputPath": str(self.out), "embedAudio": False,
+                                                     "audioFormat": "wav", "handleFrames": 8, "mixdownVideo": True})
+        self.assertTrue(json.loads(printed.getvalue())["data"]["verified"])
+
+
+class ExportXmlTest(unittest.TestCase):
+    """export_xml: synchronous, then the file must be new, start with <?xml and hold <xmeml>."""
+
+    def setUp(self):
+        self.out = tmpdir() / "xml" / "cut.xml"
+
+    def rpc(self, body):
+        def export(p):
+            if body is not None:
+                Path(p["outputPath"]).write_bytes(body)
+            return {"exported": True, "outputPath": p["outputPath"]}
+        return stub_rpc({"ping": ping_reply(), "export_xml": export})
+
+    def test_checked_document(self):
+        body = b'\xef\xbb\xbf<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n<xmeml version="5">\n</xmeml>\n'
+        rpc = self.rpc(body)
+        data = ops.export_xml(rpc, output=str(self.out))
+        self.assertEqual((data["verified"], data["xmemlVersion"], data["bytes"], data["output"]),
+                         (True, "5", len(body), str(self.out)))
+        self.assertEqual([a for a, _ in rpc.calls], ["ping", "export_xml"])
+        self.assertEqual(dict(rpc.calls)["export_xml"], {"outputPath": str(self.out)})
+
+    def test_not_fcp_xml_or_no_file(self):
+        for body, text in ((b"hello", "does not start with <?xml"),
+                           (b'<?xml version="1.0"?>\n<fcpxml version="1.10"></fcpxml>', "no <xmeml> element"),
+                           (None, "no new, non-empty file"), (b"", "no new, non-empty file")):
+            with self.subTest(body=body):
+                if self.out.exists():
+                    self.out.unlink()
+                with self.assertRaises(BridgeError) as cm:
+                    ops.export_xml(self.rpc(body), output=str(self.out))
+                self.assertEqual((cm.exception.code, cm.exception.outcome), ("EXPORT_FAILED", "not_committed"))
+                self.assertIn(text, str(cm.exception))
+
+    def test_refusals_send_nothing(self):
+        for kw, code in (({"output": str(self.out.with_suffix(".otio"))}, "BAD_PARAMS"),
+                         ({"output": "//host/share/cut.xml"}, "BAD_PARAMS")):
+            rpc = stub_rpc({})
+            with self.assertRaises(BridgeError) as cm:
+                ops.export_xml(rpc, **kw)
+            self.assertEqual((cm.exception.code, rpc.calls), (code, []))
+        self.out.parent.mkdir(parents=True, exist_ok=True)
+        self.out.write_bytes(b"old")
+        rpc = stub_rpc({})
+        with self.assertRaises(BridgeError) as cm:
+            ops.export_xml(rpc, output=str(self.out))
+        self.assertEqual((cm.exception.code, rpc.calls), ("CONFIRM_REQUIRED", []))
+        data = ops.export_xml(self.rpc(b'<?xml version="1.0"?><xmeml version="4"/>'), output=str(self.out),
+                              overwrite=True)
+        self.assertTrue(data["verified"])
+
+
 class AudioEffectOpsTest(unittest.TestCase):
     def test_against_the_fake(self):
         """降噪 is added by its display name and read back; Premiere arms its params (animation on, no keyframes), the
@@ -1930,6 +2409,57 @@ class SelectItemsTest(unittest.TestCase):
         with self.assertRaises(BridgeError) as cm:
             ops.select_items(old, track="A1", at=5.0)
         self.assertEqual(cm.exception.code, "PANEL_OUTDATED")
+
+
+class SetActiveSequenceTest(unittest.TestCase):
+    """set_active_sequence is confirmed with get_project: live on 27.1 the second of two quick switches replied
+    "switched" while Premiere stayed on the other sequence (the fake's sequenceSwitchLag)."""
+
+    def setUp(self):
+        self.rpc, self.fake, self.calls = fake_rpc()
+        self.fake.STATE["otherSequences"].append({"name": "02 Police", "guid": "g-2", "props": {}})
+        self.sleeps = []
+
+    def switch(self, **kw):
+        return ops.set_active_sequence(self.rpc, sleep=self.sleeps.append, **kw)
+
+    def test_away_and_back(self):
+        away = self.switch(name="02 Police")
+        self.assertEqual((away["switched"], away["activeSequence"], away["confirmed"], away["confirmReads"]),
+                         (True, "02 Police", True, 1))
+        self.assertEqual(self.rpc("list_items", {"kinds": ["video"]})["video"][0]["items"], [])  # its own timeline
+        back = self.switch(guid="fake-sequence-guid")
+        self.assertEqual((back["activeSequence"], back["previous"], back["confirmed"]), ("Sequence 01", "02 Police", True))
+        self.assertEqual(len(self.rpc("list_items", {"kinds": ["video"]})["video"][0]["items"]), 1)
+        same = self.switch(name="Sequence 01")
+        self.assertEqual((same["switched"], same["confirmed"]), (False, True))
+        self.assertEqual([a for a, _ in self.calls].count("get_project"), 3)
+        self.assertEqual(self.sleeps, [])
+
+    def test_a_switch_that_lands_late_is_waited_for(self):
+        self.fake.STATE["sequenceSwitchLag"] = 2
+        out = self.switch(name="02 Police")
+        self.assertEqual((out["confirmed"], out["confirmReads"]), (True, 3))
+        self.assertEqual(self.sleeps, list(ops.SWITCH_CONFIRM_DELAYS[:2]))
+        self.assertEqual(self.rpc("get_sequence")["name"], "02 Police")
+
+    def test_a_switch_that_never_lands_is_verify_failed(self):
+        self.fake.STATE["sequenceSwitchLag"] = True
+        with self.assertRaises(BridgeError) as cm:
+            self.switch(name="02 Police")
+        e = cm.exception
+        self.assertEqual((e.code, e.outcome), ("VERIFY_FAILED", "committed"))
+        self.assertEqual((e.data["activeSequence"], e.data["reply"]["activeSequence"]), ("Sequence 01", "02 Police"))
+        self.assertEqual(len(e.data["reads"]), len(ops.SWITCH_CONFIRM_DELAYS) + 1)
+        self.assertAlmostEqual(sum(self.sleeps), 2.0)
+        self.assertIn("get_project", e.hint)
+        self.assertEqual(self.rpc("get_sequence")["name"], "Sequence 01")  # the next request sees the old one
+
+    def test_unknown_sequence(self):
+        with self.assertRaises(BridgeError) as cm:
+            self.switch(name="03 Nope")
+        self.assertEqual((cm.exception.code, cm.exception.data["sequences"]), ("NOT_FOUND", ["Sequence 01", "02 Police"]))
+        self.assertNotIn("get_project", [a for a, _ in self.calls])
 
 
 class CliRunTest(unittest.TestCase):
