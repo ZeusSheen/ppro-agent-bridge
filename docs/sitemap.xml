@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>https://zeussheen.github.io/ppro-agent-bridge/</loc>
-    <lastmod>2026-10-23</lastmod>
-  </url>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url><loc>https://zeussheen.github.io/ppro-agent-bridge/</loc><xhtml:link rel="alternate" hreflang="en" href="https://zeussheen.github.io/ppro-agent-bridge/"/><xhtml:link rel="alternate" hreflang="zh-Hans" href="https://zeussheen.github.io/ppro-agent-bridge/zh/"/></url>
+  <url><loc>https://zeussheen.github.io/ppro-agent-bridge/zh/</loc><xhtml:link rel="alternate" hreflang="en" href="https://zeussheen.github.io/ppro-agent-bridge/"/><xhtml:link rel="alternate" hreflang="zh-Hans" href="https://zeussheen.github.io/ppro-agent-bridge/zh/"/></url>
+  <url><loc>https://zeussheen.github.io/ppro-agent-bridge/changelog.html</loc><xhtml:link rel="alternate" hreflang="en" href="https://zeussheen.github.io/ppro-agent-bridge/changelog.html"/><xhtml:link rel="alternate" hreflang="zh-Hans" href="https://zeussheen.github.io/ppro-agent-bridge/zh/changelog.html"/></url>
+  <url><loc>https://zeussheen.github.io/ppro-agent-bridge/zh/changelog.html</loc><xhtml:link rel="alternate" hreflang="en" href="https://zeussheen.github.io/ppro-agent-bridge/changelog.html"/><xhtml:link rel="alternate" hreflang="zh-Hans" href="https://zeussheen.github.io/ppro-agent-bridge/zh/changelog.html"/></url>
+  <url><loc>https://zeussheen.github.io/ppro-agent-bridge/docs.html</loc><xhtml:link rel="alternate" hreflang="en" href="https://zeussheen.github.io/ppro-agent-bridge/docs.html"/><xhtml:link rel="alternate" hreflang="zh-Hans" href="https://zeussheen.github.io/ppro-agent-bridge/zh/docs.html"/></url>
+  <url><loc>https://zeussheen.github.io/ppro-agent-bridge/zh/docs.html</loc><xhtml:link rel="alternate" hreflang="en" href="https://zeussheen.github.io/ppro-agent-bridge/docs.html"/><xhtml:link rel="alternate" hreflang="zh-Hans" href="https://zeussheen.github.io/ppro-agent-bridge/zh/docs.html"/></url>
 </urlset>

@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>更新记录：Premiere Pro Agent Bridge</title>
+<meta name="description" content="Premiere Pro Agent Bridge 每个版本的变化，用大白话写：新增了什么、优化了什么、修复了什么。">
+<link rel="canonical" href="https://zeussheen.github.io/ppro-agent-bridge/zh/changelog.html">
+<link rel="alternate" hreflang="en" href="https://zeussheen.github.io/ppro-agent-bridge/changelog.html">
+<link rel="alternate" hreflang="zh-Hans" href="https://zeussheen.github.io/ppro-agent-bridge/zh/changelog.html">
+<link rel="alternate" hreflang="x-default" href="https://zeussheen.github.io/ppro-agent-bridge/changelog.html">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<meta property="og:type" content="article">
+<meta property="og:title" content="更新记录：Premiere Pro Agent Bridge">
+<meta property="og:description" content="Premiere Pro Agent Bridge 每个版本的变化，用大白话写：新增了什么、优化了什么、修复了什么。">
+<meta property="og:url" content="https://zeussheen.github.io/ppro-agent-bridge/zh/changelog.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://zeussheen.github.io/ppro-agent-bridge/og-image.png?v=0.7.0">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' width='256' height='256'%3E%3Cdefs%3E%3ClinearGradient id='rim' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23fff' stop-opacity='0.55'/%3E%3Cstop offset='0.5' stop-color='%23fff' stop-opacity='0.12'/%3E%3Cstop offset='1' stop-color='%23fff' stop-opacity='0.26'/%3E%3C/linearGradient%3E%3CclipPath id='tile'%3E%3Crect width='256' height='256' rx='56'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect width='256' height='256' rx='56' fill='%2314143F'/%3E%3Cg clip-path='url(%23tile)'%3E%3Cpath d='M0 96L64 96L64 160L176 160L176 208L0 208Z' fill='%239999FF'/%3E%3Cpath d='M80 96L256 96L256 208L192 208L192 144L80 144Z' fill='%23C2C2FF'/%3E%3C/g%3E%3Cpath d='M96 32H160V64L136 88V224H120V88L96 64Z' fill='%23FF7A1A'/%3E%3Crect width='256' height='256' rx='56' fill='none' stroke='url(%23rim)' stroke-width='2'%0A        vector-effect='non-scaling-stroke' clip-path='url(%23tile)'/%3E%3C/svg%3E">
+<link rel="icon" href="../favicon.ico" sizes="16x16 24x24 32x32 48x48 64x64 128x128 256x256">
+<script>
+/* The language switch is a plain link. With JavaScript it also remembers the choice, and a later visit to a page in
+   the other language goes straight to this one (a ?lang= in the address skips that). */
+(function () {
+  var KEY = 'ppro-bridge.lang';
+  try {
+    var want = localStorage.getItem(KEY);
+    if (want && want !== 'zh' && !/[?&]lang=/.test(location.search)) { location.replace('../changelog.html' + location.hash); return; }
+  } catch (e) {}
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[data-lang]');
+    if (a) { try { localStorage.setItem(KEY, a.getAttribute('data-lang')); } catch (err) {} }
+  });
+})();
+</script>
+<style>
+/* Shared by every page (build_page.py inlines it): the colours, type, top bar, footer and the Chinese type rules. */
+:root {
+  color-scheme: dark;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --page: #000000;
+  --el: #0d0d0d;
+  --well: #030303;
+  --sh-d: rgba(0, 0, 0, 0.95);
+  --sh-l: rgba(255, 255, 255, 0.055);
+  --hairline: rgba(255, 255, 255, 0.08);
+  --edge: rgba(255, 255, 255, 0.07);
+  --text: #ffffff;
+  --muted: #a3a3a3;
+  --accent: #ffffff;
+  --accent-btn: #ffffff;
+  --accent-hover: #e4e4e4;
+  --accent-text: #e5e5e5;
+  --ok: #ffffff;
+  /* on pure black the light half of a soft shadow turns into a grey smear around every card, so surfaces
+     get only a hairline of light along the top edge (raised) or a tight dark inner shadow (sunken) */
+  --raise: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --raise-sm: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --inset: inset 0 1px 3px rgba(0, 0, 0, 0.9);
+  --inset-sm: inset 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+/* Chinese pages: a CJK stack after the Latin faces (Latin letters keep their look, Chinese falls through to a
+   Chinese face), roomier lines, no tracking (tracking spreads Chinese characters apart), no slanted cite (Chinese
+   titles carry 《》 instead), and punctuation kept off the start of a line. */
+html:lang(zh) {
+  --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB",
+    "Noto Sans SC", "Source Han Sans SC", system-ui, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong",
+    "Microsoft YaHei UI", "Microsoft YaHei", serif;
+}
+html:lang(zh) body { line-height: 1.75; line-break: strict; }
+html:lang(zh) body * { letter-spacing: 0 !important; }
+html:lang(zh) cite, html:lang(zh) em, html:lang(zh) i { font-style: normal; }
+html:lang(zh) :is(h1, h2, h3) { text-wrap: balance; }
+html:lang(zh) p { text-wrap: pretty; }  /* no single character left alone on the last line */
+*, *::before, *::after { box-sizing: border-box; }
+html { background: var(--page); scroll-behavior: smooth; }
+body {
+  margin: 0; font-family: var(--font); font-size: 18px; line-height: 1.6;
+  color: var(--text); background: var(--page); -webkit-font-smoothing: antialiased; overflow-x: hidden;
+}
+h1, h2, h3, p, ol, ul, figure { margin: 0; }
+a { color: inherit; }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; border-radius: 12px; }
+.ic { display: inline-flex; width: 1.15em; height: 1.15em; flex: none; }
+.ic svg { width: 100%; height: 100%; display: block; }
+.nw { white-space: nowrap; }  /* a name that must not break across lines, e.g. Premiere Pro in a Chinese heading */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.wrap { position: relative; z-index: 1; width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+
+/* top bar: the bridge on the left; the sections, GitHub and the language switch on the right */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 0; }
+.brand { display: flex; align-items: center; gap: 12px; text-decoration: none; font-weight: 650; font-size: 17px; }
+.mark { display: block; width: 42px; height: 42px; flex: none; }
+.mark svg { display: block; width: 42px; height: 42px; }  /* the bridge icon: its own tile and glass rim */
+.links { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.links a {
+  text-decoration: none; color: var(--muted); font-size: 16px; padding: 8px 14px; border-radius: 12px;
+  transition: color 160ms var(--ease);
+}
+.links a[aria-current="page"] { color: var(--text); }
+.links a.gh { display: inline-flex; align-items: center; gap: 8px; color: var(--text); box-shadow: var(--raise-sm); }
+/* the language switch: a plain link to the same page in the other language, a hairline round it */
+.links a.lang { color: var(--text); border: 1px solid var(--hairline); padding: 7px 13px; }
+/* glass rim: a thin edge of light, brightest at the top-left corner and fading round the sides */
+.links a.gh {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--el), var(--el)) padding-box,
+    linear-gradient(155deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.09) 26%, rgba(255, 255, 255, 0.03) 60%, rgba(255, 255, 255, 0.15)) border-box;
+}
+@media (hover: hover) and (pointer: fine) {
+  .links a:hover { color: var(--text); }
+  .links a.lang:hover { border-color: rgba(255, 255, 255, 0.24); }
+}
+
+code {
+  font-family: var(--mono); font-size: 0.92em; color: var(--text); padding: 2px 8px; border-radius: 8px;
+  background: var(--well); box-shadow: var(--inset-sm); white-space: nowrap;
+}
+
+/* footer */
+footer.site { margin: 110px 0 0; padding: 30px 0 40px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 15px; display: grid; gap: 6px; text-align: center; }
+footer.site a { color: var(--text); }
+footer.site .more { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px; margin-bottom: 10px; font-size: 16px; }
+
+/* the bar keeps one line: the home page's section links give way first, then Get started, then Docs and What's new
+   (the footer lists those on every page); GitHub and the language switch always stay */
+.brand { flex: none; white-space: nowrap; }
+@media (max-width: 1100px) { .links a.n1 { display: none; } }
+@media (max-width: 900px) { .links a.n2 { display: none; } }
+@media (max-width: 780px) { .links a.n3 { display: none; } }
+@media (max-width: 640px) {
+  body { font-size: 17px; }
+  .top { padding: 16px 0; }
+  .brand { font-size: 16px; }
+}
+@media (max-width: 420px) {
+  .brand .name { display: none; }  /* the icon alone; the page title says the name */
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
+/* The changelog and docs pages (build_page.py inlines it after base.css): one reading column, hairlines between
+   entries, nothing that moves. Everything is in the HTML; the docs script only adds the search box and the
+   copy-link buttons. */
+[hidden] { display: none !important; }
+.page { width: min(780px, 100%); margin: 0 auto; }
+.page-head { padding: 36px 0 8px; text-align: center; }
+.page-head h1 { font-family: var(--serif); font-weight: 400; font-size: clamp(40px, 5.6vw, 60px); line-height: 1.08; letter-spacing: -0.01em; }
+.page-head .lead { max-width: 34em; margin: 18px auto 0; color: var(--muted); font-size: clamp(18px, 2vw, 20px); }
+.page-head .lead a { color: var(--text); }
+.page a { text-underline-offset: 3px; }
+
+/* ---------- changelog ---------- */
+.versions { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 4px; margin: 26px 0 0; padding: 0; list-style: none; }
+.versions a {
+  display: inline-block; padding: 6px 12px; border-radius: 10px; font-size: 16px; color: var(--muted); text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+.release { padding: 40px 0 36px; border-top: 1px solid var(--hairline); scroll-margin-top: 16px; }
+.versions + .release, .page-head + .release { margin-top: 40px; }
+.release-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+.release h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(32px, 4vw, 40px); line-height: 1.1; font-variant-numeric: lining-nums; }
+.release h2 a { text-decoration: none; }
+.release .when { color: var(--muted); font-size: 16px; }
+.tag { display: inline-block; padding: 2px 12px; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 999px; font-size: 16px; color: var(--text); }
+.release .note { margin-top: 12px; color: var(--muted); font-size: 17px; }
+.group { margin-top: 26px; }
+.group h3 { display: flex; align-items: center; gap: 12px; font-size: 17px; font-weight: 650; }
+.group h3::before { content: ""; width: 20px; height: 1px; background: rgba(255, 255, 255, 0.45); }
+.group ul { display: grid; gap: 10px; margin-top: 12px; padding: 0; list-style: none; }
+.group li { position: relative; padding-left: 32px; color: var(--accent-text); font-size: 17.5px; line-height: 1.6; }
+.group li::before { content: ""; position: absolute; left: 7px; top: 0.72em; width: 5px; height: 5px; border-radius: 50%; background: var(--muted); }
+.changelog-end { margin-top: 8px; padding-top: 30px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 16.5px; text-align: center; }
+.changelog-end a { color: var(--text); }
+
+/* ---------- docs ---------- */
+.search { margin: 32px 0 0; }
+.search input {
+  width: 100%; min-height: 56px; padding: 12px 18px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.16);
+  font: inherit; font-size: 18px; color: var(--text); background: var(--well); box-shadow: var(--inset-sm);
+  -webkit-appearance: none; appearance: none;
+}
+.search input::placeholder { color: #8f8f8f; }
+.search input:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: 14px; }
+.search-count { min-height: 1.6em; margin-top: 10px; color: var(--muted); font-size: 16px; }
+.toc { margin: 24px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--hairline); }
+.toc li { border-bottom: 1px solid var(--hairline); }
+.toc a { display: block; padding: 16px 4px; text-decoration: none; }
+.toc .t { display: block; font-size: 18px; font-weight: 600; }
+.toc .s { display: block; margin-top: 2px; color: var(--muted); font-size: 16px; }
+.doc { padding: 64px 0 8px; scroll-margin-top: 16px; }
+.doc h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(30px, 3.8vw, 40px); line-height: 1.15; }
+.doc .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 12px; color: var(--muted); font-size: 16px; }
+.doc .meta a, .copy-link {
+  display: inline-flex; align-items: center; min-height: 36px; padding: 4px 12px; border-radius: 10px;
+  border: 1px solid var(--hairline); background: none; font: inherit; font-size: 16px; color: var(--muted);
+  text-decoration: none; cursor: pointer;
+}
+.copy-link.done { color: var(--text); border-color: rgba(255, 255, 255, 0.3); }
+.doc .summary { margin-top: 18px; color: var(--accent-text); font-size: 19px; line-height: 1.6; }
+.doc h3 { margin-top: 36px; font-size: 20px; font-weight: 650; scroll-margin-top: 16px; }
+.doc ol { display: grid; gap: 18px; margin-top: 18px; padding: 0; list-style: none; counter-reset: step; }
+.doc ol > li { position: relative; padding-left: 52px; color: var(--accent-text); font-size: 17.5px; line-height: 1.65; counter-increment: step; }
+.doc ol > li::before {
+  content: counter(step); position: absolute; left: 0; top: -2px; display: grid; place-items: center; width: 34px; height: 34px;
+  border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.24); font-size: 16px; font-weight: 650; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.doc ol > li > * + * { margin-top: 10px; }
+.doc b { color: var(--text); font-weight: 650; }
+.doc code { white-space: normal; overflow-wrap: anywhere; font-size: 0.88em; }
+.doc samp {
+  display: block; padding: 12px 16px; border-left: 2px solid rgba(255, 255, 255, 0.4); border-radius: 0 8px 8px 0;
+  background: var(--well); font-family: var(--mono); font-size: 16px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere;
+}
+.doc .notes { display: grid; gap: 10px; margin-top: 20px; color: var(--muted); font-size: 17px; }
+.doc .notes a, .doc ol a { color: var(--text); }
+.empty { padding: 28px 0; color: var(--muted); font-size: 17px; }
+.docs-end { margin-top: 64px; padding-top: 30px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 16.5px; text-align: center; }
+.docs-end a { color: var(--text); }
+
+@media (hover: hover) and (pointer: fine) {
+  .versions a:hover, .doc .meta a:hover, .copy-link:hover { color: var(--text); }
+  .toc a:hover .t { text-decoration: underline; text-underline-offset: 4px; }
+}
+@media (max-width: 640px) {
+  .page-head { padding-top: 20px; }
+  .doc ol > li { padding-left: 46px; }
+  .group li { padding-left: 26px; }
+}
+</style>
+</head>
+<body class="changelog-page">
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="./">
+      <span class="mark" aria-hidden="true"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><defs><linearGradient id="rim-56" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.55"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.12"/><stop offset="1" stop-color="#fff" stop-opacity="0.26"/></linearGradient><clipPath id="tile-56"><rect width="256" height="256" rx="56"/></clipPath></defs><rect width="256" height="256" rx="56" fill="#14143F"/><g clip-path="url(#tile-56)"><path d="M0 96L64 96L64 160L176 160L176 208L0 208Z" fill="#9999FF"/><path d="M80 96L256 96L256 208L192 208L192 144L80 144Z" fill="#C2C2FF"/></g><path d="M96 32H160V64L136 88V224H120V88L96 64Z" fill="#FF7A1A"/><rect width="256" height="256" rx="56" fill="none" stroke="url(#rim-56)" stroke-width="2"
+        vector-effect="non-scaling-stroke" clip-path="url(#tile-56)"/></svg></span>
+      <span class="name">Premiere Pro Agent Bridge</span>
+    </a>
+    <nav class="links" aria-label="页面导航">
+      <a class="n1" href="./#how">工作原理</a>
+      <a class="n1" href="./#what">能做什么</a>
+      <a class="n2" href="./#start">开始使用</a>
+      <a class="n1" href="./#faq">常见问题</a>
+      <a class="n3" href="docs.html">使用文档</a>
+      <a class="n3" href="changelog.html" aria-current="page">更新记录</a>
+      <a class="gh" href="https://github.com/ZeusSheen/ppro-agent-bridge"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="32" d="M12 4c1.67 0 2.61 0.4 3 0.5c0.53 -0.43 1.94 -1.5 3.5 -1.5c0.34 1 0.29 2.22 0 3c0.75 1 1 2 1 3.5c0 2.19 -0.48 3.58 -1.5 4.5c-1.02 0.92 -2.11 1.37 -3.5 1.5c0.65 0.54 0.5 1.87 0.5 2.5c0 0.73 0 3 0 3M12 4c-1.67 0 -2.61 0.4 -3 0.5c-0.53 -0.43 -1.94 -1.5 -3.5 -1.5c-0.34 1 -0.29 2.22 0 3c-0.75 1 -1 2 -1 3.5c0 2.19 0.48 3.58 1.5 4.5c1.02 0.92 2.11 1.37 3.5 1.5c-0.65 0.54 -0.5 1.87 -0.5 2.5c0 0.73 0 3 0 3"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="32;0"/></path><path stroke-dasharray="10" stroke-dashoffset="10" d="M9 19c-1.41 0 -2.84 -0.56 -3.69 -1.19c-0.84 -0.63 -1.09 -1.66 -2.31 -2.31"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg></span>GitHub</a>
+      <a class="lang" href="../changelog.html" hreflang="en" lang="en" data-lang="en">English</a>
+    </nav>
+  </header>
+  <main class="page">
+    <div class="page-head">
+      <h1>更新记录</h1>
+      <p class="lead">每个版本用大白话写，最新的在最上面。完整的技术版更新日志在 <a href="https://github.com/ZeusSheen/ppro-agent-bridge#changelog">GitHub 上的 README</a> 里。</p>
+    </div>
+    <nav aria-label="版本"><ul class="versions"><li><a href="#v0-7-0">0.7.0</a></li><li><a href="#v0-6-0">0.6.0</a></li><li><a href="#v0-5-1">0.5.1</a></li><li><a href="#v0-5-0">0.5.0</a></li><li><a href="#v0-4-0">0.4.0</a></li><li><a href="#v0-3-3">0.3.3</a></li><li><a href="#v0-3-2">0.3.2</a></li><li><a href="#v0-2">0.2</a></li></ul></nav>
+    <article class="release" id="v0-7-0" aria-labelledby="v0-7-0-h">
+      <div class="release-head"><h2 id="v0-7-0-h"><a href="#v0-7-0">0.7.0</a></h2><time class="when" datetime="2026-11-08">2026 年 11 月 8 日</time></div>
+      <section class="group">
+        <h3>新增</h3>
+        <ul>
+          <li>新增安装程序：<code>PremiereAgentBridge-Setup-0.7.0.exe</code> 会把桥连同它自己的 Python 装好，放上开始菜单快捷方式，也能在 Windows 设置里卸载，不需要管理员权限。它还没有代码签名，Windows 可能提示「Windows 已保护你的电脑」：点「更多信息」，再点「仍要运行」。zip 版照常可用。</li>
+          <li>AI 助手现在除了命令行，也可以通过 MCP（AI 应用连接工具的通用方式）来操作 Premiere。凡是会删除或移动片段的操作，都会先给你看会改什么，确认以后才真的改。</li>
+          <li>一次做完一组小改动：标记、片段名字、启用或停用片段、某个参数的数值、序列的入点和出点、轨道和素材箱的名字。它们在 Premiere 的撤销记录里只占一步，做完逐项核对。</li>
+          <li>有新版本时，面板会告诉你，也可以跳过这一版。桥每天最多去 GitHub 查一次，不发送任何关于你的电脑或工程的信息；这个检查可以关掉。</li>
+          <li>面板上加了「复制问题报告」框（点一下框里，再按 Ctrl+C）和 GitHub Issues 链接。报告里只有版本号和检查结果，绝不包含配对令牌、工程名字或素材路径；复制之前你能看到全文。</li>
+          <li>AI 助手可以把时间线导出给别的剪辑软件用：AAF，或者 Final Cut Pro 7 XML。导出 AAF 时 Premiere 可能弹出一个日志窗口，要点「确定」；这期间桥照常工作，也会提醒你去点。</li>
+          <li>AI 助手也能打出同一份问题报告，方便贴到 GitHub Issue 里。</li>
+          <li>B-roll 可以只放画面，声音不会落到音频轨上；AI 助手也能把序列复制一份并命名，用来做另一个版本。</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>优化</h3>
+        <ul>
+          <li>更安全：发布前，一组 AI agent 在测试电脑上专门攻击这座桥，找到的每个漏洞都修好了（完整报告是下载包里的 SECURITY_REVIEW.md）。桥、面板和你的 AI 助手现在会互相证明自己知道配对密钥，但从不把密钥发出去，别的程序没法冒充它们。网络共享文件夹即使通过链接绕过来也会被拒绝；UXP Developer Tool 只在加载面板的那几秒钟运行。</li>
+          <li>桥和面板要一起更新：0.7 的桥不再连接 0.6 的面板。用快捷方式启动桥时，它会自己加载新面板。</li>
+          <li>命令启动快了大约一倍：一次简单检查从半秒左右降到四分之一秒左右。</li>
+          <li>切换到另一个序列以后会先核对确实切过去了，再接着做，不会在没切成功时改错序列。</li>
+          <li>删除片段前，AI 助手可以让桥按名字核对，你中途挪到那条轨上的片段不会被误删。音频效果也能一次加到一段范围内的所有片段上。</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>修复</h3>
+        <ul>
+          <li>移动片段（合上空隙、腾出位置、剪掉一段）时，视频转场会留在原来的时间。现在转场会被放回到它们的片段上，事后再核对；Premiere 放不回原样的，AI 助手会告诉你是哪一个、怎么手动加。</li>
+          <li>索尼和手机拍的竖屏素材（存成横的、带旋转标记），现在能按 Premiere 显示的样子正确适配、填满画面。</li>
+          <li>Premiere 读不了的 FLAC、Opus、Vorbis 音乐，会先转成 WAV 放在原文件旁边，再导入这个 WAV。以前导入 FLAC 可能把面板卡住。</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-6-0" aria-labelledby="v0-6-0-h">
+      <div class="release-head"><h2 id="v0-6-0-h"><a href="#v0-6-0">0.6.0</a></h2><time class="when" datetime="2026-11-03">2026 年 11 月 3 日</time></div>
+      <section class="group">
+        <h3>新增</h3>
+        <ul>
+          <li>有了自己的图标：深紫色方块，加一根橙色播放头。快捷方式、安装窗口和面板上都是它。</li>
+          <li>面板更好懂了。桥在运行时图标是全彩的，没运行时变淡。第一次打开会显示两步：在放这次工作的文件夹里打开 Claude Code 或 Codex，再粘贴一段写好的开场白。中文版 Premiere 里，面板说中文。</li>
+          <li>桥没在运行时，面板上会出现<b>「启动桥」</b>按钮。</li>
+          <li>还原点：做有风险的修改之前，AI 助手可以先复制一份序列（名字带“[restore 日期 时间]”），并保存项目。</li>
+          <li>能把东西再拿掉了：标记、转场、效果、关键帧，以及项目里已经没有序列在用的素材。</li>
+          <li>把某个时间点之后所有轨道上的内容一起挪动，各轨保持同步，一步就能撤销。</li>
+          <li>在 Premiere 里用它自带的预设导出成片，再核对画面大小、帧率和时长。</li>
+          <li>按名字添加音频效果（比如“降噪”），也能套用 Premiere 的效果预设，比如画中画移动。</li>
+          <li>子剪辑；以及确认新文件对得上之后，把素材重新链接到新文件。</li>
+          <li>帮你在时间线上选中片段，好让你在 Premiere 自己的面板里一次给很多片段打开“增强音频”。</li>
+          <li>关键帧可以设成缓入缓出，做出平滑的移动，比如慢慢推近。</li>
+          <li>安装时也会在开始菜单里放一个快捷方式。</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>优化</h3>
+        <ul>
+          <li>按一段时间改音量或大小时，只改完全在这段时间里的片段；只是挨着边的邻居不动。</li>
+          <li>给标题加的效果会放在文字前面，这样才真正起作用。</li>
+          <li>每个改动都能先预演；有问题时一处都不改就停下；Premiere 允许的地方都是一步撤销；改完还会读回来核对。</li>
+          <li>安全：AI 助手可以要求，如果时间线在它上次读取之后被改过，就拒绝这次修改。一分钟超过 300 次修改会被拦下，防止脚本失控。</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>修复</h3>
+        <ul>
+          <li>在 Premiere 27.1 上，用 0.4.0 到 0.5.1 剪出来的片段可能在时间线上看着正常，播放时却没声音或没画面。已修复。旧的时间线可以让 AI 助手渲染一遍来检查。</li>
+          <li>Premiere 导入不了的 YouTube 下载（VP9、AV1、Opus 格式）以前会让面板卡住。现在会先拦下来，并给出转换用的命令。</li>
+          <li>画面比声音先结束的素材，不会再少放几帧。</li>
+          <li>安全：端口被别的程序占着时，桥不会启动，并说出是哪个程序。网络共享路径会被拒绝，这样 Windows 不会把你的登录凭据交给别的电脑；NAS 上的素材请映射成一个盘符再用。</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-5-1" aria-labelledby="v0-5-1-h">
+      <div class="release-head"><h2 id="v0-5-1-h"><a href="#v0-5-1">0.5.1</a></h2><time class="when" datetime="2026-10-23">2026 年 10 月 23 日</time></div>
+      <p class="note">一次小更新，其他都没变。</p>
+      <section class="group">
+        <h3>优化</h3>
+        <ul>
+          <li>安装窗口换成了和网站一样的样子：纯黑底、白色主按钮，去掉了模糊的背景和灰色光晕。绿、黄、红三色依旧表示“就绪”“可选”“需要设置”，并且总配有图标和文字。</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-5-0" aria-labelledby="v0-5-0-h">
+      <div class="release-head"><h2 id="v0-5-0-h"><a href="#v0-5-0">0.5.0</a></h2><time class="when" datetime="2026-10-22">2026 年 10 月 22 日</time></div>
+      <p class="note">也包含了没有单独发布的 0.4.0 和 0.3.3。请把整个桥文件夹一起更新：旧的命令行连不上这个版本的桥。</p>
+      <section class="group">
+        <h3>新增</h3>
+        <ul>
+          <li>用窗口安装：双击 <code>setup_bridge.bat</code>，它会一步步检查你的电脑，缺什么点按钮就能补上。</li>
+          <li>双击一下就启动：<code>start_bridge.bat</code> 会启动桥，并自动把面板加载进 Premiere，Premiere 重启后也一样。不用再到 UXP Developer Tool 里点 Load。</li>
+          <li>配对：只有能读到你 Windows 用户文件夹里那把密钥的程序，才能控制桥。每个请求都会记进日志，日志保留 30 天。</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>优化</h3>
+        <ul>
+          <li>替换片段（比如换成另一种语言的版本）时，邻居片段的淡出会留在原处；有效果带不过去时，一处都不改就停下。</li>
+          <li>在已经有转场的剪辑点再加转场时，会直接说明，而不是悄悄保留旧的。</li>
+          <li>放宽剪辑点时，如果淡入淡出的关键帧会让新露出的部分没声音或看不见，会先提醒。</li>
+          <li>导出的画面如果全黑会被标出来，AI 助手会先请你看一眼再处理。</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>修复</h3>
+        <ul>
+          <li>没有自己媒体文件的片段（比如“增强语音”生成的结果）以前在回听检查里被当成静音。现在会说明原因，改用 Premiere 自己渲染的声音来听。</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-4-0" aria-labelledby="v0-4-0-h">
+      <div class="release-head"><h2 id="v0-4-0-h"><a href="#v0-4-0">0.4.0</a></h2><time class="when" datetime="2026-10-18">2026 年 10 月 18 日</time></div>
+      <p class="note">没有单独发布，随 0.5.0 一起提供。</p>
+      <section class="group">
+        <h3>新增</h3>
+        <ul>
+          <li>回听检查：AI 助手会听每一处剪辑：停顿留得够不够、字有没有被剪掉、环境声有没有突变、有没有爆音；还会检查时间线上的碎片、空隙和没对齐帧的剪辑点。</li>
+          <li>不用剃刀也能剪：拆分片段；把一段时间从所有轨道上剪掉，并同步合上空隙；或者用片段本身多出来的素材把剪辑点放宽。你调过的音量、大小和效果都保留。</li>
+          <li>可以调用 Premiere 自带的语音转文字（Premiere 26.5 或更新）。</li>
+          <li>按分贝调片段音量，设置效果参数和关键帧，添加转场。</li>
+          <li>预先渲染好的字幕视频会被修整，剪辑点处不会闪出半句或被切掉。</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>优化</h3>
+        <ul>
+          <li>面板在执行之前会先检查每个请求；每次失败都会说明有没有改动过什么。</li>
+          <li>剪辑点准确落在帧上。</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>修复</h3>
+        <ul>
+          <li>转录稿挂到片段上之后，会读回来核对。有些 Premiere 26 版本会导入一份空的转录稿，现在会报出来，而不是当作成功。</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-3-3" aria-labelledby="v0-3-3-h">
+      <div class="release-head"><h2 id="v0-3-3-h"><a href="#v0-3-3">0.3.3</a></h2><time class="when" datetime="2026-10-17">2026 年 10 月 17 日</time></div>
+      <p class="note">一次安全更新。没有单独发布，随 0.5.0 一起提供。</p>
+      <section class="group">
+        <h3>优化</h3>
+        <ul>
+          <li>一次只做一件事：桥把请求一个接一个交给 Premiere，因为同时做好几件可能让 Premiere 崩溃。</li>
+          <li>每次失败都会说明有没有改动过什么，这样就知道能不能放心重试。</li>
+          <li>防止改错序列，也防止把两个同名的素材弄混。</li>
+          <li>替换片段时，新片段的声音会放到空闲的音轨上，而不是盖在你的音乐上。</li>
+          <li>需要 Premiere Pro 26.3 或更新版本。</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>修复</h3>
+        <ul>
+          <li>片段有时会少放一帧。</li>
+          <li>安全：任何网页都连不上桥了，包括你自己电脑上的网页。</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-3-2" aria-labelledby="v0-3-2-h">
+      <div class="release-head"><h2 id="v0-3-2-h"><a href="#v0-3-2">0.3.2</a></h2><time class="when" datetime="2026-10-17">2026 年 10 月 17 日</time></div>
+      <p class="note">包含 0.3.0 和 0.3.1。</p>
+      <section class="group">
+        <h3>新增</h3>
+        <ul>
+          <li>剪辑计划：按一份清单一次放好空镜和图形，先预演，放完每个片段都会核对。</li>
+          <li>AI 助手能看到剪辑师对每个片段做过什么（位置、大小、不透明度、效果、关键帧），换素材时把这些都保留下来。</li>
+          <li>缩放到适配或铺满、修改素材的帧率解释、时间线标记，以及删掉一段时间里的片段。</li>
+          <li>联系表：把几帧画面拼在一张图里看。</li>
+          <li>版本检查：面板版本对不上时会提示。</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>修复</h3>
+        <ul>
+          <li>Premiere 27.1 上导入素材的问题。</li>
+          <li>59.94 帧和 60 帧素材、素材结尾、转场长度造成的差一帧问题。</li>
+          <li>安全：浏览器里打开的网页，不能再在桥运行时连上它。</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-2" aria-labelledby="v0-2-h">
+      <div class="release-head"><h2 id="v0-2-h"><a href="#v0-2">0.2</a></h2><time class="when" datetime="2026-07-14">2026 年 7 月 14 日</time></div>
+      <section class="group">
+        <h3>新增</h3>
+        <ul>
+          <li>用 Whisper 在你自己的电脑上转录。</li>
+          <li>带时间码的句子列表，按说的内容决定怎么剪。</li>
+          <li>按句子剪：只把片段里说某一句的那部分放上时间线。</li>
+          <li>把转录稿挂到 Premiere 里的片段上。</li>
+          <li>除了 Claude Code，也能配合 Codex 使用。</li>
+        </ul>
+      </section>
+    </article>
+    <p class="changelog-end">想要旧版本？<a href="https://github.com/ZeusSheen/ppro-agent-bridge/releases">所有版本都在 GitHub 上</a>。</p>
+  </main>
+  <footer class="site">
+    <nav class="more" aria-label="更多"><a href="./">首页</a> <a href="docs.html">使用文档</a> <a href="changelog.html">更新记录</a> <a href="../changelog.html" hreflang="en" lang="en" data-lang="en">English</a> <a href="https://github.com/ZeusSheen/ppro-agent-bridge">GitHub</a></nav>
+    <p>Premiere Pro Agent Bridge 免费开源（MIT 许可证）。<a href="https://github.com/ZeusSheen/ppro-agent-bridge">GitHub 上的源代码</a>。</p>
+    <p>本项目并非由 Adobe、Anthropic 或 OpenAI 制作，也未获其认可。Premiere Pro 是 Adobe 的商标。</p>
+    <p>图标：Material Line Icons，作者 Vjacheslav Trushkin（MIT）。文字排版：<a href="https://github.com/chenglou/pretext">Pretext</a>，作者 Cheng Lou（MIT）。</p>
+    <p>动画：<a href="https://gsap.com">GSAP</a>（按 GreenSock 标准许可免费使用）。</p>
+  </footer>
+</div>
+
+</body>
+</html>

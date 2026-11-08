@@ -1,0 +1,1259 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Premiere Pro Agent Bridge：让 AI 在 Premiere Pro 里帮你剪片</title>
+<meta name="description" content="一个免费、开源的工具，让 Claude Code、Codex 这样的 AI 助手在 Adobe Premiere Pro 里帮你剪视频。它按说话内容剪辑、加空镜，并检查每一处剪辑。适用于 Windows。">
+<link rel="canonical" href="https://zeussheen.github.io/ppro-agent-bridge/zh/">
+<link rel="alternate" hreflang="en" href="https://zeussheen.github.io/ppro-agent-bridge/">
+<link rel="alternate" hreflang="zh-Hans" href="https://zeussheen.github.io/ppro-agent-bridge/zh/">
+<link rel="alternate" hreflang="x-default" href="https://zeussheen.github.io/ppro-agent-bridge/">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<meta name="google-site-verification" content="KbTk2aY6AsoDSUZLnQb9U4_D2hhTkhuV-vbnmOCa-sc" />
+<meta property="og:type" content="website">
+<meta property="og:title" content="Premiere Pro Agent Bridge：让 AI 在 Premiere Pro 里帮你剪片">
+<meta property="og:description" content="免费开源。你告诉 AI 助手想要什么，它就在 Premiere Pro 里帮你剪。">
+<meta property="og:url" content="https://zeussheen.github.io/ppro-agent-bridge/zh/">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://zeussheen.github.io/ppro-agent-bridge/og-image.png?v=0.7.0">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' width='256' height='256'%3E%3Cdefs%3E%3ClinearGradient id='rim' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23fff' stop-opacity='0.55'/%3E%3Cstop offset='0.5' stop-color='%23fff' stop-opacity='0.12'/%3E%3Cstop offset='1' stop-color='%23fff' stop-opacity='0.26'/%3E%3C/linearGradient%3E%3CclipPath id='tile'%3E%3Crect width='256' height='256' rx='56'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect width='256' height='256' rx='56' fill='%2314143F'/%3E%3Cg clip-path='url(%23tile)'%3E%3Cpath d='M0 96L64 96L64 160L176 160L176 208L0 208Z' fill='%239999FF'/%3E%3Cpath d='M80 96L256 96L256 208L192 208L192 144L80 144Z' fill='%23C2C2FF'/%3E%3C/g%3E%3Cpath d='M96 32H160V64L136 88V224H120V88L96 64Z' fill='%23FF7A1A'/%3E%3Crect width='256' height='256' rx='56' fill='none' stroke='url(%23rim)' stroke-width='2'%0A        vector-effect='non-scaling-stroke' clip-path='url(%23tile)'/%3E%3C/svg%3E">
+<link rel="icon" href="../favicon.ico" sizes="16x16 24x24 32x32 48x48 64x64 128x128 256x256">
+<script>
+/* The language switch is a plain link. With JavaScript it also remembers the choice, and a later visit to a page in
+   the other language goes straight to this one (a ?lang= in the address skips that). */
+(function () {
+  var KEY = 'ppro-bridge.lang';
+  try {
+    var want = localStorage.getItem(KEY);
+    if (want && want !== 'zh' && !/[?&]lang=/.test(location.search)) { location.replace('../' + location.hash); return; }
+  } catch (e) {}
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[data-lang]');
+    if (a) { try { localStorage.setItem(KEY, a.getAttribute('data-lang')); } catch (err) {} }
+  });
+})();
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Premiere Pro Agent Bridge",
+  "description": "一个免费、开源的工具，让 Claude Code、Codex 这样的 AI 助手在 Adobe Premiere Pro 里剪视频。",
+  "inLanguage": "zh-Hans",
+  "applicationCategory": "MultimediaApplication",
+  "operatingSystem": "Windows",
+  "softwareVersion": "0.7.0",
+  "license": "https://opensource.org/licenses/MIT",
+  "url": "https://zeussheen.github.io/ppro-agent-bridge/zh/",
+  "downloadUrl": "https://github.com/ZeusSheen/ppro-agent-bridge/releases/download/v0.7.0/ppro-agent-bridge-v0.7.0.zip",
+  "codeRepository": "https://github.com/ZeusSheen/ppro-agent-bridge",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+<style>
+/* Shared by every page (build_page.py inlines it): the colours, type, top bar, footer and the Chinese type rules. */
+:root {
+  color-scheme: dark;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --page: #000000;
+  --el: #0d0d0d;
+  --well: #030303;
+  --sh-d: rgba(0, 0, 0, 0.95);
+  --sh-l: rgba(255, 255, 255, 0.055);
+  --hairline: rgba(255, 255, 255, 0.08);
+  --edge: rgba(255, 255, 255, 0.07);
+  --text: #ffffff;
+  --muted: #a3a3a3;
+  --accent: #ffffff;
+  --accent-btn: #ffffff;
+  --accent-hover: #e4e4e4;
+  --accent-text: #e5e5e5;
+  --ok: #ffffff;
+  /* on pure black the light half of a soft shadow turns into a grey smear around every card, so surfaces
+     get only a hairline of light along the top edge (raised) or a tight dark inner shadow (sunken) */
+  --raise: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --raise-sm: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --inset: inset 0 1px 3px rgba(0, 0, 0, 0.9);
+  --inset-sm: inset 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+/* Chinese pages: a CJK stack after the Latin faces (Latin letters keep their look, Chinese falls through to a
+   Chinese face), roomier lines, no tracking (tracking spreads Chinese characters apart), no slanted cite (Chinese
+   titles carry 《》 instead), and punctuation kept off the start of a line. */
+html:lang(zh) {
+  --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB",
+    "Noto Sans SC", "Source Han Sans SC", system-ui, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong",
+    "Microsoft YaHei UI", "Microsoft YaHei", serif;
+}
+html:lang(zh) body { line-height: 1.75; line-break: strict; }
+html:lang(zh) body * { letter-spacing: 0 !important; }
+html:lang(zh) cite, html:lang(zh) em, html:lang(zh) i { font-style: normal; }
+html:lang(zh) :is(h1, h2, h3) { text-wrap: balance; }
+html:lang(zh) p { text-wrap: pretty; }  /* no single character left alone on the last line */
+*, *::before, *::after { box-sizing: border-box; }
+html { background: var(--page); scroll-behavior: smooth; }
+body {
+  margin: 0; font-family: var(--font); font-size: 18px; line-height: 1.6;
+  color: var(--text); background: var(--page); -webkit-font-smoothing: antialiased; overflow-x: hidden;
+}
+h1, h2, h3, p, ol, ul, figure { margin: 0; }
+a { color: inherit; }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; border-radius: 12px; }
+.ic { display: inline-flex; width: 1.15em; height: 1.15em; flex: none; }
+.ic svg { width: 100%; height: 100%; display: block; }
+.nw { white-space: nowrap; }  /* a name that must not break across lines, e.g. Premiere Pro in a Chinese heading */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.wrap { position: relative; z-index: 1; width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+
+/* top bar: the bridge on the left; the sections, GitHub and the language switch on the right */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 0; }
+.brand { display: flex; align-items: center; gap: 12px; text-decoration: none; font-weight: 650; font-size: 17px; }
+.mark { display: block; width: 42px; height: 42px; flex: none; }
+.mark svg { display: block; width: 42px; height: 42px; }  /* the bridge icon: its own tile and glass rim */
+.links { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.links a {
+  text-decoration: none; color: var(--muted); font-size: 16px; padding: 8px 14px; border-radius: 12px;
+  transition: color 160ms var(--ease);
+}
+.links a[aria-current="page"] { color: var(--text); }
+.links a.gh { display: inline-flex; align-items: center; gap: 8px; color: var(--text); box-shadow: var(--raise-sm); }
+/* the language switch: a plain link to the same page in the other language, a hairline round it */
+.links a.lang { color: var(--text); border: 1px solid var(--hairline); padding: 7px 13px; }
+/* glass rim: a thin edge of light, brightest at the top-left corner and fading round the sides */
+.links a.gh {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--el), var(--el)) padding-box,
+    linear-gradient(155deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.09) 26%, rgba(255, 255, 255, 0.03) 60%, rgba(255, 255, 255, 0.15)) border-box;
+}
+@media (hover: hover) and (pointer: fine) {
+  .links a:hover { color: var(--text); }
+  .links a.lang:hover { border-color: rgba(255, 255, 255, 0.24); }
+}
+
+code {
+  font-family: var(--mono); font-size: 0.92em; color: var(--text); padding: 2px 8px; border-radius: 8px;
+  background: var(--well); box-shadow: var(--inset-sm); white-space: nowrap;
+}
+
+/* footer */
+footer.site { margin: 110px 0 0; padding: 30px 0 40px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 15px; display: grid; gap: 6px; text-align: center; }
+footer.site a { color: var(--text); }
+footer.site .more { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px; margin-bottom: 10px; font-size: 16px; }
+
+/* the bar keeps one line: the home page's section links give way first, then Get started, then Docs and What's new
+   (the footer lists those on every page); GitHub and the language switch always stay */
+.brand { flex: none; white-space: nowrap; }
+@media (max-width: 1100px) { .links a.n1 { display: none; } }
+@media (max-width: 900px) { .links a.n2 { display: none; } }
+@media (max-width: 780px) { .links a.n3 { display: none; } }
+@media (max-width: 640px) {
+  body { font-size: 17px; }
+  .top { padding: 16px 0; }
+  .brand { font-size: 16px; }
+}
+@media (max-width: 420px) {
+  .brand .name { display: none; }  /* the icon alone; the page title says the name */
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
+
+/* buttons: four light layers - top light and bottom shade inside, a tight contact shadow and a faint glow outside */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 56px; padding: 10px 26px;
+  border-radius: 28px; font-weight: 650; font-size: 17px; text-decoration: none; color: var(--text);
+  border: 1px solid var(--edge); background-color: var(--el);
+  background-image: linear-gradient(180deg, #1b1b1b, #0c0c0c);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 0 rgba(0, 0, 0, 0.7),
+    0 1px 2px rgba(0, 0, 0, 0.9), 0 8px 22px -6px rgba(255, 255, 255, 0.06);
+  transition: transform 160ms var(--ease), box-shadow 160ms var(--ease), border-color 160ms var(--ease);
+}
+.btn:active {
+  transform: scale(0.97);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.75), inset 0 -1px 0 rgba(255, 255, 255, 0.06), 0 0 0 rgba(0, 0, 0, 0);
+}
+.btn.primary {
+  color: #000; border-color: transparent; background-color: var(--accent-btn);
+  background-image: linear-gradient(180deg, #ffffff, #e6e6e6);
+  box-shadow: inset 0 1px 0 #ffffff, inset 0 -2px 0 rgba(0, 0, 0, 0.14),
+    0 1px 2px rgba(0, 0, 0, 0.8), 0 10px 26px -8px rgba(255, 255, 255, 0.18);
+}
+.btn.primary:active {
+  background-image: linear-gradient(180deg, #e2e2e2, #f2f2f2);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.22), 0 0 0 rgba(0, 0, 0, 0);
+}
+@media (hover: hover) and (pointer: fine) {
+  .btn.primary:hover { background-image: linear-gradient(180deg, #ffffff, #dedede); }
+  .btn:not(.primary):hover { border-color: rgba(255, 255, 255, 0.16); background-image: linear-gradient(180deg, #212121, #101010); }
+}
+/* a button group: the pressed button grows and its corners tighten */
+.cta { display: flex; gap: 8px; justify-content: center; max-width: 680px; margin: 34px auto 0; }
+.cta .btn {
+  flex: 1; white-space: nowrap;
+  transition: flex-grow 350ms var(--ease), border-radius 350ms var(--ease), box-shadow 160ms var(--ease), border-color 160ms var(--ease);
+}
+.cta .btn:active { flex-grow: 1.5; border-radius: 12px; transform: none; }
+
+/* floating stars: a few spans drift up from a GitHub star button or link, each with its own x, tilt and duration */
+.gh-star { position: relative; }
+.float-note {
+  position: absolute; left: 50%; top: 50%; margin: -0.5em 0 0 -0.5em; pointer-events: none;
+  color: var(--text); font-size: var(--s, 16px); line-height: 1;
+  animation: float var(--d, 1.2s) var(--ease) forwards;
+}
+@keyframes float {
+  0% { opacity: 0; transform: translate(0, 0) rotate(0deg); }
+  15% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--x), -150px) rotate(var(--r)); }
+}
+
+/* the living mark: the bridge in the middle of quiet rings, two small dots going round */
+.orbit { position: relative; width: 168px; height: 168px; margin: 0 auto; }
+.ring { position: absolute; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.08); }
+.ring.r1 { inset: 0; }
+.ring.r2 { inset: 26px; border-color: rgba(255, 255, 255, 0.11); }
+.spin { position: absolute; border-radius: 50%; animation: orbit 22s linear infinite; }
+.spin.s1 { inset: 0; }
+.spin.s2 { inset: 26px; animation-duration: 14s; animation-direction: reverse; }
+.sat { position: absolute; top: -4px; left: 50%; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; background: #fff; }
+.s2 .sat { top: -3px; width: 6px; height: 6px; margin-left: -3px; background: rgba(255, 255, 255, 0.55); }
+.core {
+  position: absolute; inset: 52px; display: grid; place-items: center; border-radius: 50%; color: #fff;
+  background: var(--el); border: 1px solid var(--edge); box-shadow: var(--raise-sm);
+}
+.core svg { width: 32px; height: 32px; }
+/* in the rings the icon is a disc: its square glass rim would show as flat caps at the top and bottom,
+   so it is hidden and the same diagonal rim is drawn round the circle instead */
+.core.brand-core { background: none; border: 0; box-shadow: none; overflow: hidden; }
+.core.brand-core svg { width: 64px; height: 64px; }
+.core.brand-core svg > rect:last-of-type { display: none; }
+.core.brand-core::after {
+  content: ""; position: absolute; inset: 0; border-radius: 50%; padding: 1px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0.26));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+}
+@keyframes orbit { to { transform: rotate(360deg); } }
+
+/* hero: one serif sentence, one line, one button */
+.hero { padding: 40px 0 8px; text-align: center; }
+h1, h2 { font-family: var(--serif); font-weight: 400; }
+h1 { font-size: clamp(40px, 6.4vw, 72px); line-height: 1.05; letter-spacing: -0.015em; max-width: 13em; margin: 28px auto 0; }
+.lead { color: var(--muted); font-size: clamp(18px, 2.1vw, 21px); max-width: 30em; margin: 20px auto 0; }
+.hero .btn { margin-top: 34px; }
+.hero-meta { margin-top: 14px; font-size: 16px; color: var(--muted); }
+/* what you need, in one line right under the download button; the last link goes to the full list */
+.req { max-width: 60em; margin: 16px auto 0; font-size: 16px; line-height: 1.6; color: var(--accent-text); }
+.req span, .req a { white-space: nowrap; }  /* each requirement stays in one piece when the line wraps */
+.req a { color: var(--text); text-underline-offset: 3px; }
+.star-link { text-decoration: none; color: var(--text); border-bottom: 1px solid rgba(255, 255, 255, 0.3); white-space: nowrap; }
+.works-with { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; margin-top: 30px; }
+.works-with .label { color: var(--muted); font-size: 16px; margin-right: 4px; }
+.pill {
+  padding: 6px 13px; border-radius: 999px; font-size: 16px; color: var(--accent-text);
+  background: var(--well); border: 1px solid var(--edge); box-shadow: var(--inset-sm);
+}
+
+/* sections */
+section { margin-top: 110px; }
+h2 { font-size: clamp(32px, 4.4vw, 48px); line-height: 1.12; letter-spacing: -0.01em; text-align: center; }
+.sub { text-align: center; color: var(--muted); margin: 14px auto 0; max-width: 34em; }
+
+/* why: the maker's note and three reasons */
+.why { text-align: center; }
+.note { font-family: var(--serif); font-size: clamp(21px, 2.5vw, 27px); line-height: 1.5; max-width: 31em; margin: 36px auto 0; }
+.note .m { color: var(--muted); }
+.reasons { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; max-width: 1000px; margin: 48px auto 0; text-align: left; }
+.reason { padding: 24px 22px; border-radius: 22px; background: var(--el); border: 1px solid var(--edge); box-shadow: var(--raise); }
+.reason .k { display: block; margin-bottom: 14px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; color: var(--muted); }
+.reason h3 { font-family: var(--serif); font-weight: 400; font-size: 25px; line-height: 1.2; }
+.reason p { color: var(--muted); font-size: 16px; margin-top: 10px; }
+/* hover to read, like the button group: with a mouse, the card (or step) under the pointer grows, its corners tighten
+   and its words get bigger, so the one you are reading is easier to read; the others make room. Every word glides to
+   its new line (laid out ahead by Pretext) instead of jumping there, and each group keeps the room its biggest state
+   needs, so nothing below it moves. The script adds .morph to a group only on wide screens with a mouse and motion
+   allowed; without it everything stays as laid out here. */
+.morph { --grow: 1.6; --zoom: 1.2; }
+.morph.still, .morph.still * { transition: none !important; }
+.flow { position: relative; transition: height 350ms var(--ease); }
+.flow .w { position: absolute; left: 0; top: 0; white-space: pre; user-select: none; transform-origin: 0 0; transition: transform 350ms var(--ease); }
+.reasons.morph { display: flex; }
+.reasons.morph .reason { flex: 1 1 0; min-width: 0; transition: flex-grow 350ms var(--ease), border-radius 350ms var(--ease); }
+.reasons.morph .reason.grown { flex-grow: var(--grow); border-radius: 12px; }
+.reasons.morph .k { transition: color 350ms var(--ease); }
+.reasons.morph .grown .k { color: var(--text); }
+
+/* how it works: four steps in a row and a loop back underneath (the AI checks its own work).
+   A white dot runs along each arrow in turn, then the check box lights up: one 7 s cycle. */
+.loop { display: grid; grid-template-columns: 1fr 48px 1fr 48px 1fr 48px 1fr; align-items: center; row-gap: 40px; max-width: 1080px; margin: 44px auto 0; }
+.node {
+  align-self: stretch; padding: 22px 16px; text-align: center; border-radius: 22px;
+  background: var(--el); border: 1px solid var(--edge); box-shadow: var(--raise);
+}
+.node .ic-well, .back .ic-well {
+  flex: none; display: grid; place-items: center; width: 52px; height: 52px; border-radius: 16px; margin: 0 auto 14px;
+  background: var(--well); box-shadow: var(--inset-sm); color: #fff;
+}
+.node .ic-well .ic, .back .ic-well .ic { width: 26px; height: 26px; }
+.node h3 { font-size: 18px; }
+.node p { color: var(--muted); font-size: 15.5px; margin-top: 6px; }
+.link { position: relative; height: 2px; margin: 0 4px; background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.3) 0 5px, transparent 5px 10px); }
+.link::after, .vup::after {
+  content: ""; position: absolute; width: 7px; height: 7px;
+  border-top: 2px solid rgba(255, 255, 255, 0.6); border-right: 2px solid rgba(255, 255, 255, 0.6);
+}
+.link::after { right: -1px; top: 50%; transform: translateY(-50%) rotate(45deg); }
+.track { position: absolute; inset: 0; opacity: 0; }
+.dot { position: absolute; right: 0; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.1); }
+.l1 .track { animation: g1 7s linear infinite; }
+.l2 .track { animation: g2 7s linear infinite; }
+.l3 .track { animation: g3 7s linear infinite; }
+@keyframes g1 { 0% { transform: translateX(-100%); opacity: 0; } 1% { opacity: 1; } 12% { transform: translateX(0); opacity: 1; } 13%, 100% { transform: translateX(0); opacity: 0; } }
+@keyframes g2 { 0%, 15% { transform: translateX(-100%); opacity: 0; } 16% { opacity: 1; } 27% { transform: translateX(0); opacity: 1; } 28%, 100% { transform: translateX(0); opacity: 0; } }
+@keyframes g3 { 0%, 30% { transform: translateX(-100%); opacity: 0; } 31% { opacity: 1; } 42% { transform: translateX(0); opacity: 1; } 43%, 100% { transform: translateX(0); opacity: 0; } }
+.back {
+  grid-column: 3 / 8; position: relative; display: flex; align-items: center; gap: 16px; padding: 18px 22px; border-radius: 20px;
+  background: var(--el); border: 1px solid var(--edge); box-shadow: var(--raise-sm); animation: checking 7s ease-in-out infinite;
+}
+.back .ic-well { margin: 0; }
+.back .ic-well .ic { animation: turn 7s var(--ease) infinite; }
+.back p { color: var(--muted); font-size: 16px; }
+.back b { color: var(--text); }
+/* the loop's two legs: down from Premiere Pro, up into the AI helper (their centres: half a step's width in) */
+.vlink { position: absolute; top: -40px; width: 2px; height: 40px; background: repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0 5px, transparent 5px 10px); }
+.vdown { right: calc((100% - 96px) / 6 - 1px); }
+.vup { left: calc((100% - 96px) / 6 - 1px); }
+.vup::after { top: -1px; left: 50%; transform: translateX(-50%) rotate(-45deg); }
+.vlink .dot { top: auto; right: auto; left: 50%; margin: 0 0 0 -4px; }
+.vdown .dot { bottom: 0; }
+.vup .dot { top: 0; }
+.vdown .track { animation: gdown 7s linear infinite; }
+.vup .track { animation: gup 7s linear infinite; }
+@keyframes gdown { 0%, 45% { transform: translateY(-100%); opacity: 0; } 46% { opacity: 1; } 52% { transform: translateY(0); opacity: 1; } 53%, 100% { transform: translateY(0); opacity: 0; } }
+@keyframes gup { 0%, 70% { transform: translateY(100%); opacity: 0; } 71% { opacity: 1; } 78% { transform: translateY(0); opacity: 1; } 79%, 100% { transform: translateY(0); opacity: 0; } }
+@keyframes checking {
+  0%, 52% { box-shadow: var(--raise-sm), 0 0 0 1px rgba(255, 255, 255, 0); }
+  56%, 66% { box-shadow: var(--raise-sm), 0 0 0 1px rgba(255, 255, 255, 0.45); }
+  70%, 100% { box-shadow: var(--raise-sm), 0 0 0 1px rgba(255, 255, 255, 0); }
+}
+@keyframes turn { 0%, 53% { transform: rotate(0deg); } 68%, 100% { transform: rotate(-360deg); } }
+/* stacked on narrow screens: the same timing, down instead of across */
+@keyframes v1 { 0% { transform: translateY(-100%); opacity: 0; } 1% { opacity: 1; } 12% { transform: translateY(0); opacity: 1; } 13%, 100% { transform: translateY(0); opacity: 0; } }
+@keyframes v2 { 0%, 15% { transform: translateY(-100%); opacity: 0; } 16% { opacity: 1; } 27% { transform: translateY(0); opacity: 1; } 28%, 100% { transform: translateY(0); opacity: 0; } }
+@keyframes v3 { 0%, 30% { transform: translateY(-100%); opacity: 0; } 31% { opacity: 1; } 42% { transform: translateY(0); opacity: 1; } 43%, 100% { transform: translateY(0); opacity: 0; } }
+/* hover to read (see .morph): the open step's column grows; the loop's two legs stay under their steps' centres */
+@property --g1 { syntax: "<number>"; inherits: true; initial-value: 1; }
+@property --g2 { syntax: "<number>"; inherits: true; initial-value: 1; }
+@property --g3 { syntax: "<number>"; inherits: true; initial-value: 1; }
+@property --g4 { syntax: "<number>"; inherits: true; initial-value: 1; }
+.loop.morph {
+  --sum: calc(var(--g1) + var(--g2) + var(--g3) + var(--g4));
+  grid-template-columns:
+    calc((100% - 144px) * var(--g1) / var(--sum)) 48px calc((100% - 144px) * var(--g2) / var(--sum)) 48px
+    calc((100% - 144px) * var(--g3) / var(--sum)) 48px calc((100% - 144px) * var(--g4) / var(--sum));
+  transition: --g1 350ms var(--ease), --g2 350ms var(--ease), --g3 350ms var(--ease), --g4 350ms var(--ease);
+}
+.loop.morph[data-open="0"] { --g1: var(--grow); }
+.loop.morph[data-open="1"] { --g2: var(--grow); }
+.loop.morph[data-open="2"] { --g3: var(--grow); }
+.loop.morph[data-open="3"] { --g4: var(--grow); }
+.loop.morph .vdown { right: calc((100% - 96px) * var(--g4) / (var(--g2) + var(--g3) + var(--g4)) / 2 - 1px); }
+.loop.morph .vup { left: calc((100% - 96px) * var(--g2) / (var(--g2) + var(--g3) + var(--g4)) / 2 - 1px); }
+.loop.morph .node, .loop.morph .back { transition: border-radius 350ms var(--ease); }
+.loop.morph .grown { border-radius: 12px; }
+.loop.morph .back p { flex: 1 1 0; min-width: 0; }
+
+/* what it can do: a phone with a snap-scrolling feed of example chats, one feature per screen, like scrolling Shorts */
+.feed-wrap { display: grid; grid-template-columns: auto 1fr; gap: 56px; align-items: center; max-width: 900px; margin: 44px auto 0; }
+.phone { width: 300px; padding: 12px; border-radius: 48px; background: var(--el); box-shadow: var(--raise); border: 1px solid var(--edge); }
+.phone-screen { position: relative; height: 600px; border-radius: 38px; overflow: hidden; background: #000; box-shadow: var(--inset); }
+.phone-screen::before {
+  content: ""; position: absolute; z-index: 2; top: 12px; left: 50%; width: 86px; height: 24px; margin-left: -43px;
+  border-radius: 12px; background: #0d0d0d; border: 1px solid var(--edge);
+}
+.bars { position: absolute; z-index: 2; top: 48px; left: 22px; right: 22px; display: flex; gap: 4px; pointer-events: none; }
+.bars i { flex: 1; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.18); transition: background-color 200ms var(--ease); }
+.bars i.on { background: #fff; }
+.feed { height: 100%; overflow-y: auto; scroll-snap-type: y mandatory; scrollbar-width: none; border-radius: 38px; }
+.feed::-webkit-scrollbar { display: none; }
+.feed:focus-visible { outline: 2px solid #fff; outline-offset: -6px; }
+.short {
+  height: 100%; scroll-snap-align: start; scroll-snap-stop: always;
+  display: flex; flex-direction: column; justify-content: center; gap: 18px; padding: 72px 16px 56px;
+}
+.short-title { display: flex; align-items: center; gap: 10px; padding: 0 4px; font-family: var(--serif); font-weight: 400; font-size: 23px; line-height: 1.2; }
+.short-title .ic { width: 22px; height: 22px; }
+.chat { position: relative; display: grid; gap: 12px; }
+.msg { max-width: 88%; padding: 11px 14px; border-radius: 18px; font-size: 15px; line-height: 1.45; }
+.msg .who { display: block; margin-bottom: 3px; font-size: 12px; font-weight: 650; opacity: 0.6; }
+.msg.me { justify-self: end; color: #000; background: #fff; border-bottom-right-radius: 6px; }
+.msg.ai { justify-self: start; color: var(--text); background: var(--el); border: 1px solid var(--edge); border-bottom-left-radius: 6px; box-shadow: var(--raise-sm); }
+.typing {
+  position: absolute; left: 0; bottom: 0; display: none; gap: 5px; padding: 15px 16px; pointer-events: none;
+  border-radius: 18px; border-bottom-left-radius: 6px; background: var(--el); border: 1px solid var(--edge);
+}
+.typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1s ease-in-out infinite; }
+.typing i:nth-child(2) { animation-delay: 150ms; }
+.typing i:nth-child(3) { animation-delay: 300ms; }
+@keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+/* when a short comes up: your message, then "typing", then the reply */
+.short.play .msg.me { animation: pop 300ms var(--ease) both; }
+.short.play .typing { display: flex; animation: typing-life 1200ms linear both; }
+.short.play .msg.ai { animation: pop 300ms var(--ease) 1150ms both; }
+@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes typing-life { 0%, 28% { opacity: 0; } 34%, 92% { opacity: 1; } 100% { opacity: 0; } }
+.short-n { padding: 0 4px; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.swipe {
+  position: absolute; z-index: 2; left: 0; right: 0; bottom: 18px; display: flex; justify-content: center; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--muted); pointer-events: none; transition: opacity 200ms var(--ease);
+}
+.swipe.gone { opacity: 0; }
+.feed-index { list-style: none; padding: 0; display: grid; gap: 10px; }
+.feed-index button {
+  width: 100%; display: flex; align-items: center; gap: 14px; padding: 12px 16px; text-align: left; cursor: pointer;
+  font: inherit; font-size: 17px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 16px;
+  transition: color 160ms var(--ease), background-color 160ms var(--ease), box-shadow 160ms var(--ease), transform 160ms var(--ease);
+}
+.feed-index button:active { transform: scale(0.97); }
+.feed-index .n {
+  flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; font-size: 14px; font-weight: 700;
+  background: var(--well); box-shadow: var(--inset-sm); color: var(--muted);
+}
+.feed-index button[aria-current="true"] { color: var(--text); background: var(--el); box-shadow: var(--raise-sm); border-color: var(--edge); }
+.feed-index button[aria-current="true"] .n { color: #000; background: #fff; box-shadow: none; }
+
+/* open source: the GitHub mark in still rings */
+.open { text-align: center; }
+.open .orbit { margin-bottom: 30px; }
+.open .core .ic { width: 36px; height: 36px; }
+
+/* get started */
+.steps { list-style: none; padding: 0; display: grid; gap: 18px; margin: 40px auto 0; max-width: 760px; }
+.steps li { display: flex; gap: 20px; align-items: flex-start; background: var(--el); border-radius: 22px; padding: 22px 24px; box-shadow: var(--raise); border: 1px solid var(--edge); }
+.num {
+  flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%;
+  background: var(--well); box-shadow: var(--inset-sm); color: var(--accent-text); font-weight: 700;
+}
+.steps h3 { font-size: 19px; }
+.steps p { color: var(--muted); margin-top: 4px; font-size: 16.5px; }
+/* hover to read (see .morph): the open step gets bigger words and a white number; the other steps get flatter to
+   make room for it, so the list keeps its height */
+.steps.morph { align-content: start; }
+.steps.morph li { transition: border-radius 350ms var(--ease), padding 350ms var(--ease); }
+.steps.morph li.grown { border-radius: 12px; }
+.steps.morph li > div { flex: 1 1 0; min-width: 0; }
+.steps.morph .num { transition: background-color 350ms var(--ease), color 350ms var(--ease), box-shadow 350ms var(--ease); }
+.steps.morph .grown .num { background: #fff; color: #000; box-shadow: none; }
+.after { text-align: center; margin-top: 30px; }
+.after-note { text-align: center; margin-top: 14px; color: var(--muted); font-size: 16px; }
+.after-note a { color: var(--text); }
+
+/* what you need */
+.need { --gap: 16px; list-style: none; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--gap); margin: 40px auto 0; max-width: 860px; }
+.need li { display: flex; gap: 14px; align-items: flex-start; background: var(--el); border-radius: 18px; padding: 18px 20px; box-shadow: var(--raise-sm); border: 1px solid var(--edge); font-size: 16.5px; }
+.need li .ic { color: var(--ok); margin-top: 3px; }
+.need b { font-weight: 650; }
+.need span.m { color: var(--muted); }
+.need-more { max-width: 860px; margin: 22px auto 0; padding: 0 4px; color: var(--muted); font-size: 16.5px; text-align: center; }
+.need-more a { color: var(--text); }
+/* hover to read (see .morph), in both directions: the grid keeps its size and its middle lines move, so the open
+   item's corner gets big, the item beside it tall and narrow, the one above or below it wide and flat, the far one
+   small. The script sets where the lines go (--c1, --r1: the first column's and row's share) and the grid's height,
+   and sizes every item's words to its cell */
+@property --c1 { syntax: "<number>"; inherits: false; initial-value: 0.5; }
+@property --r1 { syntax: "<number>"; inherits: false; initial-value: 0.5; }
+.need.morph {
+  grid-template-columns: calc((100% - var(--gap)) * var(--c1)) 1fr;
+  grid-template-rows: calc((100% - var(--gap)) * var(--r1)) 1fr;
+  transition: --c1 350ms var(--ease), --r1 350ms var(--ease);
+}
+.need.morph li { transition: border-radius 350ms var(--ease); }
+.need.morph li > .ic { transform-origin: 100% 0; transition: transform 350ms var(--ease); }  /* sized with its words, keeping its gap to them */
+.need.morph li.grown { border-radius: 10px; }
+.need.morph li > span:not(.ic) { flex: 1 1 0; min-width: 0; }
+
+/* questions */
+.faq { max-width: 760px; margin: 40px auto 0; border-top: 1px solid var(--hairline); }
+details { border-bottom: 1px solid var(--hairline); }
+summary {
+  list-style: none; cursor: pointer; padding: 22px 4px; font-weight: 600; display: flex; justify-content: space-between; gap: 16px; align-items: center;
+}
+summary:focus-visible { outline-offset: -2px; }
+summary::-webkit-details-marker { display: none; }
+summary .plus { color: var(--muted); transition: transform 200ms var(--ease); font-weight: 400; font-size: 22px; line-height: 1; }
+details[open] summary .plus { transform: rotate(45deg); }
+details p { padding: 0 4px 24px; max-width: 38em; color: var(--muted); font-size: 16.5px; }
+
+/* glass rim: a thin edge of light, brightest at the top-left corner and fading round the sides, like the edge of a
+   pane of glass - the fill stays black and nothing glows outside */
+.reason, .node, .back, .steps li, .need li, .phone, .core:not(.brand-core) {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--el), var(--el)) padding-box,
+    linear-gradient(155deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.09) 26%, rgba(255, 255, 255, 0.03) 60%, rgba(255, 255, 255, 0.15)) border-box;
+}
+
+/* the panel as it looks in Premiere: a real screenshot, hairline frame, no glow */
+.shot { max-width: 420px; margin: 48px auto 0; text-align: center; }
+.shot img { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--hairline); background: #000; }
+.shot figcaption { margin-top: 12px; color: var(--muted); font-size: 16px; }
+.shot-missing {
+  display: grid; place-items: center; aspect-ratio: 300 / 420; padding: 24px; border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.28); color: var(--muted); font-size: 16px; line-height: 1.5;
+}
+.shot-missing code { white-space: normal; overflow-wrap: anywhere; }
+
+/* the story's small monospaced labels: Chinese has no monospaced face here and gets too small at 12-13 px */
+html:lang(zh) .story .kicker, html:lang(zh) .story .quote footer, html:lang(zh) .story .story-hint {
+  font-family: var(--font); font-size: 15px;
+}
+
+/* the last call: download once more before the footer */
+.final { text-align: center; margin-top: 130px; }
+
+
+@media (max-width: 860px) {
+  .reasons { grid-template-columns: 1fr; max-width: 520px; }
+  .feed-wrap { grid-template-columns: 1fr; justify-items: center; gap: 24px; }
+  .feed-index { display: none; }
+  .cta { flex-direction: column; max-width: 420px; }
+  .cta .btn { flex: none; }
+  .cta .btn:active { flex-grow: 0; }
+  .loop { grid-template-columns: 1fr; row-gap: 0; max-width: 440px; }
+  .link { width: 2px; height: 40px; margin: 4px auto; background: repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0 5px, transparent 5px 10px); }
+  .link::after { top: auto; right: auto; bottom: -1px; left: 50%; transform: translateX(-50%) rotate(135deg); }
+  .link .dot { top: auto; right: auto; bottom: 0; left: 50%; margin: 0 0 0 -4px; }
+  .l1 .track { animation-name: v1; }
+  .l2 .track { animation-name: v2; }
+  .l3 .track { animation-name: v3; }
+  .back { grid-column: auto; margin-top: 44px; }
+  .vdown { right: auto; left: calc(50% - 1px); }
+  .vup { display: none; }
+}
+@media (max-width: 640px) {
+  .hero { padding-top: 24px; }
+  .orbit { width: 140px; height: 140px; }
+  .ring.r2, .spin.s2 { inset: 22px; }
+  .core { inset: 44px; }
+  .hero .btn { width: 100%; max-width: 420px; padding: 10px 16px; font-size: 16px; }
+  .cta .btn { padding: 10px 16px; font-size: 16px; white-space: normal; text-align: center; }
+  .back { align-items: flex-start; padding: 16px 18px; }
+  section { margin-top: 84px; }
+  .need { grid-template-columns: 1fr; }
+  .phone { width: min(300px, 86vw); }
+  .phone-screen { height: min(600px, 74vh); }
+  .steps li { padding: 18px; gap: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn, .cta .btn, summary .plus, .feed-index button, .bars i, .swipe { transition: none; }
+  .float-note { display: none; }
+  .track { display: none; }
+  .back, .back .ic-well .ic, .spin, .typing i { animation: none; }
+  .short.play .msg.me, .short.play .msg.ai { animation: none; }
+  .short.play .typing { display: none; }
+}
+</style>
+<link rel="stylesheet" href="../story/story.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="./">
+      <span class="mark" aria-hidden="true"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><defs><linearGradient id="rim-53" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.55"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.12"/><stop offset="1" stop-color="#fff" stop-opacity="0.26"/></linearGradient><clipPath id="tile-53"><rect width="256" height="256" rx="56"/></clipPath></defs><rect width="256" height="256" rx="56" fill="#14143F"/><g clip-path="url(#tile-53)"><path d="M0 96L64 96L64 160L176 160L176 208L0 208Z" fill="#9999FF"/><path d="M80 96L256 96L256 208L192 208L192 144L80 144Z" fill="#C2C2FF"/></g><path d="M96 32H160V64L136 88V224H120V88L96 64Z" fill="#FF7A1A"/><rect width="256" height="256" rx="56" fill="none" stroke="url(#rim-53)" stroke-width="2"
+        vector-effect="non-scaling-stroke" clip-path="url(#tile-53)"/></svg></span>
+      <span class="name">Premiere Pro Agent Bridge</span>
+    </a>
+    <nav class="links" aria-label="页面导航">
+      <a class="n1" href="#how">工作原理</a>
+      <a class="n1" href="#what">能做什么</a>
+      <a class="n2" href="#start">开始使用</a>
+      <a class="n1" href="#faq">常见问题</a>
+      <a class="n3" href="docs.html">使用文档</a>
+      <a class="n3" href="changelog.html">更新记录</a>
+      <a class="gh" href="https://github.com/ZeusSheen/ppro-agent-bridge"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="32" d="M12 4c1.67 0 2.61 0.4 3 0.5c0.53 -0.43 1.94 -1.5 3.5 -1.5c0.34 1 0.29 2.22 0 3c0.75 1 1 2 1 3.5c0 2.19 -0.48 3.58 -1.5 4.5c-1.02 0.92 -2.11 1.37 -3.5 1.5c0.65 0.54 0.5 1.87 0.5 2.5c0 0.73 0 3 0 3M12 4c-1.67 0 -2.61 0.4 -3 0.5c-0.53 -0.43 -1.94 -1.5 -3.5 -1.5c-0.34 1 -0.29 2.22 0 3c-0.75 1 -1 2 -1 3.5c0 2.19 0.48 3.58 1.5 4.5c1.02 0.92 2.11 1.37 3.5 1.5c-0.65 0.54 -0.5 1.87 -0.5 2.5c0 0.73 0 3 0 3"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="32;0"/></path><path stroke-dasharray="10" stroke-dashoffset="10" d="M9 19c-1.41 0 -2.84 -0.56 -3.69 -1.19c-0.84 -0.63 -1.09 -1.66 -2.31 -2.31"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg></span>GitHub</a>
+      <a class="lang" href="../" hreflang="en" lang="en" data-lang="en">English</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="hero">
+      <div class="orbit" aria-hidden="true">
+        <span class="ring r1"></span><span class="ring r2"></span>
+        <span class="spin s1"><span class="sat"></span></span><span class="spin s2"><span class="sat"></span></span>
+        <span class="core brand-core"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><defs><linearGradient id="rim-54" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.55"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.12"/><stop offset="1" stop-color="#fff" stop-opacity="0.26"/></linearGradient><clipPath id="tile-54"><rect width="256" height="256" rx="56"/></clipPath></defs><rect width="256" height="256" rx="56" fill="#14143F"/><g clip-path="url(#tile-54)"><path d="M0 96L64 96L64 160L176 160L176 208L0 208Z" fill="#9999FF"/><path d="M80 96L256 96L256 208L192 208L192 144L80 144Z" fill="#C2C2FF"/></g><path d="M96 32H160V64L136 88V224H120V88L96 64Z" fill="#FF7A1A"/><rect width="256" height="256" rx="56" fill="none" stroke="url(#rim-54)" stroke-width="2"
+        vector-effect="non-scaling-stroke" clip-path="url(#tile-54)"/></svg></span>
+      </div>
+      <h1>让 AI 在 <span class="nw">Premiere Pro</span> 里帮你剪片。</h1>
+      <p class="lead">你告诉 AI 助手想要什么，它替你动手剪。拿主意的始终是你。</p>
+      <a class="btn primary" href="https://github.com/ZeusSheen/ppro-agent-bridge/releases/download/v0.7.0/ppro-agent-bridge-v0.7.0.zip"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path fill="currentColor" fill-opacity="0" stroke-dasharray="20" d="M12 4h2v6h2.5l-4.5 4.5M12 4h-2v6h-2.5l4.5 4.5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.5s" values="20;0"/><animate fill="freeze" attributeName="fill-opacity" begin="0.7s" dur="0.4s" to="1"/></path><path fill="none" stroke-dasharray="14" stroke-dashoffset="14" d="M6 19h12"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.5s" dur="0.2s" to="0"/></path></g></svg></span>免费下载使用</a>
+      <p class="req"><span>Windows</span> · <span>Premiere Pro 26.3 或更新（已在 27.1 Beta 实测）</span> · <span>Python 3.10 或更新</span> · <span>Claude Code 或 Codex</span> · <span>UXP Developer Tool</span> · <a href="#need">详细要求</a></p>
+      <p class="hero-meta">免费 · 开源 · Windows · 1.2 MB &nbsp;·&nbsp; <a class="star-link gh-star" href="https://github.com/ZeusSheen/ppro-agent-bridge" target="_blank" rel="noopener">&#9733; 去 GitHub 点个星</a></p>
+      <div class="works-with" aria-label="搭配使用">
+        <span class="label">搭配使用</span>
+        <span class="pill">Claude Code</span><span class="pill">Codex</span><span class="pill">Premiere Pro 26.3+</span><span class="pill">Whisper</span>
+      </div>
+    </div>
+
+    <section id="why" class="why" aria-labelledby="why-h">
+      <h2 id="why-h">我为什么做这个</h2>
+      <p class="note">你是不是每天都要花很多时间剪视频？大部分时间都花在剪掉说错的段落、收紧停顿、把空镜放到对的位置上。<span class="m">这些都不是编辑上的决定，只是费时间。所以我做了一座桥，把这部分交给 AI。</span></p>
+      <p class="story-again"><button type="button" data-story-open>这个想法从哪来：一个 1776 年的故事</button></p>
+      <div class="reasons">
+        <div class="reason"><span class="k">01</span><h3>精准</h3><p>它按说话内容剪，然后回听每一处剪辑，再看几帧画面。字被剪掉半个、剪得太紧，都会先修好再往下走。</p></div>
+        <div class="reason"><span class="k">02</span><h3>懂内容</h3><p>它知道说了什么、时间线怎么排、画面上有什么。所以它在内容需要的地方下刀，而不只是哪里没声音就剪哪里。</p></div>
+        <div class="reason"><span class="k">03</span><h3>空镜一次放好</h3><p>素材和图形由它自己放上时间线，和剪辑一起完成，不用最后再单独做一遍。</p></div>
+      </div>
+    </section>
+
+    <section id="how" aria-labelledby="how-h">
+      <h2 id="how-h">工作原理</h2>
+      <p class="sub">不检查就动手的 AI，只会给你一堆新错误。这个每改一步都会检查。</p>
+      <div class="loop">
+        <div class="node"><span class="ic-well"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="54" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16.82c-2.41 -1.25 -4 -3.39 -4 -5.82c0 -3.87 4.03 -7 9 -7c4.97 0 9 3.13 9 7c0 3.87 -4.03 7 -9 7c-1.85 0 -3.57 -0.43 -5 -1.18Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="54;0"/></path><path fill="currentColor" d="M5 15.5c1 1 2.5 2 4 2.5c-2 2 -5 3 -7 3c2 -2 3 -3.5 3 -5.5Z" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.7s" to="1"/><animate fill="freeze" attributeName="d" begin="0.7s" dur="0.2s" values="M5 15.5c1 1 2.5 2 4 2.5c-0.71 -0.24 -1.43 -0.59 -2.09 -1c-0.72 -0.45 -1.39 -0.98 -1.91 -1.5Z;M5 15.5c1 1 2.5 2 4 2.5c-2 2 -5 3 -7 3c2 -2 3 -3.5 3 -5.5Z"/></path></svg></span></span><h3>你</h3><p>说出你想要的，比如“把说错的段落剪掉”。</p></div>
+        <span class="link l1" aria-hidden="true"><span class="track"><span class="dot"></span></span></span>
+        <div class="node"><span class="ic-well"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="66" d="M20 5v14c0 0.55 -0.45 1 -1 1h-14c-0.55 0 -1 -0.45 -1 -1v-14c0 -0.55 0.45 -1 1 -1h14c0.55 0 1 0.45 1 1Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="66;0"/></path><g stroke-dasharray="10" stroke-dashoffset="10"><path d="M8 8h8"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path><path d="M8 12h8"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.9s" dur="0.2s" to="0"/></path></g><path stroke-dasharray="8" stroke-dashoffset="8" d="M8 16h5"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1.1s" dur="0.2s" to="0"/></path></g></svg></span></span><h3>AI 助手</h3><p>Claude Code 或 Codex 读懂大家说了什么，规划每一刀。</p></div>
+        <span class="link l2" aria-hidden="true"><span class="track"><span class="dot"></span></span></span>
+        <div class="node"><span class="ic-well"><span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 17h20"/><path d="M4 17c1.5-5 4.5-8 8-8s6.5 3 8 8"/><path d="M8 17v-6.3M12 17V9M16 17v-6.3"/></svg></span></span><h3>桥</h3><p>在你的电脑上运行，把每一步交给 Premiere Pro。</p></div>
+        <span class="link l3" aria-hidden="true"><span class="track"><span class="dot"></span></span></span>
+        <div class="node"><span class="ic-well"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="70" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 17h-10v-14h20v14Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="70;0"/></path><path fill="currentColor" d="M10 16h4v0h-4Z"><animate fill="freeze" attributeName="d" begin="0.6s" dur="0.2s" to="M10 16h4v6h-4Z"/></path><path fill="none" stroke="currentColor" stroke-dasharray="6" stroke-dashoffset="6" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 21h3M12 21h-3"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.8s" dur="0.4s" to="0"/></path></svg></span></span><h3>Premiere Pro</h3><p>在你的时间线上动手剪，你在旁边看着。</p></div>
+        <div class="back">
+          <span class="vlink vdown" aria-hidden="true"><span class="track"><span class="dot"></span></span></span>
+          <span class="vlink vup" aria-hidden="true"><span class="track"><span class="dot"></span></span></span>
+          <span class="ic-well"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="34" d="M12 6c3.31 0 6 2.69 6 6c0 3.31 -2.69 6 -6 6c-3.31 0 -6 -2.69 -6 -6v-2.5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.4s" values="34;0"/></path><path stroke-dasharray="8" stroke-dashoffset="8" d="M6 9l-3 3M6 9l3 3"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.4s" dur="0.2s" to="0"/></path></g></svg></span></span>
+          <p><b>然后检查自己的活。</b>它回听每一处剪辑，再看几帧画面。哪里不对，就回去修。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="what" aria-labelledby="what-h">
+      <h2 id="what-h">能做什么</h2>
+      <p class="sub">几段示例对话。在手机里往下滑，看下一段。</p>
+      <div class="feed-wrap">
+        <div class="phone">
+          <div class="phone-screen">
+            <div class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="feed" tabindex="0" role="region" aria-label="示例对话：往下滑看下一段">
+              <article class="short" aria-label="第 1 段，共 6 段">
+                <h3 class="short-title"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="66" d="M20 5v14c0 0.55 -0.45 1 -1 1h-14c-0.55 0 -1 -0.45 -1 -1v-14c0 -0.55 0.45 -1 1 -1h14c0.55 0 1 0.45 1 1Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="66;0"/></path><g stroke-dasharray="10" stroke-dashoffset="10"><path d="M8 8h8"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path><path d="M8 12h8"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.9s" dur="0.2s" to="0"/></path></g><path stroke-dasharray="8" stroke-dashoffset="8" d="M8 16h5"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1.1s" dur="0.2s" to="0"/></path></g></svg></span>按说话内容剪辑</h3>
+                <div class="chat">
+                  <p class="msg me"><span class="who">你</span>把这段采访剪到 60 秒，留下最好的几条。</p>
+                  <p class="msg ai"><span class="who">AI 助手</span>我读了 214 句，留下 9 句。去掉了 3 次重来和 2 个“嗯”，剪了 6 刀。现在长 58 秒。</p>
+                  <p class="typing" aria-hidden="true"><i></i><i></i><i></i></p>
+                </div>
+                <span class="short-n">1 / 6</span>
+              </article>
+              <article class="short" aria-label="第 2 段，共 6 段">
+                <h3 class="short-title"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path stroke-dasharray="66" stroke-width="2" d="M3 14v-9h18v14h-18v-5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="66;0"/></path><path stroke-dasharray="26" stroke-dashoffset="26" d="M3 16l4 -3l3 2l6 -5l5 4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.6s" dur="0.4s" to="0"/></path></g><circle cx="7.5" cy="9.5" r="1.5" fill="currentColor" opacity="0"><animate fill="freeze" attributeName="opacity" begin="1s" dur="0.2s" to="1"/></circle></svg></span>加空镜和图形</h3>
+                <div class="chat">
+                  <p class="msg me"><span class="who">你</span>讲房租那段盖上城市空镜，0:42 放图表。</p>
+                  <p class="msg ai"><span class="who">AI 助手</span>好了：4 个城市镜头和图表，都铺满画面。原来轨道上的内容一个都没被盖掉。</p>
+                  <p class="typing" aria-hidden="true"><i></i><i></i><i></i></p>
+                </div>
+                <span class="short-n">2 / 6</span>
+              </article>
+              <article class="short" aria-label="第 3 段，共 6 段">
+                <h3 class="short-title"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="34" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 10h3.5l3.5 -3.5v10.5l-3.5 -3.5h-3.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.4s" values="34;0"/></path><g fill="currentColor"><path d="M14 12c0 0 0 0 0 0c0 0 0 0 0 0Z"><animate fill="freeze" attributeName="d" begin="0.4s" dur="0.2s" to="M14 16c1.5 -0.71 2.5 -2.24 2.5 -4c0 -1.77 -1 -3.26 -2.5 -4Z"/></path><path d="M14 12c0 0 0 0 0 0c0 0 0 0 0 0v0c0 0 0 0 0 0c0 0 0 0 0 0Z"><animate fill="freeze" attributeName="d" begin="0.4s" dur="0.4s" to="M14 3.23c4 0.91 7 4.49 7 8.77c0 4.28 -3 7.86 -7 8.77v-2.07c2.89 -0.86 5 -3.53 5 -6.7c0 -3.17 -2.11 -5.85 -5 -6.71Z"/></path></g></svg></span>每一刀都用耳朵检查</h3>
+                <div class="chat">
+                  <p class="msg me"><span class="who">你</span>这些剪辑点听起来对吗？</p>
+                  <p class="msg ai"><span class="who">AI 助手</span>12 处我都听了。有一处把“因为”剪掉了一点，我给它多留了些空。其余 11 处都干净。</p>
+                  <p class="typing" aria-hidden="true"><i></i><i></i><i></i></p>
+                </div>
+                <span class="short-n">3 / 6</span>
+              </article>
+              <article class="short" aria-label="第 4 段，共 6 段">
+                <h3 class="short-title"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="48" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.25 14c0.89 3.45 4.02 6 7.75 6c4.42 0 8 -3.58 8 -8c0 -4.42 -3.58 -8 -8 -8c-2.39 0 -4.53 1.05 -6 2.71l-2 2.29"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="48;0"/></path><g fill="currentColor"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" d="M5.63 7.38l-2.13 -2.13l0 4.25l4.25 0Z" opacity="0"><set fill="freeze" attributeName="opacity" begin="0.6s" to="1"/><animate fill="freeze" attributeName="d" begin="0.6s" dur="0.2s" values="M4 9l0 0l0 0l0 0Z;M5.63 7.38l-2.13 -2.13l0 4.25l4.25 0Z"/></path><circle cx="12" cy="12"><animate fill="freeze" attributeName="r" begin="0.8s" dur="0.2s" to="2"/></circle></g></svg></span>保留你做过的调整</h3>
+                <div class="chat">
+                  <p class="msg me"><span class="who">你</span>把标题换成中文版。</p>
+                  <p class="msg ai"><span class="who">AI 助手</span>换好了 11 个片段。你的淡入淡出、大小和效果都跟着过来了，每一个我都核对过。</p>
+                  <p class="typing" aria-hidden="true"><i></i><i></i><i></i></p>
+                </div>
+                <span class="short-n">4 / 6</span>
+              </article>
+              <article class="short" aria-label="第 5 段，共 6 段">
+                <h3 class="short-title"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><g stroke-dasharray="24"><path d="M11.5 5c0 -0.83 0.67 -1.5 1.5 -1.5h6c0.83 0 1.5 0.67 1.5 1.5c0 0.83 -0.67 1.5 -1.5 1.5h-6c-0.83 0 -1.5 -0.67 -1.5 -1.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.3s" values="24;0"/></path><path stroke-dashoffset="24" d="M11.5 12c0 -0.83 0.67 -1.5 1.5 -1.5h6c0.83 0 1.5 0.67 1.5 1.5c0 0.83 -0.67 1.5 -1.5 1.5h-6c-0.83 0 -1.5 -0.67 -1.5 -1.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.4s" dur="0.3s" to="0"/></path><path stroke-dashoffset="24" d="M11.5 19c0 -0.83 0.67 -1.5 1.5 -1.5h6c0.83 0 1.5 0.67 1.5 1.5c0 0.83 -0.67 1.5 -1.5 1.5h-6c-0.83 0 -1.5 -0.67 -1.5 -1.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.8s" dur="0.3s" to="0"/></path></g><g stroke-dasharray="12" stroke-dashoffset="12" stroke-width="2"><path d="M3 5l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.2s" dur="0.2s" to="0"/></path><path d="M3 12l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.6s" dur="0.2s" to="0"/></path><path d="M3 19l2 2l4 -4"><animate fill="freeze" attributeName="stroke-dashoffset" begin="1s" dur="0.2s" to="0"/></path></g></g></svg></span>先计划，再动手</h3>
+                <div class="chat">
+                  <p class="msg me"><span class="who">你</span>你打算改哪些地方？</p>
+                  <p class="msg ai"><span class="who">AI 助手</span>剪 6 刀，移动 2 个片段，加 1 个标记。你说开始我就动手。每一步都能用 Ctrl+Z 撤销。</p>
+                  <p class="typing" aria-hidden="true"><i></i><i></i><i></i></p>
+                </div>
+                <span class="short-n">5 / 6</span>
+              </article>
+              <article class="short" aria-label="第 6 段，共 6 段">
+                <h3 class="short-title"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="60" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2l-8 3.5v6.5c0 3.5 3.5 8 8 10c4.5 -1 8 -6.5 8 -10v-6.5l-8 -3.5Z"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="60;0"/></path></svg></span>文件留在你自己的电脑上</h3>
+                <div class="chat">
+                  <p class="msg me"><span class="who">你</span>我的视频会被上传吗？</p>
+                  <p class="msg ai"><span class="who">AI 助手</span>不会。你的视频文件留在你的电脑上。我只看到大家说的话和几张静帧。</p>
+                  <p class="typing" aria-hidden="true"><i></i><i></i><i></i></p>
+                </div>
+                <span class="short-n">6 / 6</span>
+              </article>
+            </div>
+            <p class="swipe" aria-hidden="true"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="12" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 16l-7 -7M12 16l7 -7"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.4s" values="12;0"/></path></svg></span>下滑</p>
+          </div>
+        </div>
+        <ol class="feed-index" aria-label="跳到">
+          <li><button type="button" data-i="0" aria-current="true"><span class="n">1</span>按说话内容剪辑</button></li>
+          <li><button type="button" data-i="1" aria-current="false"><span class="n">2</span>加空镜和图形</button></li>
+          <li><button type="button" data-i="2" aria-current="false"><span class="n">3</span>每一刀都用耳朵检查</button></li>
+          <li><button type="button" data-i="3" aria-current="false"><span class="n">4</span>保留你做过的调整</button></li>
+          <li><button type="button" data-i="4" aria-current="false"><span class="n">5</span>先计划，再动手</button></li>
+          <li><button type="button" data-i="5" aria-current="false"><span class="n">6</span>文件留在你自己的电脑上</button></li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="open" class="open" aria-labelledby="open-h">
+      <div class="orbit" aria-hidden="true">
+        <span class="ring r1"></span><span class="ring r2"></span>
+        <span class="core"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="32" d="M12 4c1.67 0 2.61 0.4 3 0.5c0.53 -0.43 1.94 -1.5 3.5 -1.5c0.34 1 0.29 2.22 0 3c0.75 1 1 2 1 3.5c0 2.19 -0.48 3.58 -1.5 4.5c-1.02 0.92 -2.11 1.37 -3.5 1.5c0.65 0.54 0.5 1.87 0.5 2.5c0 0.73 0 3 0 3M12 4c-1.67 0 -2.61 0.4 -3 0.5c-0.53 -0.43 -1.94 -1.5 -3.5 -1.5c-0.34 1 -0.29 2.22 0 3c-0.75 1 -1 2 -1 3.5c0 2.19 0.48 3.58 1.5 4.5c1.02 0.92 2.11 1.37 3.5 1.5c-0.65 0.54 -0.5 1.87 -0.5 2.5c0 0.73 0 3 0 3"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="32;0"/></path><path stroke-dasharray="10" stroke-dashoffset="10" d="M9 19c-1.41 0 -2.84 -0.56 -3.69 -1.19c-0.84 -0.63 -1.09 -1.66 -2.31 -2.31"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg></span></span>
+      </div>
+      <h2 id="open-h">免费开源。<br>随你改造。</h2>
+      <p class="sub">每一行代码都在 GitHub 上，采用 MIT 许可证。看、改、分享都可以。</p>
+      <p class="after"><a class="btn gh-star" href="https://github.com/ZeusSheen/ppro-agent-bridge" target="_blank" rel="noopener"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="32" d="M12 4c1.67 0 2.61 0.4 3 0.5c0.53 -0.43 1.94 -1.5 3.5 -1.5c0.34 1 0.29 2.22 0 3c0.75 1 1 2 1 3.5c0 2.19 -0.48 3.58 -1.5 4.5c-1.02 0.92 -2.11 1.37 -3.5 1.5c0.65 0.54 0.5 1.87 0.5 2.5c0 0.73 0 3 0 3M12 4c-1.67 0 -2.61 0.4 -3 0.5c-0.53 -0.43 -1.94 -1.5 -3.5 -1.5c-0.34 1 -0.29 2.22 0 3c-0.75 1 -1 2 -1 3.5c0 2.19 0.48 3.58 1.5 4.5c1.02 0.92 2.11 1.37 3.5 1.5c-0.65 0.54 -0.5 1.87 -0.5 2.5c0 0.73 0 3 0 3"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="32;0"/></path><path stroke-dasharray="10" stroke-dashoffset="10" d="M9 19c-1.41 0 -2.84 -0.56 -3.69 -1.19c-0.84 -0.63 -1.09 -1.66 -2.31 -2.31"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg></span>去 GitHub 点个星</a></p>
+    </section>
+
+    <section id="start" aria-labelledby="start-h">
+      <h2 id="start-h">三步开始</h2>
+      <ol class="steps">
+        <li><span class="num">1</span><div><h3>下载</h3><p>点下载按钮，zip 文件会存到“下载”文件夹。右键点它，选<b>「全部解压缩」</b>。</p></div></li>
+        <li><span class="num">2</span><div><h3>运行安装</h3><p>在解压出来的文件夹里，双击 <code>1 Install Premiere Agent Bridge</code>。会打开一个窗口检查你的电脑，帮你补齐缺的东西，并在桌面上放一个 <b>Premiere Agent Bridge</b> 快捷方式。</p></div></li>
+        <li><span class="num">3</span><div><h3>启动，开始剪</h3><p>双击 <b>Premiere Agent Bridge</b> 快捷方式，再打开 Premiere Pro 和它的 Agent Bridge 面板（<b>窗口 → UXP 增效工具 → Agent Bridge</b>）。面板会告诉你该对 AI 助手说什么。</p></div></li>
+      </ol>
+      <p class="after"><a class="btn primary" href="https://github.com/ZeusSheen/ppro-agent-bridge/releases/download/v0.7.0/ppro-agent-bridge-v0.7.0.zip"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path fill="currentColor" fill-opacity="0" stroke-dasharray="20" d="M12 4h2v6h2.5l-4.5 4.5M12 4h-2v6h-2.5l4.5 4.5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.5s" values="20;0"/><animate fill="freeze" attributeName="fill-opacity" begin="0.7s" dur="0.4s" to="1"/></path><path fill="none" stroke-dasharray="14" stroke-dashoffset="14" d="M6 19h12"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.5s" dur="0.2s" to="0"/></path></g></svg></span>下载 zip（1.2 MB）</a></p>
+      <p class="after-note">当前版本 0.7.0。<a href="changelog.html">每个版本改了什么</a>，用大白话写的。想要旧版本？<a href="https://github.com/ZeusSheen/ppro-agent-bridge/releases">查看所有版本</a>。</p>
+      <figure class="shot">
+        <img src="../img/panel-first-run-zh.png" width="548" height="678" alt="Premiere Pro 里的 Agent Bridge 面板，已连接：顶部是全彩的桥图标和“已连接”，下面是第一次使用的两步：在放这次工作的文件夹里打开 Claude Code 或 Codex；把框里写好的第一句话复制到它的对话框里。" loading="lazy" decoding="async">
+        <figcaption>Premiere Pro 里的面板：已连接，下面是第一次打开时显示的两步。</figcaption>
+      </figure>
+    </section>
+
+    <section id="need" aria-labelledby="need-h">
+      <h2 id="need-h">你需要准备什么</h2>
+      <ul class="need">
+        <li><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="26" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 11l6 6l10 -10"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="26;0"/></path></svg></span><span><b>一台 Windows 电脑。</b><span class="m">在 Windows 11 上测试过。暂不支持 Mac。</span></span></li>
+        <li><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="26" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 11l6 6l10 -10"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="26;0"/></path></svg></span><span><b>Premiere Pro 26.3 或更新版本。</b><span class="m">Beta 版也可以：已在 Premiere Pro 27.1 Beta 上实测。</span></span></li>
+        <li><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="26" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 11l6 6l10 -10"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="26;0"/></path></svg></span><span><b>一个 AI 助手。</b><span class="m">Claude Code 或 Codex。</span></span></li>
+        <li><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-dasharray="26" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 11l6 6l10 -10"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="26;0"/></path></svg></span><span><b>两个免费工具。</b><span class="m">Python 3.10 或更新版本，以及 Adobe 的 UXP Developer Tool。安装窗口会告诉你怎么装。</span></span></li>
+      </ul>
+      <p class="need-more">安装窗口还会带你打开开发者模式：在 UXP Developer Tool 里打开一次，在 Premiere 的插件设置里再打开一次。可选：FFmpeg（缩放片段和回听检查要用）、faster-whisper（在你电脑上转录要用）。一步一步的说明见<a href="docs.html">使用文档</a>。</p>
+    </section>
+
+    <section id="faq" aria-labelledby="faq-h">
+      <h2 id="faq-h">常见问题</h2>
+      <div class="faq">
+        <details><summary>免费吗？<span class="plus" aria-hidden="true">+</span></summary><p>免费。它是开源软件，采用 MIT 许可证。你可以用、可以改、可以分享。</p></details>
+        <details><summary>是 Adobe 做的吗？<span class="plus" aria-hidden="true">+</span></summary><p>不是。这是一个独立项目。它用的是 Adobe 官方给 Premiere Pro 添加插件的方式。</p></details>
+        <details><summary>会把我的项目弄乱吗？<span class="plus" aria-hidden="true">+</span></summary><p>它动手之前会先检查，每一处改动都能用 Ctrl+Z 撤销。不过还是建议先在项目副本上试。</p></details>
+        <details><summary>AI 怎么知道该剪哪里？<span class="plus" aria-hidden="true">+</span></summary><p>它看三样东西：大家说了什么、你的时间线怎么排、剪出来实际听起来和看起来怎么样。它会回听音频，再看几张静帧。</p></details>
+        <details><summary>Premiere 更新以后还能用吗？<span class="plus" aria-hidden="true">+</span></summary><p>它建立在 UXP 上，这是 Adobe 现在给 Premiere Pro 添加插件的方式，而不是 Adobe 打算淘汰的旧 CEP 系统。新版 Premiere 改了什么的时候，安装窗口和桥会告诉你。</p></details>
+        <details><summary>Mac 能用吗？<span class="plus" aria-hidden="true">+</span></summary><p>暂时不行。现在只支持 Windows。</p></details>
+        <details><summary>哪些 AI 助手能用？<span class="plus" aria-hidden="true">+</span></summary><p>Claude Code 和 Codex。其他能在你电脑上运行命令的 AI 助手也能用。</p></details>
+        <details><summary>面板显示“未连接”，怎么办？<span class="plus" aria-hidden="true">+</span></summary><p>多数情况是桥的窗口关了：点面板上的<b>「启动桥」</b>，或者双击 <b>Premiere Agent Bridge</b> 快捷方式。还不行，就按<a href="docs.html#not-connected">使用文档里的排查步骤</a>一步一步查。</p></details>
+      </div>
+    </section>
+
+    <section class="final" aria-labelledby="final-h">
+      <h2 id="final-h">准备好了？下载，开始剪。</h2>
+      <p class="sub">永久免费。0.7.0 版，适用于 Windows，一个 1.2 MB 的 zip 文件。</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/ZeusSheen/ppro-agent-bridge/releases/download/v0.7.0/ppro-agent-bridge-v0.7.0.zip"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path fill="currentColor" fill-opacity="0" stroke-dasharray="20" d="M12 4h2v6h2.5l-4.5 4.5M12 4h-2v6h-2.5l4.5 4.5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.5s" values="20;0"/><animate fill="freeze" attributeName="fill-opacity" begin="0.7s" dur="0.4s" to="1"/></path><path fill="none" stroke-dasharray="14" stroke-dashoffset="14" d="M6 19h12"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.5s" dur="0.2s" to="0"/></path></g></svg></span>免费下载使用</a>
+        <a class="btn gh-star" href="https://github.com/ZeusSheen/ppro-agent-bridge" target="_blank" rel="noopener"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="32" d="M12 4c1.67 0 2.61 0.4 3 0.5c0.53 -0.43 1.94 -1.5 3.5 -1.5c0.34 1 0.29 2.22 0 3c0.75 1 1 2 1 3.5c0 2.19 -0.48 3.58 -1.5 4.5c-1.02 0.92 -2.11 1.37 -3.5 1.5c0.65 0.54 0.5 1.87 0.5 2.5c0 0.73 0 3 0 3M12 4c-1.67 0 -2.61 0.4 -3 0.5c-0.53 -0.43 -1.94 -1.5 -3.5 -1.5c-0.34 1 -0.29 2.22 0 3c-0.75 1 -1 2 -1 3.5c0 2.19 0.48 3.58 1.5 4.5c1.02 0.92 2.11 1.37 3.5 1.5c-0.65 0.54 -0.5 1.87 -0.5 2.5c0 0.73 0 3 0 3"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="32;0"/></path><path stroke-dasharray="10" stroke-dashoffset="10" d="M9 19c-1.41 0 -2.84 -0.56 -3.69 -1.19c-0.84 -0.63 -1.09 -1.66 -2.31 -2.31"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg></span>去 GitHub 点个星</a>
+      </div>
+      <p class="after-note">先在项目副本上试试，<a href="https://github.com/ZeusSheen/ppro-agent-bridge/issues">哪里出问题请告诉我</a>。</p>
+    </section>
+  </main>
+
+  <footer class="site">
+    <nav class="more" aria-label="更多"><a href="./">首页</a> <a href="docs.html">使用文档</a> <a href="changelog.html">更新记录</a> <a href="../" hreflang="en" lang="en" data-lang="en">English</a> <a href="https://github.com/ZeusSheen/ppro-agent-bridge">GitHub</a></nav>
+    <p>Premiere Pro Agent Bridge 免费开源（MIT 许可证）。<a href="https://github.com/ZeusSheen/ppro-agent-bridge">GitHub 上的源代码</a>。</p>
+    <p>本项目并非由 Adobe、Anthropic 或 OpenAI 制作，也未获其认可。Premiere Pro 是 Adobe 的商标。</p>
+    <p>图标：Material Line Icons，作者 Vjacheslav Trushkin（MIT）。文字排版：<a href="https://github.com/chenglou/pretext">Pretext</a>，作者 Cheng Lou（MIT）。</p>
+    <p>动画：<a href="https://gsap.com">GSAP</a>（按 GreenSock 标准许可免费使用）。</p>
+  </footer>
+</div>
+
+<!-- The 1776 story floats over the page on a first visit (story/overlay.js); Skip, Esc or a click outside the sheet
+     closes it, it stays closed for that visitor, and the button under "Why I built this" opens it again. Scrolling
+     inside it moves beat by beat (story/story.js); every caption is Adam Smith's own words (The Wealth of Nations,
+     Book I, Chapter 1). Without JS it never opens; with reduced motion it is a plain article. -->
+<div class="story-overlay" id="story-overlay" role="dialog" aria-modal="true" aria-labelledby="story-title" hidden>
+  <div class="story-scroller">
+    <section class="story" id="story">
+      <h2 class="sr" id="story-title">一个 1776 年的故事</h2>
+      <div class="story-track">
+        <div class="story-stage">
+          <div class="sheet">
+            <div class="story-progress" aria-hidden="true"><i></i></div>
+            <div class="stamp">
+              <p class="year">1776</p>
+              <p class="fact" data-fact="1">亚当·斯密出版《国富论》。</p>
+              <p class="fact" data-fact="2">詹姆斯·瓦特的新式蒸汽机开始投入使用。</p>
+            </div>
+            <div class="scene">
+              <div class="caps">
+                <p class="kicker">亚当·斯密 · 《国富论》 · 1776（本站译文）</p>
+                <div class="cap-stack">
+                  <p class="cap" data-cap="2">“在最早的蒸汽机上，总要雇一个男孩守在旁边，随着活塞一升一降，交替打开、关上锅炉和汽缸之间的通道。”</p>
+                  <p class="cap" data-cap="3">“其中有个男孩很想和伙伴们去玩。他发现，只要用一根绳子，把开这条通道的阀门把手系到机器的另一个部件上，……”</p>
+                  <p class="cap" data-cap="4">“……阀门就会自己开、自己关，用不着他动手，他也就能空出身来，和玩伴们去玩了。”</p>
+                </div>
+              </div>
+              <figure class="engine-figure" aria-hidden="true"></figure>
+            </div>
+            <blockquote class="quote">
+              <p>“这台机器自发明以来最大的改进之一，就是这样由<span class="hl">一个想给自己省点力气的男孩</span>发现的。”</p>
+              <footer>亚当·斯密，《国富论》第一篇第一章，1776 年（本站译文）</footer>
+            </blockquote>
+            <div class="end">
+              <p class="end-line">所以，我也给自己做了一根“绳子”。</p>
+              <p class="end-sub">它把剪辑里重复的活儿交给 AI：说错的段落、过长的停顿、把空镜放到对的位置。拿主意的还是你。</p>
+              <div class="end-actions">
+                <a class="btn primary" href="https://github.com/ZeusSheen/ppro-agent-bridge/releases/download/v0.7.0/ppro-agent-bridge-v0.7.0.zip"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path fill="currentColor" fill-opacity="0" stroke-dasharray="20" d="M12 4h2v6h2.5l-4.5 4.5M12 4h-2v6h-2.5l4.5 4.5"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.5s" values="20;0"/><animate fill="freeze" attributeName="fill-opacity" begin="0.7s" dur="0.4s" to="1"/></path><path fill="none" stroke-dasharray="14" stroke-dashoffset="14" d="M6 19h12"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.5s" dur="0.2s" to="0"/></path></g></svg></span>免费下载使用</a>
+                <button type="button" class="btn" data-story-close>继续看网页</button>
+              </div>
+            </div>
+            <p class="story-hint" aria-hidden="true">下滑</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <button type="button" class="story-skip" data-story-close aria-label="跳过这个故事">跳过 <span aria-hidden="true">&#x2715;</span></button>
+</div>
+
+<script>
+/* The icons draw themselves in. Replay the How-it-works ones once, when they scroll into view;
+   with reduced motion, show the finished drawing instead. */
+(function () {
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) {
+    document.querySelectorAll('.ic svg').forEach(function (s) { try { s.pauseAnimations(); s.setCurrentTime(5); } catch (e) {} });
+    return;
+  }
+  if (!('IntersectionObserver' in window)) return;
+  var seen = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      try { e.target.setCurrentTime(0); } catch (err) {}
+      seen.unobserve(e.target);
+    });
+  }, { threshold: 0.6 });
+  document.querySelectorAll('.node .ic svg, .open .core svg').forEach(function (s) { seen.observe(s); });
+})();
+
+/* Floating stars: each click on a GitHub star button or link sends a few up (GitHub opens in a new tab, so they stay seen). */
+(function () {
+  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  function rand(min, max) { return min + Math.random() * (max - min); }
+  document.querySelectorAll('.gh-star').forEach(function (button) {
+    button.addEventListener('click', function () {
+      for (var i = 0; i < 7; i++) {
+        var note = document.createElement('span');
+        note.className = 'float-note';
+        note.textContent = '★';
+        note.setAttribute('aria-hidden', 'true');
+        note.style.setProperty('--x', rand(-70, 70).toFixed(0) + 'px');
+        note.style.setProperty('--r', rand(-45, 45).toFixed(0) + 'deg');
+        note.style.setProperty('--d', rand(0.9, 1.6).toFixed(2) + 's');
+        note.style.setProperty('--s', rand(12, 22).toFixed(0) + 'px');
+        note.style.animationDelay = (i * 45) + 'ms';
+        note.addEventListener('animationend', function () { this.remove(); });
+        button.appendChild(note);
+      }
+    });
+  });
+})();
+
+/* The phone feed: one short per screen (scroll snap does the snapping); the bars, the list and the chat follow it.
+   A short's chat plays (your message, typing, the reply) when it comes up and the phone is on screen. */
+(function () {
+  var feed = document.querySelector('.feed');
+  if (!feed) return;
+  var shorts = feed.querySelectorAll('.short');
+  var bars = document.querySelectorAll('.bars i');
+  var items = document.querySelectorAll('.feed-index button');
+  var swipe = document.querySelector('.swipe');
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var current = -1, ticking = false, visible = false;
+  function play(i) {
+    if (reduce || !visible || !shorts[i]) return;
+    shorts.forEach(function (s) { s.classList.remove('play'); });
+    void shorts[i].offsetWidth;  // restart the animations
+    shorts[i].classList.add('play');
+    var svg = shorts[i].querySelector('svg');
+    if (svg) { try { svg.setCurrentTime(0); } catch (e) {} }
+  }
+  function show(i) {
+    if (i === current || i < 0 || i >= shorts.length) return;
+    current = i;
+    bars.forEach(function (b, k) { b.classList.toggle('on', k <= i); });
+    items.forEach(function (b, k) { b.setAttribute('aria-current', k === i ? 'true' : 'false'); });
+    if (i > 0 && swipe) swipe.classList.add('gone');
+    play(i);
+  }
+  feed.addEventListener('scroll', function () {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(function () { ticking = false; show(Math.round(feed.scrollTop / feed.clientHeight)); });
+  }, { passive: true });
+  items.forEach(function (b) {
+    b.addEventListener('click', function () {
+      feed.scrollTo({ top: Number(b.getAttribute('data-i')) * feed.clientHeight, behavior: reduce ? 'auto' : 'smooth' });
+    });
+  });
+  show(0);
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        var was = visible;
+        visible = e.isIntersecting;
+        if (visible && !was) play(current);
+      });
+    }, { threshold: 0.5 }).observe(document.querySelector('.phone'));
+  }
+})();
+</script>
+<script type="module">
+/* Hover to read. With a mouse, the card (or step) under the pointer grows and its words get bigger; the rest make
+   room. CSS decides how big each card gets; Pretext lays out each text block for the width and size it is heading to
+   before the browser gets there, so every word (kept together with whatever touches it: punctuation, a <code> chip)
+   glides from where it is to where it will be, in step with its card. Words only move and scale by transform, so
+   nothing reflows per frame. Screen readers get the original text; the moving copies are hidden from them. */
+const GROUPS = [
+  { root: '.reasons', items: ':scope > .reason', blocks: ':scope > h3, :scope > p' },
+  { root: '.loop', items: ':scope > .node, :scope > .back', blocks: ':scope > h3, :scope > p' },
+  { root: '.steps', items: ':scope > li', blocks: 'h3, p', stack: true },
+  { root: '.need', items: ':scope > li', blocks: ':scope > span:not(.ic)', grid: true },
+];
+const wide = matchMedia('(hover: hover) and (pointer: fine) and (min-width: 861px) and (prefers-reduced-motion: no-preference)');
+let pretext = null;  // loaded the first time the effect runs, so phones never download it
+let groups = [], on = false;
+const FLAT = 0.45;  // in a stack, the other cards keep this share of their top and bottom padding while one is open
+// A 2x2 grid keeps its size. For each open item its column and row take as big a share as they can (from 0.7 down to
+// 0.5) while every other item still fits its cell with words at least minZoom of their size; each item's words then
+// get the biggest size that fits its cell, up to maxZoom for the open one and never above normal for the rest.
+const GRID = { share: [0.7, 0.5], step: 0.02, minZoom: 0.72, maxZoom: 1.4 };
+
+function px(v) { return parseFloat(v) || 0; }
+function fontOf(cs) { return `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`; }
+function widthOf(text, cs) {
+  return pretext.measureNaturalWidth(pretext.prepare(text, fontOf(cs), { letterSpacing: px(cs.letterSpacing) }));
+}
+
+// One text block as Pretext rich-inline items: each word is an unbreakable item in its own font (with a chip's
+// padding, and anything touching it measured onto it), and each space is its own item, measured in its own font.
+// An element that doesn't wrap (a <code> chip, white-space: nowrap) is one word however many spaces it holds, as the
+// browser keeps it on one line, with its padding and border once at each end.
+function build(el) {
+  const items = [], words = [];
+  let word = null;
+  const edges = cs => px(cs.paddingLeft) + px(cs.paddingRight) + px(cs.borderLeftWidth) + px(cs.borderRightWidth);
+  function add(token, cs, piece, chip) {
+    for (const parent of [...piece.chain].reverse()) { const copy = parent.cloneNode(false); copy.append(piece.node); piece.node = copy; }
+    if (word) {
+      items[word.item].extraWidth += widthOf(token, cs) + chip;
+    } else {
+      word = { span: document.createElement('span'), item: items.length };
+      word.span.className = 'w';
+      items.push({ text: token, font: fontOf(cs), letterSpacing: px(cs.letterSpacing), break: 'never', extraWidth: chip });
+      words.push(word);
+    }
+    word.span.append(piece.node);
+  }
+  (function walk(node, chain) {
+    for (const child of node.childNodes) {
+      if (child.nodeType === 1) {
+        const cs = getComputedStyle(child), text = child.textContent.trim().replace(/\s+/g, ' ');
+        if (cs.whiteSpace === 'nowrap' && text) add(text, cs, { node: child.cloneNode(true), chain }, edges(cs));
+        else walk(child, [...chain, child]);
+        continue;
+      }
+      if (child.nodeType !== 3) continue;
+      const host = chain.at(-1) || el, cs = getComputedStyle(host);
+      for (const [token] of child.data.matchAll(/\s+|\S+/g)) {
+        if (/^\s/.test(token)) {
+          if (word) items.push({ text: ' ', font: fontOf(cs) });
+          word = null;
+          continue;
+        }
+        const chip = host !== el && host.textContent.trim() === token ? edges(cs) : 0;
+        add(token, cs, { node: document.createTextNode(token), chain }, chip);
+      }
+    }
+  })(el, []);
+  const cs = getComputedStyle(el);
+  const plain = document.createElement('span'), shown = document.createElement('span');
+  plain.className = 'sr';
+  plain.append(...el.childNodes);
+  shown.setAttribute('aria-hidden', 'true');
+  shown.append(...words.map(w => w.span));
+  el.append(plain, shown);
+  el.classList.add('flow');
+  return {
+    el, plain, words,
+    prepared: pretext.prepareRichInline(items),
+    lineHeight: cs.lineHeight === 'normal' ? px(cs.fontSize) * 1.2 : px(cs.lineHeight),
+    align: cs.textAlign,
+  };
+}
+
+// Where each word of a block goes at this width and zoom, how tall the block is and how wide its widest line (wider
+// than `width` only when one word is). Text `zoom` times bigger breaks like normal text in a box `zoom` times narrower.
+function place(block, width, zoom) {
+  const { prepared, lineHeight, align, words } = block;
+  const room = width / zoom, at = new Map();
+  let lines = 0, widest = 0;
+  pretext.walkRichInlineLineRanges(prepared, room, line => {
+    let x = align === 'center' ? (room - line.width) / 2 : align === 'right' || align === 'end' ? room - line.width : 0;
+    for (const f of line.fragments) {
+      x += f.gapBefore;
+      at.set(f.itemIndex, [x * zoom, lines * lineHeight * zoom]);
+      x += f.occupiedWidth;
+    }
+    widest = Math.max(widest, line.width);
+    lines++;
+  });
+  return { height: lines * lineHeight * zoom, widest: widest * zoom, pos: words.map(w => at.get(w.item) || [0, 0]) };
+}
+
+function paint(block, width, zoom) {
+  const { height, pos } = place(block, width, zoom);
+  block.el.style.height = height + 'px';
+  block.words.forEach((w, n) => { w.span.style.transform = `translate(${pos[n][0]}px, ${pos[n][1]}px) scale(${zoom})`; });
+}
+
+// The room for grid item i's words when item `which` is open and its column and row take `share` of the grid.
+function cell(g, i, which, share) {
+  const across = which < 0 ? 0.5 : i % 2 === which % 2 ? share : 1 - share;
+  const down = which < 0 ? 0.5 : (i >> 1) === (which >> 1) ? share : 1 - share;
+  return [g.size[0] * across - g.cards[i].chrome[0], g.size[1] * down - g.cards[i].chrome[1]];
+}
+
+// The biggest zoom, up to `most`, at which a card's words fit this room; 0 if they do not fit even at a third.
+function fitZoom(card, [width, height], most) {
+  const fits = zoom => {
+    let used = 0;
+    for (const b of card.blocks) {
+      const p = place(b, width, zoom);
+      if (p.widest > width + 0.5) return false;
+      used += p.height;
+    }
+    return used <= height + 0.5;
+  };
+  if (fits(most)) return most;
+  let lo = 1 / 3, hi = most;
+  if (!fits(lo)) return 0;
+  for (let n = 0; n < 12; n++) {
+    const mid = (lo + hi) / 2;
+    if (fits(mid)) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function setState(g, which) {
+  g.open = which;
+  g.cards.forEach((c, i) => c.el.classList.toggle('grown', i === which));
+  if (which < 0) delete g.root.dataset.open;
+  else g.root.dataset.open = which;
+}
+
+function draw(g) {
+  if (g.grid) {
+    const plan = g.plans[g.open + 1];
+    g.root.style.setProperty('--c1', plan.c1);
+    g.root.style.setProperty('--r1', plan.r1);
+    g.cards.forEach((c, i) => {
+      c.blocks.forEach(b => paint(b, plan.widths[i], plan.zooms[i]));
+      const icon = c.el.querySelector(':scope > .ic');
+      if (icon) icon.style.transform = `scale(${plan.zooms[i]})`;
+    });
+    return;
+  }
+  const widths = g.widths[g.open + 1];
+  g.cards.forEach((c, i) => {
+    const zoom = i === g.open ? g.zoom : 1;
+    if (g.stack) {  // the other cards of a stack get flatter; the open one takes the room their padding gave up
+      const scale = g.open < 0 ? 1 : i === g.open ? 1 : FLAT, extra = i === g.open ? g.extra[i] : 0;
+      c.el.style.paddingTop = c.pad[0] * scale + extra + 'px';
+      c.el.style.paddingBottom = c.pad[1] * scale + extra + 'px';
+    }
+    c.blocks.forEach((b, k) => paint(b, widths[i][k], zoom));
+  });
+}
+
+function render(g, which) {
+  setState(g, which);
+  draw(g);
+}
+
+// With transitions off, try every state once: how wide each block is then (that is up to CSS). In a stack, the
+// padding the other cards give up goes to the open card: first to its bigger words, the rest around them, so the
+// stack keeps its height. Whatever room is still needed (a row's tallest state, words that outgrow the padding) is
+// kept as min-height, on each card in a row and on the whole stack, so nothing below the group moves.
+function measure(g) {
+  if (g.grid) return measureGrid(g);
+  const was = g.open;
+  g.root.classList.add('still');
+  g.root.style.minHeight = '';
+  g.cards.forEach(c => { c.el.style.minHeight = c.el.style.paddingTop = c.el.style.paddingBottom = ''; });
+  const tallest = g.cards.map(() => 0);
+  let total = 0;
+  g.widths = [];
+  for (let which = -1; which < g.cards.length; which++) {
+    setState(g, which);
+    g.widths[which + 1] = g.cards.map(c => c.blocks.map(b => b.el.getBoundingClientRect().width));
+  }
+  if (g.stack) {
+    g.cards.forEach(c => { const cs = getComputedStyle(c.el); c.pad = [px(cs.paddingTop), px(cs.paddingBottom)]; });
+    g.extra = g.cards.map((c, i) => {
+      const words = c.blocks.reduce((grow, b, k) =>
+        grow + place(b, g.widths[i + 1][i][k], g.zoom).height - place(b, g.widths[0][i][k], 1).height, 0);
+      const given = g.cards.reduce((sum, o) => (o === c ? sum : sum + (o.pad[0] + o.pad[1]) * (1 - FLAT)), 0);
+      return Math.max(0, given - words) / 2;
+    });
+  }
+  for (let which = -1; which < g.cards.length; which++) {
+    setState(g, which);
+    draw(g);
+    if (g.stack) total = Math.max(total, g.root.getBoundingClientRect().height);
+    else g.cards.forEach((c, i) => { tallest[i] = Math.max(tallest[i], c.el.getBoundingClientRect().height); });
+  }
+  if (g.stack) g.root.style.minHeight = total + 'px';
+  else g.cards.forEach((c, i) => { c.el.style.minHeight = tallest[i] + 'px'; });
+  render(g, was);
+  void g.root.offsetWidth;
+  g.root.classList.remove('still');
+  g.lastWidth = g.root.clientWidth;
+}
+
+// A 2x2 grid gets equal rows as tall as its tallest item needs, and a plan for each state: where the middle lines go
+// and how big each item's words are (see GRID).
+function measureGrid(g) {
+  const was = g.open;
+  g.root.classList.add('still');
+  g.root.style.height = '';
+  setState(g, -1);
+  g.root.style.setProperty('--c1', 0.5);
+  g.root.style.setProperty('--r1', 0.5);
+  g.cards.forEach(c => {
+    const cs = getComputedStyle(c.el);
+    c.chrome = [
+      c.el.getBoundingClientRect().width - c.blocks[0].el.getBoundingClientRect().width,
+      px(cs.paddingTop) + px(cs.paddingBottom) + px(cs.borderTopWidth) + px(cs.borderBottomWidth) + c.blocks.reduce((sum, b) => {
+        const bs = getComputedStyle(b.el);
+        return sum + px(bs.marginTop) + px(bs.marginBottom);
+      }, 0),
+    ];
+  });
+  const style = getComputedStyle(g.root), across = g.root.clientWidth - px(style.columnGap);
+  const tallest = Math.max(...g.cards.map(c =>
+    c.chrome[1] + c.blocks.reduce((sum, b) => sum + place(b, across / 2 - c.chrome[0], 1).height, 0)));
+  g.size = [across, 2 * tallest];
+  g.root.style.height = 2 * tallest + px(style.rowGap) + 'px';
+  g.plans = [];
+  for (let which = -1; which < g.cards.length; which++) {
+    let share = which < 0 ? 0.5 : GRID.share[0], zooms;
+    for (;;) {
+      zooms = g.cards.map((c, i) => fitZoom(c, cell(g, i, which, share), i === which ? GRID.maxZoom : 1));
+      if (share <= GRID.share[1] || zooms.every((z, i) => z >= (i === which ? 1 : GRID.minZoom))) break;
+      share = Math.max(GRID.share[1], share - GRID.step);
+    }
+    g.plans[which + 1] = {
+      c1: which < 0 ? 0.5 : which % 2 === 0 ? share : 1 - share,
+      r1: which < 0 ? 0.5 : (which >> 1) === 0 ? share : 1 - share,
+      widths: g.cards.map((c, i) => cell(g, i, which, share)[0]),
+      zooms,
+    };
+  }
+  render(g, was);
+  void g.root.offsetWidth;
+  g.root.classList.remove('still');
+  g.lastWidth = g.root.clientWidth;
+}
+
+const resized = new ResizeObserver(entries => entries.forEach(e => {
+  const g = groups.find(g => g.root === e.target);
+  if (g && g.root.clientWidth !== g.lastWidth) measure(g);
+}));
+
+async function start() {
+  if (on) return;
+  pretext ??= await Promise.all([import('./../vendor/pretext/layout.js'), import('./../vendor/pretext/rich-inline.js')])
+    .then(([layout, rich]) => ({ ...layout, ...rich }));
+  if (on || !wide.matches) return;
+  on = true;
+  groups = GROUPS.map(({ root, items, blocks, stack, grid }) => {
+    const el = document.querySelector(root);
+    if (!el) return null;
+    el.classList.add('morph', 'still');
+    const g = {
+      root: el, stack, grid, open: -1, zoom: px(getComputedStyle(el).getPropertyValue('--zoom')),
+      cards: [...el.querySelectorAll(items)].map(card => ({ el: card, blocks: [...card.querySelectorAll(blocks)].map(build) })),
+    };
+    measure(g);
+    resized.observe(el);
+    return g;
+  }).filter(Boolean);
+}
+
+function stop() {
+  if (!on) return;
+  on = false;
+  resized.disconnect();
+  groups.forEach(g => {
+    g.root.classList.remove('morph', 'still');
+    delete g.root.dataset.open;
+    g.root.style.minHeight = g.root.style.height = '';
+    g.root.style.removeProperty('--c1');
+    g.root.style.removeProperty('--r1');
+    g.cards.forEach(c => {
+      c.el.classList.remove('grown');
+      c.el.style.minHeight = c.el.style.paddingTop = c.el.style.paddingBottom = '';
+      const icon = c.el.querySelector(':scope > .ic');
+      if (icon) icon.style.transform = '';
+      c.blocks.forEach(b => { b.el.replaceChildren(...b.plain.childNodes); b.el.classList.remove('flow'); b.el.style.height = ''; });
+    });
+  });
+  groups = [];
+}
+
+// The card under the pointer opens; the gaps inside a group keep its open card open; anywhere else closes it.
+document.addEventListener('pointerover', e => {
+  groups.forEach(g => {
+    const i = g.cards.findIndex(c => c.el.contains(e.target));
+    if (i >= 0 ? i !== g.open : g.open >= 0 && !g.root.contains(e.target)) render(g, i);
+  });
+});
+document.documentElement.addEventListener('pointerleave', () => groups.forEach(g => { if (g.open >= 0) render(g, -1); }));
+wide.addEventListener('change', () => (document.documentElement.lang !== 'en' ? null : wide.matches ? start() : stop()));
+// A window moved to a screen of another density draws borders thinner or thicker without changing any width, so
+// measure again then.
+(function watchDensity() {
+  matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => {
+    groups.forEach(measure);
+    watchDensity();
+  }, { once: true });
+})();
+// Chinese text has no spaces to break at, so the effect (which moves whole words) stays off on the Chinese page.
+if (document.documentElement.lang === 'en') document.fonts.ready.then(() => { if (wide.matches) start(); });
+</script>
+<script src="../vendor/gsap/gsap.min.js"></script>
+<script src="../vendor/gsap/ScrollTrigger.min.js"></script>
+<script src="../story/engine.js"></script>
+<script src="../story/clouds.js"></script>
+<script src="../story/overlay.js"></script>
+<script src="../story/story.js"></script>
+</body>
+</html>

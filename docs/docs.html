@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docs: Premiere Pro Agent Bridge</title>
+<meta name="description" content="Step-by-step help for Premiere Pro Agent Bridge: updating and uninstalling, fixing a panel that says it is not connected, and what it keeps on your PC.">
+<link rel="canonical" href="https://zeussheen.github.io/ppro-agent-bridge/docs.html">
+<link rel="alternate" hreflang="en" href="https://zeussheen.github.io/ppro-agent-bridge/docs.html">
+<link rel="alternate" hreflang="zh-Hans" href="https://zeussheen.github.io/ppro-agent-bridge/zh/docs.html">
+<link rel="alternate" hreflang="x-default" href="https://zeussheen.github.io/ppro-agent-bridge/docs.html">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Docs: Premiere Pro Agent Bridge">
+<meta property="og:description" content="Step-by-step help for Premiere Pro Agent Bridge: updating and uninstalling, fixing a panel that says it is not connected, and what it keeps on your PC.">
+<meta property="og:url" content="https://zeussheen.github.io/ppro-agent-bridge/docs.html">
+<meta property="og:locale" content="en_US">
+<meta property="og:image" content="https://zeussheen.github.io/ppro-agent-bridge/og-image.png?v=0.7.0">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' width='256' height='256'%3E%3Cdefs%3E%3ClinearGradient id='rim' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23fff' stop-opacity='0.55'/%3E%3Cstop offset='0.5' stop-color='%23fff' stop-opacity='0.12'/%3E%3Cstop offset='1' stop-color='%23fff' stop-opacity='0.26'/%3E%3C/linearGradient%3E%3CclipPath id='tile'%3E%3Crect width='256' height='256' rx='56'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect width='256' height='256' rx='56' fill='%2314143F'/%3E%3Cg clip-path='url(%23tile)'%3E%3Cpath d='M0 96L64 96L64 160L176 160L176 208L0 208Z' fill='%239999FF'/%3E%3Cpath d='M80 96L256 96L256 208L192 208L192 144L80 144Z' fill='%23C2C2FF'/%3E%3C/g%3E%3Cpath d='M96 32H160V64L136 88V224H120V88L96 64Z' fill='%23FF7A1A'/%3E%3Crect width='256' height='256' rx='56' fill='none' stroke='url(%23rim)' stroke-width='2'%0A        vector-effect='non-scaling-stroke' clip-path='url(%23tile)'/%3E%3C/svg%3E">
+<link rel="icon" href="favicon.ico" sizes="16x16 24x24 32x32 48x48 64x64 128x128 256x256">
+<script>
+/* The language switch is a plain link. With JavaScript it also remembers the choice, and a later visit to a page in
+   the other language goes straight to this one (a ?lang= in the address skips that). */
+(function () {
+  var KEY = 'ppro-bridge.lang';
+  try {
+    var want = localStorage.getItem(KEY);
+    if (want && want !== 'en' && !/[?&]lang=/.test(location.search)) { location.replace('zh/docs.html' + location.hash); return; }
+  } catch (e) {}
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[data-lang]');
+    if (a) { try { localStorage.setItem(KEY, a.getAttribute('data-lang')); } catch (err) {} }
+  });
+})();
+</script>
+<style>
+/* Shared by every page (build_page.py inlines it): the colours, type, top bar, footer and the Chinese type rules. */
+:root {
+  color-scheme: dark;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --page: #000000;
+  --el: #0d0d0d;
+  --well: #030303;
+  --sh-d: rgba(0, 0, 0, 0.95);
+  --sh-l: rgba(255, 255, 255, 0.055);
+  --hairline: rgba(255, 255, 255, 0.08);
+  --edge: rgba(255, 255, 255, 0.07);
+  --text: #ffffff;
+  --muted: #a3a3a3;
+  --accent: #ffffff;
+  --accent-btn: #ffffff;
+  --accent-hover: #e4e4e4;
+  --accent-text: #e5e5e5;
+  --ok: #ffffff;
+  /* on pure black the light half of a soft shadow turns into a grey smear around every card, so surfaces
+     get only a hairline of light along the top edge (raised) or a tight dark inner shadow (sunken) */
+  --raise: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --raise-sm: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --inset: inset 0 1px 3px rgba(0, 0, 0, 0.9);
+  --inset-sm: inset 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+/* Chinese pages: a CJK stack after the Latin faces (Latin letters keep their look, Chinese falls through to a
+   Chinese face), roomier lines, no tracking (tracking spreads Chinese characters apart), no slanted cite (Chinese
+   titles carry 《》 instead), and punctuation kept off the start of a line. */
+html:lang(zh) {
+  --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB",
+    "Noto Sans SC", "Source Han Sans SC", system-ui, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong",
+    "Microsoft YaHei UI", "Microsoft YaHei", serif;
+}
+html:lang(zh) body { line-height: 1.75; line-break: strict; }
+html:lang(zh) body * { letter-spacing: 0 !important; }
+html:lang(zh) cite, html:lang(zh) em, html:lang(zh) i { font-style: normal; }
+html:lang(zh) :is(h1, h2, h3) { text-wrap: balance; }
+html:lang(zh) p { text-wrap: pretty; }  /* no single character left alone on the last line */
+*, *::before, *::after { box-sizing: border-box; }
+html { background: var(--page); scroll-behavior: smooth; }
+body {
+  margin: 0; font-family: var(--font); font-size: 18px; line-height: 1.6;
+  color: var(--text); background: var(--page); -webkit-font-smoothing: antialiased; overflow-x: hidden;
+}
+h1, h2, h3, p, ol, ul, figure { margin: 0; }
+a { color: inherit; }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; border-radius: 12px; }
+.ic { display: inline-flex; width: 1.15em; height: 1.15em; flex: none; }
+.ic svg { width: 100%; height: 100%; display: block; }
+.nw { white-space: nowrap; }  /* a name that must not break across lines, e.g. Premiere Pro in a Chinese heading */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.wrap { position: relative; z-index: 1; width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+
+/* top bar: the bridge on the left; the sections, GitHub and the language switch on the right */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 0; }
+.brand { display: flex; align-items: center; gap: 12px; text-decoration: none; font-weight: 650; font-size: 17px; }
+.mark { display: block; width: 42px; height: 42px; flex: none; }
+.mark svg { display: block; width: 42px; height: 42px; }  /* the bridge icon: its own tile and glass rim */
+.links { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.links a {
+  text-decoration: none; color: var(--muted); font-size: 16px; padding: 8px 14px; border-radius: 12px;
+  transition: color 160ms var(--ease);
+}
+.links a[aria-current="page"] { color: var(--text); }
+.links a.gh { display: inline-flex; align-items: center; gap: 8px; color: var(--text); box-shadow: var(--raise-sm); }
+/* the language switch: a plain link to the same page in the other language, a hairline round it */
+.links a.lang { color: var(--text); border: 1px solid var(--hairline); padding: 7px 13px; }
+/* glass rim: a thin edge of light, brightest at the top-left corner and fading round the sides */
+.links a.gh {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--el), var(--el)) padding-box,
+    linear-gradient(155deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.09) 26%, rgba(255, 255, 255, 0.03) 60%, rgba(255, 255, 255, 0.15)) border-box;
+}
+@media (hover: hover) and (pointer: fine) {
+  .links a:hover { color: var(--text); }
+  .links a.lang:hover { border-color: rgba(255, 255, 255, 0.24); }
+}
+
+code {
+  font-family: var(--mono); font-size: 0.92em; color: var(--text); padding: 2px 8px; border-radius: 8px;
+  background: var(--well); box-shadow: var(--inset-sm); white-space: nowrap;
+}
+
+/* footer */
+footer.site { margin: 110px 0 0; padding: 30px 0 40px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 15px; display: grid; gap: 6px; text-align: center; }
+footer.site a { color: var(--text); }
+footer.site .more { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px; margin-bottom: 10px; font-size: 16px; }
+
+/* the bar keeps one line: the home page's section links give way first, then Get started, then Docs and What's new
+   (the footer lists those on every page); GitHub and the language switch always stay */
+.brand { flex: none; white-space: nowrap; }
+@media (max-width: 1100px) { .links a.n1 { display: none; } }
+@media (max-width: 900px) { .links a.n2 { display: none; } }
+@media (max-width: 780px) { .links a.n3 { display: none; } }
+@media (max-width: 640px) {
+  body { font-size: 17px; }
+  .top { padding: 16px 0; }
+  .brand { font-size: 16px; }
+}
+@media (max-width: 420px) {
+  .brand .name { display: none; }  /* the icon alone; the page title says the name */
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
+/* The changelog and docs pages (build_page.py inlines it after base.css): one reading column, hairlines between
+   entries, nothing that moves. Everything is in the HTML; the docs script only adds the search box and the
+   copy-link buttons. */
+[hidden] { display: none !important; }
+.page { width: min(780px, 100%); margin: 0 auto; }
+.page-head { padding: 36px 0 8px; text-align: center; }
+.page-head h1 { font-family: var(--serif); font-weight: 400; font-size: clamp(40px, 5.6vw, 60px); line-height: 1.08; letter-spacing: -0.01em; }
+.page-head .lead { max-width: 34em; margin: 18px auto 0; color: var(--muted); font-size: clamp(18px, 2vw, 20px); }
+.page-head .lead a { color: var(--text); }
+.page a { text-underline-offset: 3px; }
+
+/* ---------- changelog ---------- */
+.versions { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 4px; margin: 26px 0 0; padding: 0; list-style: none; }
+.versions a {
+  display: inline-block; padding: 6px 12px; border-radius: 10px; font-size: 16px; color: var(--muted); text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+.release { padding: 40px 0 36px; border-top: 1px solid var(--hairline); scroll-margin-top: 16px; }
+.versions + .release, .page-head + .release { margin-top: 40px; }
+.release-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+.release h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(32px, 4vw, 40px); line-height: 1.1; font-variant-numeric: lining-nums; }
+.release h2 a { text-decoration: none; }
+.release .when { color: var(--muted); font-size: 16px; }
+.tag { display: inline-block; padding: 2px 12px; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 999px; font-size: 16px; color: var(--text); }
+.release .note { margin-top: 12px; color: var(--muted); font-size: 17px; }
+.group { margin-top: 26px; }
+.group h3 { display: flex; align-items: center; gap: 12px; font-size: 17px; font-weight: 650; }
+.group h3::before { content: ""; width: 20px; height: 1px; background: rgba(255, 255, 255, 0.45); }
+.group ul { display: grid; gap: 10px; margin-top: 12px; padding: 0; list-style: none; }
+.group li { position: relative; padding-left: 32px; color: var(--accent-text); font-size: 17.5px; line-height: 1.6; }
+.group li::before { content: ""; position: absolute; left: 7px; top: 0.72em; width: 5px; height: 5px; border-radius: 50%; background: var(--muted); }
+.changelog-end { margin-top: 8px; padding-top: 30px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 16.5px; text-align: center; }
+.changelog-end a { color: var(--text); }
+
+/* ---------- docs ---------- */
+.search { margin: 32px 0 0; }
+.search input {
+  width: 100%; min-height: 56px; padding: 12px 18px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.16);
+  font: inherit; font-size: 18px; color: var(--text); background: var(--well); box-shadow: var(--inset-sm);
+  -webkit-appearance: none; appearance: none;
+}
+.search input::placeholder { color: #8f8f8f; }
+.search input:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: 14px; }
+.search-count { min-height: 1.6em; margin-top: 10px; color: var(--muted); font-size: 16px; }
+.toc { margin: 24px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--hairline); }
+.toc li { border-bottom: 1px solid var(--hairline); }
+.toc a { display: block; padding: 16px 4px; text-decoration: none; }
+.toc .t { display: block; font-size: 18px; font-weight: 600; }
+.toc .s { display: block; margin-top: 2px; color: var(--muted); font-size: 16px; }
+.doc { padding: 64px 0 8px; scroll-margin-top: 16px; }
+.doc h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(30px, 3.8vw, 40px); line-height: 1.15; }
+.doc .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 12px; color: var(--muted); font-size: 16px; }
+.doc .meta a, .copy-link {
+  display: inline-flex; align-items: center; min-height: 36px; padding: 4px 12px; border-radius: 10px;
+  border: 1px solid var(--hairline); background: none; font: inherit; font-size: 16px; color: var(--muted);
+  text-decoration: none; cursor: pointer;
+}
+.copy-link.done { color: var(--text); border-color: rgba(255, 255, 255, 0.3); }
+.doc .summary { margin-top: 18px; color: var(--accent-text); font-size: 19px; line-height: 1.6; }
+.doc h3 { margin-top: 36px; font-size: 20px; font-weight: 650; scroll-margin-top: 16px; }
+.doc ol { display: grid; gap: 18px; margin-top: 18px; padding: 0; list-style: none; counter-reset: step; }
+.doc ol > li { position: relative; padding-left: 52px; color: var(--accent-text); font-size: 17.5px; line-height: 1.65; counter-increment: step; }
+.doc ol > li::before {
+  content: counter(step); position: absolute; left: 0; top: -2px; display: grid; place-items: center; width: 34px; height: 34px;
+  border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.24); font-size: 16px; font-weight: 650; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.doc ol > li > * + * { margin-top: 10px; }
+.doc b { color: var(--text); font-weight: 650; }
+.doc code { white-space: normal; overflow-wrap: anywhere; font-size: 0.88em; }
+.doc samp {
+  display: block; padding: 12px 16px; border-left: 2px solid rgba(255, 255, 255, 0.4); border-radius: 0 8px 8px 0;
+  background: var(--well); font-family: var(--mono); font-size: 16px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere;
+}
+.doc .notes { display: grid; gap: 10px; margin-top: 20px; color: var(--muted); font-size: 17px; }
+.doc .notes a, .doc ol a { color: var(--text); }
+.empty { padding: 28px 0; color: var(--muted); font-size: 17px; }
+.docs-end { margin-top: 64px; padding-top: 30px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 16.5px; text-align: center; }
+.docs-end a { color: var(--text); }
+
+@media (hover: hover) and (pointer: fine) {
+  .versions a:hover, .doc .meta a:hover, .copy-link:hover { color: var(--text); }
+  .toc a:hover .t { text-decoration: underline; text-underline-offset: 4px; }
+}
+@media (max-width: 640px) {
+  .page-head { padding-top: 20px; }
+  .doc ol > li { padding-left: 46px; }
+  .group li { padding-left: 26px; }
+}
+</style>
+</head>
+<body class="docs-page">
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="./">
+      <span class="mark" aria-hidden="true"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><defs><linearGradient id="rim-29" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.55"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.12"/><stop offset="1" stop-color="#fff" stop-opacity="0.26"/></linearGradient><clipPath id="tile-29"><rect width="256" height="256" rx="56"/></clipPath></defs><rect width="256" height="256" rx="56" fill="#14143F"/><g clip-path="url(#tile-29)"><path d="M0 96L64 96L64 160L176 160L176 208L0 208Z" fill="#9999FF"/><path d="M80 96L256 96L256 208L192 208L192 144L80 144Z" fill="#C2C2FF"/></g><path d="M96 32H160V64L136 88V224H120V88L96 64Z" fill="#FF7A1A"/><rect width="256" height="256" rx="56" fill="none" stroke="url(#rim-29)" stroke-width="2"
+        vector-effect="non-scaling-stroke" clip-path="url(#tile-29)"/></svg></span>
+      <span class="name">Premiere Pro Agent Bridge</span>
+    </a>
+    <nav class="links" aria-label="Page">
+      <a class="n1" href="./#how">How it works</a>
+      <a class="n1" href="./#what">What it does</a>
+      <a class="n2" href="./#start">Get started</a>
+      <a class="n1" href="./#faq">Questions</a>
+      <a class="n3" href="docs.html" aria-current="page">Docs</a>
+      <a class="n3" href="changelog.html">What&rsquo;s new</a>
+      <a class="gh" href="https://github.com/ZeusSheen/ppro-agent-bridge"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="32" d="M12 4c1.67 0 2.61 0.4 3 0.5c0.53 -0.43 1.94 -1.5 3.5 -1.5c0.34 1 0.29 2.22 0 3c0.75 1 1 2 1 3.5c0 2.19 -0.48 3.58 -1.5 4.5c-1.02 0.92 -2.11 1.37 -3.5 1.5c0.65 0.54 0.5 1.87 0.5 2.5c0 0.73 0 3 0 3M12 4c-1.67 0 -2.61 0.4 -3 0.5c-0.53 -0.43 -1.94 -1.5 -3.5 -1.5c-0.34 1 -0.29 2.22 0 3c-0.75 1 -1 2 -1 3.5c0 2.19 0.48 3.58 1.5 4.5c1.02 0.92 2.11 1.37 3.5 1.5c-0.65 0.54 -0.5 1.87 -0.5 2.5c0 0.73 0 3 0 3"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="32;0"/></path><path stroke-dasharray="10" stroke-dashoffset="10" d="M9 19c-1.41 0 -2.84 -0.56 -3.69 -1.19c-0.84 -0.63 -1.09 -1.66 -2.31 -2.31"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg></span>GitHub</a>
+      <a class="lang" href="zh/docs.html" hreflang="zh-Hans" lang="zh-Hans" data-lang="zh">中文</a>
+    </nav>
+  </header>
+  <main class="page">
+    <div class="page-head">
+      <h1>Docs</h1>
+      <p class="lead">Step-by-step help, one task per article. Every article has its own link you can copy and send.</p>
+    </div>
+    <div class="search" data-search hidden>
+      <label class="sr" for="doc-search">Search the docs</label>
+      <input id="doc-search" type="search" placeholder="Search: update, port 8017, token" autocomplete="off" spellcheck="false" aria-describedby="doc-count">
+      <p class="search-count" id="doc-count" aria-live="polite"></p>
+    </div>
+    <nav aria-label="Articles">
+      <ul class="toc">
+        <li data-doc="update-uninstall"><a href="#update-uninstall"><span class="t">How to update, and how to uninstall</span><span class="s">To update, replace the bridge folder and start it again. To uninstall, remove the shortcuts, the panel and the folder. At the end: what stays behind.</span></a></li>
+        <li data-doc="not-connected"><a href="#not-connected"><span class="t">The panel says “not connected”</span><span class="s">Go through these checks in order. Most of the time the first one fixes it.</span></a></li>
+        <li data-doc="what-we-keep"><a href="#what-we-keep"><span class="t">What we keep on your PC, where, and for how long</span><span class="s">Everything the bridge writes outside its own folder, where to find it and when it goes away. There is no account and no tracking, and the bridge uploads none of it.</span></a></li>
+      </ul>
+    </nav>
+    <article class="doc" id="update-uninstall" aria-labelledby="update-uninstall-h" data-doc="update-uninstall">
+      <h2 id="update-uninstall-h">How to update, and how to uninstall</h2>
+      <p class="meta"><span>Updated <time datetime="2026-11-06">6 Nov 2026</time></span><a href="#update-uninstall">#&nbsp;Link</a><button type="button" class="copy-link" data-copy="update-uninstall" hidden>Copy link</button></p>
+      <p class="summary">To update, replace the bridge folder and start it again. To uninstall, remove the shortcuts, the panel and the folder. At the end: what stays behind.</p>
+      <h3 id="update">Update (the zip from this website)</h3>
+      <ol>
+        <li><p>Download the new zip from the <a href="./#start">home page</a>. Right-click it and choose <b>Extract All</b>.</p></li>
+        <li><p>Close the bridge window: the black window titled <b>Premiere Agent Bridge</b>.</p></li>
+        <li><p>Replace your old <code>ppro-agent-bridge</code> folder with the <code>ppro-agent-bridge</code> folder from the new zip. Put it in the same place, so your shortcuts keep working.</p></li>
+        <li><p>Double-click the <b>Premiere Agent Bridge</b> shortcut (or <code>2 Start Premiere Agent Bridge.bat</code> from the zip). It loads the new panel into Premiere by itself.</p></li>
+        <li><p>Check: the panel says <b>Connected to broker</b>, and when your helper checks the bridge it reports <code>"compatible": true</code>.</p></li>
+      </ol>
+      <div class="notes">
+        <p>Update the whole folder at once: the bridge, the panel and the command line your helper uses must be the same version.</p>
+        <p>Moved the folder somewhere else? Delete the old <b>Premiere Agent Bridge</b> shortcuts first, then double-click <code>1 Install Premiere Agent Bridge.bat</code> and switch on <b>Shortcut on the desktop</b> to make new ones. The setup window does not replace a shortcut that is already there.</p>
+        <p>Your pairing token and request log stay where they are (<code>%USERPROFILE%\.ppro-agent-bridge</code>), so nothing needs pairing again.</p>
+      </div>
+      <h3 id="uninstall">Uninstall</h3>
+      <ol>
+        <li><p>Close the bridge window, and close the Agent Bridge panel in Premiere.</p></li>
+        <li><p>If the bridge starts with Windows, turn that off: double-click <code>setup_bridge.bat</code> in the bridge folder and switch off <b>Start with Windows</b>. Or delete the <b>Premiere Agent Bridge</b> shortcut in your Startup folder.</p></li>
+        <li><p>Delete the <b>Premiere Agent Bridge</b> shortcuts on your desktop and in the Start menu.</p></li>
+        <li><p>In UXP Developer Tool, unload the Agent Bridge panel. If you once added it there by hand with <b>Add Plugin</b>, remove it from the list too.</p></li>
+        <li><p>Delete the <code>ppro-agent-bridge</code> folder.</p></li>
+        <li><p>If you want, delete the folder <code>%USERPROFILE%\.ppro-agent-bridge</code> as well. It holds the pairing token and the request log (see <a href="#what-we-keep">What we keep on your PC</a>).</p></li>
+      </ol>
+      <div class="notes">
+        <p>What stays behind, because other programs may need it: Python and the Python packages the setup installed, UXP Developer Tool, developer mode (in UXP Developer Tool and in Premiere), and FFmpeg if you installed it. Remove them the usual Windows way if nothing else uses them.</p>
+        <p>What your helper made stays too: transcripts, frames and edit plans in its working folder, restore-point sequences in your projects (named “… [restore date time]”), and, from 0.7, WAV copies made next to FLAC, Opus or Vorbis music.</p>
+      </div>
+      <h3 id="ccx">If you installed the panel as a .ccx package</h3>
+      <ol>
+        <li><p>Close Premiere.</p></li>
+        <li><p>Run Creative Cloud’s plugin installer with <code>/remove "Agent Bridge"</code>. It is <code>UnifiedPluginInstallerAgent.exe</code>, in <code>Common Files\Adobe\Adobe Desktop Common\RemoteComponents\UPI\UnifiedPluginInstallerAgent\</code>.</p></li>
+        <li><p>To update instead of uninstalling: remove it as above, then run the installer with <code>/install</code> and the new .ccx file, still with Premiere closed. Installing over the old version does not reload it.</p></li>
+      </ol>
+      <div class="notes">
+        <p>The .ccx route has not been tested on a real machine yet. Run the installer one call at a time: quick repeated calls can jam it until Creative Cloud restarts.</p>
+      </div>
+    </article>
+    <article class="doc" id="not-connected" aria-labelledby="not-connected-h" data-doc="not-connected">
+      <h2 id="not-connected-h">The panel says “not connected”</h2>
+      <p class="meta"><span>Updated <time datetime="2026-11-06">6 Nov 2026</time></span><a href="#not-connected">#&nbsp;Link</a><button type="button" class="copy-link" data-copy="not-connected" hidden>Copy link</button></p>
+      <p class="summary">Go through these checks in order. Most of the time the first one fixes it.</p>
+      <ol>
+        <li><p><b>Is the bridge window open?</b> The panel’s status line says the following (in a Chinese Premiere: 未连接：桥没有在运行？):</p><samp>Disconnected — broker not running?</samp><p>Click <b>Start bridge</b> on the panel, or double-click the <b>Premiere Agent Bridge</b> shortcut, and leave the black bridge window open while you edit. The first time you click Start bridge, you are asked whether the panel may start it: allow it. The panel connects within about 20 seconds: its icon turns from faded to full colour and the status says <b>Connected to broker</b>.</p></li>
+        <li><p><b>Did the bridge window close at once, or show an error about port 8017?</b> Another program already uses the bridge’s port. The window says, for example:</p><samp>Cannot listen on 127.0.0.1:8017 (…). It is held by PID 1234 (python.exe). Is another broker running? Close that program, then start the broker again.</samp><p>Usually it is a second bridge window that is already running: use that one, or close it and start again. If the message names another program, close that program. (On <code>[::1]:8017</code> the message is a little longer and says the same.) The bridge refuses to share its port on purpose: otherwise the panel would reach the other program instead of the bridge.</p></li>
+        <li><p><b>Does your helper report <code>AUTH_FAILED</code>?</b> The bridge turned down its pairing token. The message begins:</p><samp>This broker (0.6.0) needs the pairing token and got no pairing token. …</samp><p>It means your helper runs another copy or version of the bridge than the bridge window does (a command line older than 0.5 sends no token), runs as another Windows user, or has a <code>PPRO_BRIDGE_TOKEN</code> setting the bridge does not have. Have it use the bridge folder the panel names in its first message, the folder the bridge window runs from. Never paste, copy or send the token itself.</p></li>
+        <li><p><b>Is the panel out of date?</b> When your helper checks the bridge, it reports <code>"compatible": false</code> with a warning such as:</p><samp>Panel is ppro-agent-bridge 0.5.1, CLI is 0.6.0: reload the Agent Bridge panel in UXP Developer Tool.</samp><samp>The panel is stale — its code differs from this checkout's plugin folder: Reload it in UXP Developer Tool.</samp><p>Close the bridge window and start it again: it loads the current panel into Premiere by itself. Or click <b>Reload</b> on the Agent Bridge panel in UXP Developer Tool (which must be running). If the panel says it is <b>stuck</b>, save your project first, then reload it.</p></li>
+        <li><p><b>Was the panel turned away because another one is connected?</b> The status line says:</p><samp>Refused: A live Agent Bridge panel is already connected — retrying in 30 s</samp><p>Only one panel at a time can use the bridge. Another Premiere window (Premiere Pro Beta, say) or a second copy of the panel holds it. Quit the other Premiere, or unload that panel in UXP Developer Tool: closing it is not enough, because a closed panel stays connected. This panel takes over within 30 seconds, or at once when you click <b>Reconnect</b>.</p></li>
+        <li><p><b>Still not connected?</b> Double-click <code>setup_bridge.bat</code> in the bridge folder: the setup window checks Python, Premiere, UXP Developer Tool and developer mode again. Then <a href="https://github.com/ZeusSheen/ppro-agent-bridge/issues">tell me on GitHub</a>. From 0.7 your helper can make a problem report to paste there; it never contains your token.</p></li>
+      </ol>
+      <div class="notes">
+        <p>If your helper says <code>NO_BROKER</code> (“Cannot reach broker at … Is broker.py running?”), the bridge window is not running: start at step 1. If it says <code>NO_PANEL</code> (“No Premiere panel connected. Is Premiere open with the Agent Bridge panel loaded?”), the bridge runs but the panel is not there: open it in Premiere with <b>Window → UXP Plugins → Agent Bridge</b>. If it is not in that menu, run the setup window: UXP Developer Tool or developer mode is probably missing.</p>
+        <p>Closing the panel does not stop or disconnect the bridge: on Premiere 27.1 the panel keeps running while it is closed, and reopening it shows the same page.</p>
+      </div>
+    </article>
+    <article class="doc" id="what-we-keep" aria-labelledby="what-we-keep-h" data-doc="what-we-keep">
+      <h2 id="what-we-keep-h">What we keep on your PC, where, and for how long</h2>
+      <p class="meta"><span>Updated <time datetime="2026-11-06">6 Nov 2026</time></span><a href="#what-we-keep">#&nbsp;Link</a><button type="button" class="copy-link" data-copy="what-we-keep" hidden>Copy link</button></p>
+      <p class="summary">Everything the bridge writes outside its own folder, where to find it and when it goes away. There is no account and no tracking, and the bridge uploads none of it.</p>
+      <ol>
+        <li><p><b>The pairing token:</b> <code>%USERPROFILE%\.ppro-agent-bridge\token</code>. A random secret the bridge makes the first time it starts. Your helper’s command line sends it with every request, so other programs cannot control the bridge. It stays until you delete it; the bridge then makes a new one at its next start. Never share it.</p></li>
+        <li><p><b>The request log:</b> <code>%USERPROFILE%\.ppro-agent-bridge\audit\audit-YYYY-MM-DD.jsonl</code>, one file a day. One line per request: what was asked (long values such as file paths cut short), the sequence it worked on, how it ended and how long it took. <b>Kept 30 days:</b> older files are deleted when the bridge starts. Your helper reads it to find out what happened earlier. To turn it off, set the environment variable <code>PPRO_AUDIT_DIR=off</code>.</p></li>
+        <li><p><b>Shortcuts:</b> <b>Premiere Agent Bridge</b> on your desktop and in the Start menu, and in your Startup folder if you switched on <b>Start with Windows</b>. They stay until you delete them; the setup window can switch Start with Windows off again.</p></li>
+        <li><p><b>The panel in Premiere:</b> the bridge loads it through UXP Developer Tool each time Premiere starts, the same as clicking Load there. UXP Developer Tool and developer mode stay installed and switched on. If you installed the panel as a .ccx, Creative Cloud keeps it until you remove it (see <a href="#uninstall">How to uninstall</a>).</p></li>
+        <li><p><b>WAV copies of music (from 0.7):</b> Premiere cannot read FLAC, Opus or Vorbis. When such a file is imported, a 48 kHz 24-bit WAV is written next to it (<code>song.wav</code>, or <code>song (48k).wav</code> when a different <code>song.wav</code> is already there) and the WAV is imported instead. A WAV of the same length already there is reused. It stays, because your project now uses it.</p></li>
+        <li><p><b>Render leftovers:</b> while Premiere renders an H.264 video, it first writes temporary files next to the target (the file name plus a long code, ending in <code>.m4v</code> and <code>.aac</code>) and writes the <code>.mp4</code> at the end. These are Premiere’s own files; the bridge does not delete them. If a render stopped half-way, you can delete them.</p></li>
+        <li><p><b>Update-check settings (from 0.7):</b> <code>%USERPROFILE%\.ppro-agent-bridge\settings.json</code>. Once a day the bridge asks GitHub for the number of the latest version, so the panel can tell you when a new one is out. It sends no account, machine or user ID. The check is on by default and can be turned off; versions you choose to skip are remembered in this file.</p></li>
+        <li><p><b>What your helper makes:</b> transcripts, exported frames, edit plans and audio for the listening check go into the folder you opened Claude Code or Codex in. In your project, restore points are extra sequences named “… [restore YYYY-MM-DD HH:MM]”; the newest 5 of each sequence are kept. Delete them when you no longer need them.</p></li>
+        <li><p><b>Whisper models,</b> if you transcribe on your PC: the first run downloads the model files. faster-whisper keeps them in its own download folder; the bridge does not choose that place.</p></li>
+      </ol>
+      <div class="notes">
+        <p>Python, its packages, UXP Developer Tool and FFmpeg are programs you installed; they stay until you uninstall them. How to remove the bridge itself: <a href="#uninstall">How to uninstall</a>.</p>
+      </div>
+    </article>
+    <p class="empty" id="doc-empty" hidden>Nothing found. Try another word, or ask on GitHub.</p>
+    <p class="docs-end">Something missing or wrong? <a href="https://github.com/ZeusSheen/ppro-agent-bridge/issues">Tell me on GitHub</a>.</p>
+  </main>
+  <footer class="site">
+    <nav class="more" aria-label="More"><a href="./">Home</a> <a href="docs.html">Docs</a> <a href="changelog.html">What&rsquo;s new</a> <a href="zh/docs.html" hreflang="zh-Hans" lang="zh-Hans" data-lang="zh">中文</a> <a href="https://github.com/ZeusSheen/ppro-agent-bridge">GitHub</a></nav>
+    <p>Premiere Pro Agent Bridge is free and open source (MIT). <a href="https://github.com/ZeusSheen/ppro-agent-bridge">Source code on GitHub</a>.</p>
+    <p>Not made by or endorsed by Adobe, Anthropic or OpenAI. Premiere Pro is a trademark of Adobe.</p>
+    <p>Icons: Material Line Icons by Vjacheslav Trushkin (MIT). Text layout: <a href="https://github.com/chenglou/pretext">Pretext</a> by Cheng Lou (MIT).</p>
+    <p>Animation: <a href="https://gsap.com">GSAP</a> (free under the GreenSock standard license).</p>
+  </footer>
+</div>
+<script>
+/* Search and copy-link: without this script every article is listed and each has a plain # link. The search box
+   hides the articles (and their contents entries) that do not hold every word typed; / or Ctrl+K jumps to it. */
+(function () {
+  var TEXT = {"count_all": "{n} articles", "count_some": "{n} of {total} articles", "copy": "Copy link", "copied": "Copied"};
+  var box = document.querySelector('[data-search]');
+  var input = document.getElementById('doc-search');
+  var count = document.getElementById('doc-count');
+  var empty = document.getElementById('doc-empty');
+  var docs = Array.prototype.slice.call(document.querySelectorAll('article.doc'));
+  var toc = Array.prototype.slice.call(document.querySelectorAll('.toc li'));
+  function norm(s) { return (s.normalize ? s.normalize('NFKC') : s).toLowerCase(); }
+  var hay = docs.map(function (d) { return norm(d.textContent); });
+  function apply() {
+    var words = norm(input.value).split(/\s+/).filter(Boolean), shown = 0;
+    docs.forEach(function (d, i) {
+      var hit = words.every(function (w) { return hay[i].indexOf(w) >= 0; });
+      d.hidden = !hit;
+      if (toc[i]) toc[i].hidden = !hit;
+      if (hit) shown++;
+    });
+    empty.hidden = shown > 0;
+    count.textContent = !words.length ? TEXT.count_all.replace('{n}', docs.length)
+      : shown ? TEXT.count_some.replace('{n}', shown).replace('{total}', docs.length) : '';
+  }
+  if (box && input) {
+    box.hidden = false;
+    input.addEventListener('input', apply);
+    apply();
+    document.addEventListener('keydown', function (e) {
+      var typing = /^(input|textarea|select)$/i.test((document.activeElement || {}).tagName || '');
+      if ((e.key === '/' && !typing) || ((e.ctrlKey || e.metaKey) && (e.key || '').toLowerCase() === 'k')) {
+        e.preventDefault();
+        input.focus();
+        input.select();
+      }
+    });
+    // a link to an article the search has hidden clears the search first
+    window.addEventListener('hashchange', function () {
+      var target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+      var article = target && target.closest('article.doc');
+      if (article && article.hidden) { input.value = ''; apply(); target.scrollIntoView(); }
+    });
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    document.querySelectorAll('.copy-link').forEach(function (b) {
+      b.hidden = false;
+      b.addEventListener('click', function () {
+        var url = location.href.split('#')[0] + '#' + b.getAttribute('data-copy');
+        navigator.clipboard.writeText(url).then(function () {
+          b.textContent = TEXT.copied;
+          b.classList.add('done');
+          setTimeout(function () { b.textContent = TEXT.copy; b.classList.remove('done'); }, 1600);
+        }, function () {});
+      });
+    });
+  }
+})();
+</script>
+</body>
+</html>

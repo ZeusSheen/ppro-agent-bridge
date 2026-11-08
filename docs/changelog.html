@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What&rsquo;s new: Premiere Pro Agent Bridge</title>
+<meta name="description" content="Every version of Premiere Pro Agent Bridge in plain words: what is new, what got better and what was fixed.">
+<link rel="canonical" href="https://zeussheen.github.io/ppro-agent-bridge/changelog.html">
+<link rel="alternate" hreflang="en" href="https://zeussheen.github.io/ppro-agent-bridge/changelog.html">
+<link rel="alternate" hreflang="zh-Hans" href="https://zeussheen.github.io/ppro-agent-bridge/zh/changelog.html">
+<link rel="alternate" hreflang="x-default" href="https://zeussheen.github.io/ppro-agent-bridge/changelog.html">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<meta property="og:type" content="article">
+<meta property="og:title" content="What&rsquo;s new: Premiere Pro Agent Bridge">
+<meta property="og:description" content="Every version of Premiere Pro Agent Bridge in plain words: what is new, what got better and what was fixed.">
+<meta property="og:url" content="https://zeussheen.github.io/ppro-agent-bridge/changelog.html">
+<meta property="og:locale" content="en_US">
+<meta property="og:image" content="https://zeussheen.github.io/ppro-agent-bridge/og-image.png?v=0.7.0">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' width='256' height='256'%3E%3Cdefs%3E%3ClinearGradient id='rim' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23fff' stop-opacity='0.55'/%3E%3Cstop offset='0.5' stop-color='%23fff' stop-opacity='0.12'/%3E%3Cstop offset='1' stop-color='%23fff' stop-opacity='0.26'/%3E%3C/linearGradient%3E%3CclipPath id='tile'%3E%3Crect width='256' height='256' rx='56'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect width='256' height='256' rx='56' fill='%2314143F'/%3E%3Cg clip-path='url(%23tile)'%3E%3Cpath d='M0 96L64 96L64 160L176 160L176 208L0 208Z' fill='%239999FF'/%3E%3Cpath d='M80 96L256 96L256 208L192 208L192 144L80 144Z' fill='%23C2C2FF'/%3E%3C/g%3E%3Cpath d='M96 32H160V64L136 88V224H120V88L96 64Z' fill='%23FF7A1A'/%3E%3Crect width='256' height='256' rx='56' fill='none' stroke='url(%23rim)' stroke-width='2'%0A        vector-effect='non-scaling-stroke' clip-path='url(%23tile)'/%3E%3C/svg%3E">
+<link rel="icon" href="favicon.ico" sizes="16x16 24x24 32x32 48x48 64x64 128x128 256x256">
+<script>
+/* The language switch is a plain link. With JavaScript it also remembers the choice, and a later visit to a page in
+   the other language goes straight to this one (a ?lang= in the address skips that). */
+(function () {
+  var KEY = 'ppro-bridge.lang';
+  try {
+    var want = localStorage.getItem(KEY);
+    if (want && want !== 'en' && !/[?&]lang=/.test(location.search)) { location.replace('zh/changelog.html' + location.hash); return; }
+  } catch (e) {}
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[data-lang]');
+    if (a) { try { localStorage.setItem(KEY, a.getAttribute('data-lang')); } catch (err) {} }
+  });
+})();
+</script>
+<style>
+/* Shared by every page (build_page.py inlines it): the colours, type, top bar, footer and the Chinese type rules. */
+:root {
+  color-scheme: dark;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --page: #000000;
+  --el: #0d0d0d;
+  --well: #030303;
+  --sh-d: rgba(0, 0, 0, 0.95);
+  --sh-l: rgba(255, 255, 255, 0.055);
+  --hairline: rgba(255, 255, 255, 0.08);
+  --edge: rgba(255, 255, 255, 0.07);
+  --text: #ffffff;
+  --muted: #a3a3a3;
+  --accent: #ffffff;
+  --accent-btn: #ffffff;
+  --accent-hover: #e4e4e4;
+  --accent-text: #e5e5e5;
+  --ok: #ffffff;
+  /* on pure black the light half of a soft shadow turns into a grey smear around every card, so surfaces
+     get only a hairline of light along the top edge (raised) or a tight dark inner shadow (sunken) */
+  --raise: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --raise-sm: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --inset: inset 0 1px 3px rgba(0, 0, 0, 0.9);
+  --inset-sm: inset 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+/* Chinese pages: a CJK stack after the Latin faces (Latin letters keep their look, Chinese falls through to a
+   Chinese face), roomier lines, no tracking (tracking spreads Chinese characters apart), no slanted cite (Chinese
+   titles carry 《》 instead), and punctuation kept off the start of a line. */
+html:lang(zh) {
+  --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB",
+    "Noto Sans SC", "Source Han Sans SC", system-ui, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong",
+    "Microsoft YaHei UI", "Microsoft YaHei", serif;
+}
+html:lang(zh) body { line-height: 1.75; line-break: strict; }
+html:lang(zh) body * { letter-spacing: 0 !important; }
+html:lang(zh) cite, html:lang(zh) em, html:lang(zh) i { font-style: normal; }
+html:lang(zh) :is(h1, h2, h3) { text-wrap: balance; }
+html:lang(zh) p { text-wrap: pretty; }  /* no single character left alone on the last line */
+*, *::before, *::after { box-sizing: border-box; }
+html { background: var(--page); scroll-behavior: smooth; }
+body {
+  margin: 0; font-family: var(--font); font-size: 18px; line-height: 1.6;
+  color: var(--text); background: var(--page); -webkit-font-smoothing: antialiased; overflow-x: hidden;
+}
+h1, h2, h3, p, ol, ul, figure { margin: 0; }
+a { color: inherit; }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; border-radius: 12px; }
+.ic { display: inline-flex; width: 1.15em; height: 1.15em; flex: none; }
+.ic svg { width: 100%; height: 100%; display: block; }
+.nw { white-space: nowrap; }  /* a name that must not break across lines, e.g. Premiere Pro in a Chinese heading */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.wrap { position: relative; z-index: 1; width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+
+/* top bar: the bridge on the left; the sections, GitHub and the language switch on the right */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 0; }
+.brand { display: flex; align-items: center; gap: 12px; text-decoration: none; font-weight: 650; font-size: 17px; }
+.mark { display: block; width: 42px; height: 42px; flex: none; }
+.mark svg { display: block; width: 42px; height: 42px; }  /* the bridge icon: its own tile and glass rim */
+.links { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.links a {
+  text-decoration: none; color: var(--muted); font-size: 16px; padding: 8px 14px; border-radius: 12px;
+  transition: color 160ms var(--ease);
+}
+.links a[aria-current="page"] { color: var(--text); }
+.links a.gh { display: inline-flex; align-items: center; gap: 8px; color: var(--text); box-shadow: var(--raise-sm); }
+/* the language switch: a plain link to the same page in the other language, a hairline round it */
+.links a.lang { color: var(--text); border: 1px solid var(--hairline); padding: 7px 13px; }
+/* glass rim: a thin edge of light, brightest at the top-left corner and fading round the sides */
+.links a.gh {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--el), var(--el)) padding-box,
+    linear-gradient(155deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.09) 26%, rgba(255, 255, 255, 0.03) 60%, rgba(255, 255, 255, 0.15)) border-box;
+}
+@media (hover: hover) and (pointer: fine) {
+  .links a:hover { color: var(--text); }
+  .links a.lang:hover { border-color: rgba(255, 255, 255, 0.24); }
+}
+
+code {
+  font-family: var(--mono); font-size: 0.92em; color: var(--text); padding: 2px 8px; border-radius: 8px;
+  background: var(--well); box-shadow: var(--inset-sm); white-space: nowrap;
+}
+
+/* footer */
+footer.site { margin: 110px 0 0; padding: 30px 0 40px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 15px; display: grid; gap: 6px; text-align: center; }
+footer.site a { color: var(--text); }
+footer.site .more { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px; margin-bottom: 10px; font-size: 16px; }
+
+/* the bar keeps one line: the home page's section links give way first, then Get started, then Docs and What's new
+   (the footer lists those on every page); GitHub and the language switch always stay */
+.brand { flex: none; white-space: nowrap; }
+@media (max-width: 1100px) { .links a.n1 { display: none; } }
+@media (max-width: 900px) { .links a.n2 { display: none; } }
+@media (max-width: 780px) { .links a.n3 { display: none; } }
+@media (max-width: 640px) {
+  body { font-size: 17px; }
+  .top { padding: 16px 0; }
+  .brand { font-size: 16px; }
+}
+@media (max-width: 420px) {
+  .brand .name { display: none; }  /* the icon alone; the page title says the name */
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
+/* The changelog and docs pages (build_page.py inlines it after base.css): one reading column, hairlines between
+   entries, nothing that moves. Everything is in the HTML; the docs script only adds the search box and the
+   copy-link buttons. */
+[hidden] { display: none !important; }
+.page { width: min(780px, 100%); margin: 0 auto; }
+.page-head { padding: 36px 0 8px; text-align: center; }
+.page-head h1 { font-family: var(--serif); font-weight: 400; font-size: clamp(40px, 5.6vw, 60px); line-height: 1.08; letter-spacing: -0.01em; }
+.page-head .lead { max-width: 34em; margin: 18px auto 0; color: var(--muted); font-size: clamp(18px, 2vw, 20px); }
+.page-head .lead a { color: var(--text); }
+.page a { text-underline-offset: 3px; }
+
+/* ---------- changelog ---------- */
+.versions { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 4px; margin: 26px 0 0; padding: 0; list-style: none; }
+.versions a {
+  display: inline-block; padding: 6px 12px; border-radius: 10px; font-size: 16px; color: var(--muted); text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+.release { padding: 40px 0 36px; border-top: 1px solid var(--hairline); scroll-margin-top: 16px; }
+.versions + .release, .page-head + .release { margin-top: 40px; }
+.release-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+.release h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(32px, 4vw, 40px); line-height: 1.1; font-variant-numeric: lining-nums; }
+.release h2 a { text-decoration: none; }
+.release .when { color: var(--muted); font-size: 16px; }
+.tag { display: inline-block; padding: 2px 12px; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 999px; font-size: 16px; color: var(--text); }
+.release .note { margin-top: 12px; color: var(--muted); font-size: 17px; }
+.group { margin-top: 26px; }
+.group h3 { display: flex; align-items: center; gap: 12px; font-size: 17px; font-weight: 650; }
+.group h3::before { content: ""; width: 20px; height: 1px; background: rgba(255, 255, 255, 0.45); }
+.group ul { display: grid; gap: 10px; margin-top: 12px; padding: 0; list-style: none; }
+.group li { position: relative; padding-left: 32px; color: var(--accent-text); font-size: 17.5px; line-height: 1.6; }
+.group li::before { content: ""; position: absolute; left: 7px; top: 0.72em; width: 5px; height: 5px; border-radius: 50%; background: var(--muted); }
+.changelog-end { margin-top: 8px; padding-top: 30px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 16.5px; text-align: center; }
+.changelog-end a { color: var(--text); }
+
+/* ---------- docs ---------- */
+.search { margin: 32px 0 0; }
+.search input {
+  width: 100%; min-height: 56px; padding: 12px 18px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.16);
+  font: inherit; font-size: 18px; color: var(--text); background: var(--well); box-shadow: var(--inset-sm);
+  -webkit-appearance: none; appearance: none;
+}
+.search input::placeholder { color: #8f8f8f; }
+.search input:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: 14px; }
+.search-count { min-height: 1.6em; margin-top: 10px; color: var(--muted); font-size: 16px; }
+.toc { margin: 24px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--hairline); }
+.toc li { border-bottom: 1px solid var(--hairline); }
+.toc a { display: block; padding: 16px 4px; text-decoration: none; }
+.toc .t { display: block; font-size: 18px; font-weight: 600; }
+.toc .s { display: block; margin-top: 2px; color: var(--muted); font-size: 16px; }
+.doc { padding: 64px 0 8px; scroll-margin-top: 16px; }
+.doc h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(30px, 3.8vw, 40px); line-height: 1.15; }
+.doc .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 12px; color: var(--muted); font-size: 16px; }
+.doc .meta a, .copy-link {
+  display: inline-flex; align-items: center; min-height: 36px; padding: 4px 12px; border-radius: 10px;
+  border: 1px solid var(--hairline); background: none; font: inherit; font-size: 16px; color: var(--muted);
+  text-decoration: none; cursor: pointer;
+}
+.copy-link.done { color: var(--text); border-color: rgba(255, 255, 255, 0.3); }
+.doc .summary { margin-top: 18px; color: var(--accent-text); font-size: 19px; line-height: 1.6; }
+.doc h3 { margin-top: 36px; font-size: 20px; font-weight: 650; scroll-margin-top: 16px; }
+.doc ol { display: grid; gap: 18px; margin-top: 18px; padding: 0; list-style: none; counter-reset: step; }
+.doc ol > li { position: relative; padding-left: 52px; color: var(--accent-text); font-size: 17.5px; line-height: 1.65; counter-increment: step; }
+.doc ol > li::before {
+  content: counter(step); position: absolute; left: 0; top: -2px; display: grid; place-items: center; width: 34px; height: 34px;
+  border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.24); font-size: 16px; font-weight: 650; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.doc ol > li > * + * { margin-top: 10px; }
+.doc b { color: var(--text); font-weight: 650; }
+.doc code { white-space: normal; overflow-wrap: anywhere; font-size: 0.88em; }
+.doc samp {
+  display: block; padding: 12px 16px; border-left: 2px solid rgba(255, 255, 255, 0.4); border-radius: 0 8px 8px 0;
+  background: var(--well); font-family: var(--mono); font-size: 16px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere;
+}
+.doc .notes { display: grid; gap: 10px; margin-top: 20px; color: var(--muted); font-size: 17px; }
+.doc .notes a, .doc ol a { color: var(--text); }
+.empty { padding: 28px 0; color: var(--muted); font-size: 17px; }
+.docs-end { margin-top: 64px; padding-top: 30px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 16.5px; text-align: center; }
+.docs-end a { color: var(--text); }
+
+@media (hover: hover) and (pointer: fine) {
+  .versions a:hover, .doc .meta a:hover, .copy-link:hover { color: var(--text); }
+  .toc a:hover .t { text-decoration: underline; text-underline-offset: 4px; }
+}
+@media (max-width: 640px) {
+  .page-head { padding-top: 20px; }
+  .doc ol > li { padding-left: 46px; }
+  .group li { padding-left: 26px; }
+}
+</style>
+</head>
+<body class="changelog-page">
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="./">
+      <span class="mark" aria-hidden="true"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><defs><linearGradient id="rim-27" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.55"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.12"/><stop offset="1" stop-color="#fff" stop-opacity="0.26"/></linearGradient><clipPath id="tile-27"><rect width="256" height="256" rx="56"/></clipPath></defs><rect width="256" height="256" rx="56" fill="#14143F"/><g clip-path="url(#tile-27)"><path d="M0 96L64 96L64 160L176 160L176 208L0 208Z" fill="#9999FF"/><path d="M80 96L256 96L256 208L192 208L192 144L80 144Z" fill="#C2C2FF"/></g><path d="M96 32H160V64L136 88V224H120V88L96 64Z" fill="#FF7A1A"/><rect width="256" height="256" rx="56" fill="none" stroke="url(#rim-27)" stroke-width="2"
+        vector-effect="non-scaling-stroke" clip-path="url(#tile-27)"/></svg></span>
+      <span class="name">Premiere Pro Agent Bridge</span>
+    </a>
+    <nav class="links" aria-label="Page">
+      <a class="n1" href="./#how">How it works</a>
+      <a class="n1" href="./#what">What it does</a>
+      <a class="n2" href="./#start">Get started</a>
+      <a class="n1" href="./#faq">Questions</a>
+      <a class="n3" href="docs.html">Docs</a>
+      <a class="n3" href="changelog.html" aria-current="page">What&rsquo;s new</a>
+      <a class="gh" href="https://github.com/ZeusSheen/ppro-agent-bridge"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="32" d="M12 4c1.67 0 2.61 0.4 3 0.5c0.53 -0.43 1.94 -1.5 3.5 -1.5c0.34 1 0.29 2.22 0 3c0.75 1 1 2 1 3.5c0 2.19 -0.48 3.58 -1.5 4.5c-1.02 0.92 -2.11 1.37 -3.5 1.5c0.65 0.54 0.5 1.87 0.5 2.5c0 0.73 0 3 0 3M12 4c-1.67 0 -2.61 0.4 -3 0.5c-0.53 -0.43 -1.94 -1.5 -3.5 -1.5c-0.34 1 -0.29 2.22 0 3c-0.75 1 -1 2 -1 3.5c0 2.19 0.48 3.58 1.5 4.5c1.02 0.92 2.11 1.37 3.5 1.5c-0.65 0.54 -0.5 1.87 -0.5 2.5c0 0.73 0 3 0 3"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="32;0"/></path><path stroke-dasharray="10" stroke-dashoffset="10" d="M9 19c-1.41 0 -2.84 -0.56 -3.69 -1.19c-0.84 -0.63 -1.09 -1.66 -2.31 -2.31"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg></span>GitHub</a>
+      <a class="lang" href="zh/changelog.html" hreflang="zh-Hans" lang="zh-Hans" data-lang="zh">中文</a>
+    </nav>
+  </header>
+  <main class="page">
+    <div class="page-head">
+      <h1>What&rsquo;s new</h1>
+      <p class="lead">Every version in plain words, newest first. The full technical list is in the <a href="https://github.com/ZeusSheen/ppro-agent-bridge#changelog">README on GitHub</a>.</p>
+    </div>
+    <nav aria-label="Versions"><ul class="versions"><li><a href="#v0-7-0">0.7.0</a></li><li><a href="#v0-6-0">0.6.0</a></li><li><a href="#v0-5-1">0.5.1</a></li><li><a href="#v0-5-0">0.5.0</a></li><li><a href="#v0-4-0">0.4.0</a></li><li><a href="#v0-3-3">0.3.3</a></li><li><a href="#v0-3-2">0.3.2</a></li><li><a href="#v0-2">0.2</a></li></ul></nav>
+    <article class="release" id="v0-7-0" aria-labelledby="v0-7-0-h">
+      <div class="release-head"><h2 id="v0-7-0-h"><a href="#v0-7-0">0.7.0</a></h2><time class="when" datetime="2026-11-08">8 Nov 2026</time></div>
+      <section class="group">
+        <h3>New</h3>
+        <ul>
+          <li>An installer: <code>PremiereAgentBridge-Setup-0.7.0.exe</code> puts the bridge on your computer with its own Python, a Start menu shortcut and an uninstaller, without asking for admin rights. It is not signed yet, so Windows may say "Windows protected your PC": click More info, then Run anyway. The zip still works as before.</li>
+          <li>Your AI helper can now talk to Premiere through MCP, the standard way AI apps connect to tools, as well as through the command line. Anything that deletes or moves clips shows you what it would do first and only goes ahead once it is confirmed.</li>
+          <li>Small edits in one go: markers, clip names, turning clips on and off, a setting's value, the sequence's in and out points, track and bin names. They land as one step in Premiere's undo history, and each one is checked afterwards.</li>
+          <li>The panel tells you when a new version is out, and you can skip that version. The bridge checks GitHub at most once a day and sends nothing about your computer or your projects; you can turn the check off.</li>
+          <li>A "Copy a problem report" box in the panel (click it, then press Ctrl+C) and a link to GitHub Issues. The report holds versions and check results, never your pairing token, project names or media paths, and you see all of it before copying.</li>
+          <li>Your helper can save the timeline for other editing apps, as AAF or as Final Cut Pro 7 XML. For AAF, Premiere may show a log window you need to click OK on; the bridge keeps working meanwhile and tells you so.</li>
+          <li>A problem report the helper can print too, to paste into a GitHub issue.</li>
+          <li>B-roll can go in as picture only, without its sound landing on your audio tracks, and your AI helper can make a named copy of a sequence for another version of the cut.</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>Improved</h3>
+        <ul>
+          <li>Safer: before the release, a team of AI agents attacked the bridge on a test machine and every hole they found was fixed (the full report is SECURITY_REVIEW.md in the download). The bridge, the panel and your AI helper now prove to each other that they know the pairing secret without ever sending it, so another program cannot pretend to be one of them. Network folders are refused even when they are reached through a shortcut-like link, and UXP Developer Tool only runs for the few seconds it takes to load the panel.</li>
+          <li>Update the bridge and the panel together: the 0.7 bridge does not talk to a 0.6 panel. Starting the bridge with its shortcut loads the new panel by itself.</li>
+          <li>Commands start about twice as fast: a simple check now takes about a quarter of a second instead of half a second.</li>
+          <li>Switching to another sequence is now checked before the helper carries on, so it never edits the wrong sequence after a switch that did not take.</li>
+          <li>Before removing clips, your AI helper can have the bridge check them by name, so a clip you moved onto that track in the meantime is left alone. An audio effect can go on every clip in a range at once.</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>Fixed</h3>
+        <ul>
+          <li>Moving clips (closing a gap, making room, cutting out a stretch) left their video transitions behind. Now the transitions are put back on their clips and checked afterwards; where Premiere cannot put one back exactly, the helper tells you which one and how to add it by hand.</li>
+          <li>Vertical clips from Sony and phone cameras, stored sideways with a rotation tag, now fit and fill the frame the way Premiere shows them.</li>
+          <li>Music in FLAC, Opus or Vorbis, which Premiere cannot read, is turned into a WAV next to the original, and that WAV is imported. Before, a FLAC file could hang the panel.</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-6-0" aria-labelledby="v0-6-0-h">
+      <div class="release-head"><h2 id="v0-6-0-h"><a href="#v0-6-0">0.6.0</a></h2><time class="when" datetime="2026-11-03">3 Nov 2026</time></div>
+      <section class="group">
+        <h3>New</h3>
+        <ul>
+          <li>An icon of its own: a deep purple tile with an orange playhead. It is on the shortcut, in the setup window and on the panel.</li>
+          <li>A friendlier panel. Its icon is in full colour while the bridge runs and faded when it does not. The first time, it shows two steps: open Claude Code or Codex in a folder for the job, then paste a ready-made first message. In a Chinese Premiere it speaks Chinese.</li>
+          <li>A <b>Start bridge</b> button on the panel while the bridge is not running.</li>
+          <li>Restore points: before a risky edit, your helper can copy the sequence (the copy is named “… [restore date time]”) and save the project.</li>
+          <li>Taking things off again: markers, transitions, effects, keyframes, and items no sequence in the project uses any more.</li>
+          <li>Moving everything after a point on every track at once, in sync, as one undo step.</li>
+          <li>Rendering the finished video inside Premiere with one of its presets, then checking its frame size, frame rate and length.</li>
+          <li>Audio effects by name (DeNoise, for example), and Premiere’s effect presets, such as the picture-in-picture moves.</li>
+          <li>Subclips, and pointing a clip at a new file once the file is checked to match.</li>
+          <li>Selecting clips for Premiere’s own panels, so you can turn on Enhance Audio for many clips in one go.</li>
+          <li>Eased keyframes, for a smooth move such as a slow zoom.</li>
+          <li>The setup also puts the shortcut in the Start menu.</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>Improved</h3>
+        <ul>
+          <li>Changing volume or size over a stretch of time now changes only the clips fully inside it. A neighbour that just touches it is left alone.</li>
+          <li>Effects added to a title go before its text, where they actually work.</li>
+          <li>Every change can be previewed first, stops before changing anything when something is wrong, is one undo step wherever Premiere allows, and is read back afterwards.</li>
+          <li>Safety: your helper can ask for a change to be refused if the timeline changed since it last read it. More than 300 changes a minute are stopped, as a guard against a runaway script.</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>Fixed</h3>
+        <ul>
+          <li>On Premiere 27.1, pieces cut with versions 0.4.0 to 0.5.1 could look right on the timeline but play silent or blank. Fixed. Ask your helper to check older timelines by rendering them.</li>
+          <li>YouTube downloads in formats Premiere cannot import (VP9, AV1, Opus) used to hang the panel. Now they are turned away first, with the command that converts them.</li>
+          <li>Clips whose picture stops before their sound no longer land a few frames short.</li>
+          <li>Safety: the bridge does not start when another program holds its port, and says which program. Network-share paths are refused, so Windows never offers your sign-in to another computer: put NAS media on a mapped drive letter.</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-5-1" aria-labelledby="v0-5-1-h">
+      <div class="release-head"><h2 id="v0-5-1-h"><a href="#v0-5-1">0.5.1</a></h2><time class="when" datetime="2026-10-23">23 Oct 2026</time></div>
+      <p class="note">A small release. Nothing else changed.</p>
+      <section class="group">
+        <h3>Improved</h3>
+        <ul>
+          <li>The setup window looks like the website now: pure black, white main buttons, no blurry haze or grey halos. Green, amber and red still mark ready, optional and needs setup, always with an icon and a word.</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-5-0" aria-labelledby="v0-5-0-h">
+      <div class="release-head"><h2 id="v0-5-0-h"><a href="#v0-5-0">0.5.0</a></h2><time class="when" datetime="2026-10-22">22 Oct 2026</time></div>
+      <p class="note">Also brings everything from 0.4.0 and 0.3.3, which were not released on their own. Update the whole bridge folder at once: an older command line cannot talk to this bridge.</p>
+      <section class="group">
+        <h3>New</h3>
+        <ul>
+          <li>Setup in a window: double-click <code>setup_bridge.bat</code> and it checks your computer step by step, with a button for each fix.</li>
+          <li>Start with one double-click: <code>start_bridge.bat</code> starts the bridge and loads the panel into Premiere by itself, also after Premiere restarts. No more clicking Load in UXP Developer Tool.</li>
+          <li>Pairing: only programs that can read a secret key in your Windows user folder can control the bridge. Every request goes into a log that is kept 30 days.</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>Improved</h3>
+        <ul>
+          <li>Swapping clips (for a language version, say) keeps a neighbour’s fade where it belongs, and stops before changing anything when an effect cannot come along.</li>
+          <li>Adding a transition where one already is now says so, instead of quietly keeping the old one.</li>
+          <li>Opening up a cut warns first when a fade’s keyframe would leave the new part silent or invisible.</li>
+          <li>Frames that export all black are flagged, so your helper asks you to look before acting on them.</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>Fixed</h3>
+        <ul>
+          <li>Clips with no media file of their own (Enhance Speech results, for example) were measured as silence in the listening check. Now the check says so and listens to Premiere’s own render instead.</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-4-0" aria-labelledby="v0-4-0-h">
+      <div class="release-head"><h2 id="v0-4-0-h"><a href="#v0-4-0">0.4.0</a></h2><time class="when" datetime="2026-10-18">18 Oct 2026</time></div>
+      <p class="note">Not released on its own: it came with 0.5.0.</p>
+      <section class="group">
+        <h3>New</h3>
+        <ul>
+          <li>A listening check: your helper listens to every cut for breathing room, clipped words, jumps in room tone and clicks, and checks the timeline for slivers, gaps and cuts off the frame grid.</li>
+          <li>Cutting without a razor: split a clip, cut a stretch out of every track and close the gap in sync, or open up a cut with more of the clip’s own footage. Your volume, size and effects stay.</li>
+          <li>Premiere’s own Speech-to-Text (Premiere 26.5 or newer).</li>
+          <li>Clip volume in dB, effect settings and keyframes, and transitions.</li>
+          <li>Pre-rendered caption movies are trimmed so that no line flashes up or gets cut off at a cut.</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>Improved</h3>
+        <ul>
+          <li>The panel checks every request before it runs anything, and every failure says whether anything changed.</li>
+          <li>Edits land exactly on frames.</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>Fixed</h3>
+        <ul>
+          <li>A transcript attached to a clip is now read back to check it. Some Premiere 26 builds import an empty transcript; that is reported instead of passing as a success.</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-3-3" aria-labelledby="v0-3-3-h">
+      <div class="release-head"><h2 id="v0-3-3-h"><a href="#v0-3-3">0.3.3</a></h2><time class="when" datetime="2026-10-17">17 Oct 2026</time></div>
+      <p class="note">A safety release. Not released on its own: it came with 0.5.0.</p>
+      <section class="group">
+        <h3>Improved</h3>
+        <ul>
+          <li>One step at a time: the bridge hands Premiere one request after another, because several at once can crash Premiere.</li>
+          <li>Every failure says whether anything changed, so you know when it is safe to try again.</li>
+          <li>Protection against editing the wrong sequence, and against mixing up two project items with the same name.</li>
+          <li>Swapping a clip puts the new clip’s sound on a free audio track instead of over your music.</li>
+          <li>Needs Premiere Pro 26.3 or newer.</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>Fixed</h3>
+        <ul>
+          <li>Clips were sometimes placed one frame short.</li>
+          <li>Safety: no web page can reach the bridge any more, including pages on your own computer.</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-3-2" aria-labelledby="v0-3-2-h">
+      <div class="release-head"><h2 id="v0-3-2-h"><a href="#v0-3-2">0.3.2</a></h2><time class="when" datetime="2026-10-17">17 Oct 2026</time></div>
+      <p class="note">Includes 0.3.0 and 0.3.1.</p>
+      <section class="group">
+        <h3>New</h3>
+        <ul>
+          <li>Edit plans: B-roll and graphics placed in one pass from a list, with a preview first and every clip checked after it is placed.</li>
+          <li>Your helper can see what an editor did to each clip (position, size, opacity, effects, keyframes), and swap the media while keeping all of it.</li>
+          <li>Scaling to fit or fill, interpreting footage at another frame rate, timeline markers, and removing the clips in a stretch of time.</li>
+          <li>Contact sheets: several frames in one picture.</li>
+          <li>A version check that says when the panel does not match.</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>Fixed</h3>
+        <ul>
+          <li>Importing media on Premiere 27.1.</li>
+          <li>Off-by-one-frame errors from 59.94 vs 60 fps footage, from the end of a clip’s media and from transition lengths.</li>
+          <li>Safety: web pages open in your browser can no longer connect to the bridge while it runs.</li>
+        </ul>
+      </section>
+    </article>
+    <article class="release" id="v0-2" aria-labelledby="v0-2-h">
+      <div class="release-head"><h2 id="v0-2-h"><a href="#v0-2">0.2</a></h2><time class="when" datetime="2026-07-14">14 Jul 2026</time></div>
+      <section class="group">
+        <h3>New</h3>
+        <ul>
+          <li>Transcription on your own PC, with Whisper.</li>
+          <li>A list of sentences with timecodes, so cuts are decided from what was said.</li>
+          <li>Cutting by sentence: only the part of a clip where a sentence is said goes on the timeline.</li>
+          <li>Attaching a transcript to a clip in Premiere.</li>
+          <li>Works with Codex as well as Claude Code.</li>
+        </ul>
+      </section>
+    </article>
+    <p class="changelog-end">Want an older version? <a href="https://github.com/ZeusSheen/ppro-agent-bridge/releases">All versions are on GitHub</a>.</p>
+  </main>
+  <footer class="site">
+    <nav class="more" aria-label="More"><a href="./">Home</a> <a href="docs.html">Docs</a> <a href="changelog.html">What&rsquo;s new</a> <a href="zh/changelog.html" hreflang="zh-Hans" lang="zh-Hans" data-lang="zh">中文</a> <a href="https://github.com/ZeusSheen/ppro-agent-bridge">GitHub</a></nav>
+    <p>Premiere Pro Agent Bridge is free and open source (MIT). <a href="https://github.com/ZeusSheen/ppro-agent-bridge">Source code on GitHub</a>.</p>
+    <p>Not made by or endorsed by Adobe, Anthropic or OpenAI. Premiere Pro is a trademark of Adobe.</p>
+    <p>Icons: Material Line Icons by Vjacheslav Trushkin (MIT). Text layout: <a href="https://github.com/chenglou/pretext">Pretext</a> by Cheng Lou (MIT).</p>
+    <p>Animation: <a href="https://gsap.com">GSAP</a> (free under the GreenSock standard license).</p>
+  </footer>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>使用文档：Premiere Pro Agent Bridge</title>
+<meta name="description" content="Premiere Pro Agent Bridge 的分步说明：怎么更新和卸载、面板显示未连接怎么排查、我们在你电脑上放了什么。">
+<link rel="canonical" href="https://zeussheen.github.io/ppro-agent-bridge/zh/docs.html">
+<link rel="alternate" hreflang="en" href="https://zeussheen.github.io/ppro-agent-bridge/docs.html">
+<link rel="alternate" hreflang="zh-Hans" href="https://zeussheen.github.io/ppro-agent-bridge/zh/docs.html">
+<link rel="alternate" hreflang="x-default" href="https://zeussheen.github.io/ppro-agent-bridge/docs.html">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<meta property="og:type" content="article">
+<meta property="og:title" content="使用文档：Premiere Pro Agent Bridge">
+<meta property="og:description" content="Premiere Pro Agent Bridge 的分步说明：怎么更新和卸载、面板显示未连接怎么排查、我们在你电脑上放了什么。">
+<meta property="og:url" content="https://zeussheen.github.io/ppro-agent-bridge/zh/docs.html">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://zeussheen.github.io/ppro-agent-bridge/og-image.png?v=0.7.0">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' width='256' height='256'%3E%3Cdefs%3E%3ClinearGradient id='rim' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23fff' stop-opacity='0.55'/%3E%3Cstop offset='0.5' stop-color='%23fff' stop-opacity='0.12'/%3E%3Cstop offset='1' stop-color='%23fff' stop-opacity='0.26'/%3E%3C/linearGradient%3E%3CclipPath id='tile'%3E%3Crect width='256' height='256' rx='56'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect width='256' height='256' rx='56' fill='%2314143F'/%3E%3Cg clip-path='url(%23tile)'%3E%3Cpath d='M0 96L64 96L64 160L176 160L176 208L0 208Z' fill='%239999FF'/%3E%3Cpath d='M80 96L256 96L256 208L192 208L192 144L80 144Z' fill='%23C2C2FF'/%3E%3C/g%3E%3Cpath d='M96 32H160V64L136 88V224H120V88L96 64Z' fill='%23FF7A1A'/%3E%3Crect width='256' height='256' rx='56' fill='none' stroke='url(%23rim)' stroke-width='2'%0A        vector-effect='non-scaling-stroke' clip-path='url(%23tile)'/%3E%3C/svg%3E">
+<link rel="icon" href="../favicon.ico" sizes="16x16 24x24 32x32 48x48 64x64 128x128 256x256">
+<script>
+/* The language switch is a plain link. With JavaScript it also remembers the choice, and a later visit to a page in
+   the other language goes straight to this one (a ?lang= in the address skips that). */
+(function () {
+  var KEY = 'ppro-bridge.lang';
+  try {
+    var want = localStorage.getItem(KEY);
+    if (want && want !== 'zh' && !/[?&]lang=/.test(location.search)) { location.replace('../docs.html' + location.hash); return; }
+  } catch (e) {}
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a[data-lang]');
+    if (a) { try { localStorage.setItem(KEY, a.getAttribute('data-lang')); } catch (err) {} }
+  });
+})();
+</script>
+<style>
+/* Shared by every page (build_page.py inlines it): the colours, type, top bar, footer and the Chinese type rules. */
+:root {
+  color-scheme: dark;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+  --page: #000000;
+  --el: #0d0d0d;
+  --well: #030303;
+  --sh-d: rgba(0, 0, 0, 0.95);
+  --sh-l: rgba(255, 255, 255, 0.055);
+  --hairline: rgba(255, 255, 255, 0.08);
+  --edge: rgba(255, 255, 255, 0.07);
+  --text: #ffffff;
+  --muted: #a3a3a3;
+  --accent: #ffffff;
+  --accent-btn: #ffffff;
+  --accent-hover: #e4e4e4;
+  --accent-text: #e5e5e5;
+  --ok: #ffffff;
+  /* on pure black the light half of a soft shadow turns into a grey smear around every card, so surfaces
+     get only a hairline of light along the top edge (raised) or a tight dark inner shadow (sunken) */
+  --raise: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --raise-sm: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --inset: inset 0 1px 3px rgba(0, 0, 0, 0.9);
+  --inset-sm: inset 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+/* Chinese pages: a CJK stack after the Latin faces (Latin letters keep their look, Chinese falls through to a
+   Chinese face), roomier lines, no tracking (tracking spreads Chinese characters apart), no slanted cite (Chinese
+   titles carry 《》 instead), and punctuation kept off the start of a line. */
+html:lang(zh) {
+  --font: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB",
+    "Noto Sans SC", "Source Han Sans SC", system-ui, sans-serif;
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong",
+    "Microsoft YaHei UI", "Microsoft YaHei", serif;
+}
+html:lang(zh) body { line-height: 1.75; line-break: strict; }
+html:lang(zh) body * { letter-spacing: 0 !important; }
+html:lang(zh) cite, html:lang(zh) em, html:lang(zh) i { font-style: normal; }
+html:lang(zh) :is(h1, h2, h3) { text-wrap: balance; }
+html:lang(zh) p { text-wrap: pretty; }  /* no single character left alone on the last line */
+*, *::before, *::after { box-sizing: border-box; }
+html { background: var(--page); scroll-behavior: smooth; }
+body {
+  margin: 0; font-family: var(--font); font-size: 18px; line-height: 1.6;
+  color: var(--text); background: var(--page); -webkit-font-smoothing: antialiased; overflow-x: hidden;
+}
+h1, h2, h3, p, ol, ul, figure { margin: 0; }
+a { color: inherit; }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 3px; border-radius: 12px; }
+.ic { display: inline-flex; width: 1.15em; height: 1.15em; flex: none; }
+.ic svg { width: 100%; height: 100%; display: block; }
+.nw { white-space: nowrap; }  /* a name that must not break across lines, e.g. Premiere Pro in a Chinese heading */
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.wrap { position: relative; z-index: 1; width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+
+/* top bar: the bridge on the left; the sections, GitHub and the language switch on the right */
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 0; }
+.brand { display: flex; align-items: center; gap: 12px; text-decoration: none; font-weight: 650; font-size: 17px; }
+.mark { display: block; width: 42px; height: 42px; flex: none; }
+.mark svg { display: block; width: 42px; height: 42px; }  /* the bridge icon: its own tile and glass rim */
+.links { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.links a {
+  text-decoration: none; color: var(--muted); font-size: 16px; padding: 8px 14px; border-radius: 12px;
+  transition: color 160ms var(--ease);
+}
+.links a[aria-current="page"] { color: var(--text); }
+.links a.gh { display: inline-flex; align-items: center; gap: 8px; color: var(--text); box-shadow: var(--raise-sm); }
+/* the language switch: a plain link to the same page in the other language, a hairline round it */
+.links a.lang { color: var(--text); border: 1px solid var(--hairline); padding: 7px 13px; }
+/* glass rim: a thin edge of light, brightest at the top-left corner and fading round the sides */
+.links a.gh {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--el), var(--el)) padding-box,
+    linear-gradient(155deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.09) 26%, rgba(255, 255, 255, 0.03) 60%, rgba(255, 255, 255, 0.15)) border-box;
+}
+@media (hover: hover) and (pointer: fine) {
+  .links a:hover { color: var(--text); }
+  .links a.lang:hover { border-color: rgba(255, 255, 255, 0.24); }
+}
+
+code {
+  font-family: var(--mono); font-size: 0.92em; color: var(--text); padding: 2px 8px; border-radius: 8px;
+  background: var(--well); box-shadow: var(--inset-sm); white-space: nowrap;
+}
+
+/* footer */
+footer.site { margin: 110px 0 0; padding: 30px 0 40px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 15px; display: grid; gap: 6px; text-align: center; }
+footer.site a { color: var(--text); }
+footer.site .more { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px; margin-bottom: 10px; font-size: 16px; }
+
+/* the bar keeps one line: the home page's section links give way first, then Get started, then Docs and What's new
+   (the footer lists those on every page); GitHub and the language switch always stay */
+.brand { flex: none; white-space: nowrap; }
+@media (max-width: 1100px) { .links a.n1 { display: none; } }
+@media (max-width: 900px) { .links a.n2 { display: none; } }
+@media (max-width: 780px) { .links a.n3 { display: none; } }
+@media (max-width: 640px) {
+  body { font-size: 17px; }
+  .top { padding: 16px 0; }
+  .brand { font-size: 16px; }
+}
+@media (max-width: 420px) {
+  .brand .name { display: none; }  /* the icon alone; the page title says the name */
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
+/* The changelog and docs pages (build_page.py inlines it after base.css): one reading column, hairlines between
+   entries, nothing that moves. Everything is in the HTML; the docs script only adds the search box and the
+   copy-link buttons. */
+[hidden] { display: none !important; }
+.page { width: min(780px, 100%); margin: 0 auto; }
+.page-head { padding: 36px 0 8px; text-align: center; }
+.page-head h1 { font-family: var(--serif); font-weight: 400; font-size: clamp(40px, 5.6vw, 60px); line-height: 1.08; letter-spacing: -0.01em; }
+.page-head .lead { max-width: 34em; margin: 18px auto 0; color: var(--muted); font-size: clamp(18px, 2vw, 20px); }
+.page-head .lead a { color: var(--text); }
+.page a { text-underline-offset: 3px; }
+
+/* ---------- changelog ---------- */
+.versions { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 4px; margin: 26px 0 0; padding: 0; list-style: none; }
+.versions a {
+  display: inline-block; padding: 6px 12px; border-radius: 10px; font-size: 16px; color: var(--muted); text-decoration: none;
+  font-variant-numeric: tabular-nums;
+}
+.release { padding: 40px 0 36px; border-top: 1px solid var(--hairline); scroll-margin-top: 16px; }
+.versions + .release, .page-head + .release { margin-top: 40px; }
+.release-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+.release h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(32px, 4vw, 40px); line-height: 1.1; font-variant-numeric: lining-nums; }
+.release h2 a { text-decoration: none; }
+.release .when { color: var(--muted); font-size: 16px; }
+.tag { display: inline-block; padding: 2px 12px; border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 999px; font-size: 16px; color: var(--text); }
+.release .note { margin-top: 12px; color: var(--muted); font-size: 17px; }
+.group { margin-top: 26px; }
+.group h3 { display: flex; align-items: center; gap: 12px; font-size: 17px; font-weight: 650; }
+.group h3::before { content: ""; width: 20px; height: 1px; background: rgba(255, 255, 255, 0.45); }
+.group ul { display: grid; gap: 10px; margin-top: 12px; padding: 0; list-style: none; }
+.group li { position: relative; padding-left: 32px; color: var(--accent-text); font-size: 17.5px; line-height: 1.6; }
+.group li::before { content: ""; position: absolute; left: 7px; top: 0.72em; width: 5px; height: 5px; border-radius: 50%; background: var(--muted); }
+.changelog-end { margin-top: 8px; padding-top: 30px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 16.5px; text-align: center; }
+.changelog-end a { color: var(--text); }
+
+/* ---------- docs ---------- */
+.search { margin: 32px 0 0; }
+.search input {
+  width: 100%; min-height: 56px; padding: 12px 18px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.16);
+  font: inherit; font-size: 18px; color: var(--text); background: var(--well); box-shadow: var(--inset-sm);
+  -webkit-appearance: none; appearance: none;
+}
+.search input::placeholder { color: #8f8f8f; }
+.search input:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; border-radius: 14px; }
+.search-count { min-height: 1.6em; margin-top: 10px; color: var(--muted); font-size: 16px; }
+.toc { margin: 24px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--hairline); }
+.toc li { border-bottom: 1px solid var(--hairline); }
+.toc a { display: block; padding: 16px 4px; text-decoration: none; }
+.toc .t { display: block; font-size: 18px; font-weight: 600; }
+.toc .s { display: block; margin-top: 2px; color: var(--muted); font-size: 16px; }
+.doc { padding: 64px 0 8px; scroll-margin-top: 16px; }
+.doc h2 { font-family: var(--serif); font-weight: 400; font-size: clamp(30px, 3.8vw, 40px); line-height: 1.15; }
+.doc .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 12px; color: var(--muted); font-size: 16px; }
+.doc .meta a, .copy-link {
+  display: inline-flex; align-items: center; min-height: 36px; padding: 4px 12px; border-radius: 10px;
+  border: 1px solid var(--hairline); background: none; font: inherit; font-size: 16px; color: var(--muted);
+  text-decoration: none; cursor: pointer;
+}
+.copy-link.done { color: var(--text); border-color: rgba(255, 255, 255, 0.3); }
+.doc .summary { margin-top: 18px; color: var(--accent-text); font-size: 19px; line-height: 1.6; }
+.doc h3 { margin-top: 36px; font-size: 20px; font-weight: 650; scroll-margin-top: 16px; }
+.doc ol { display: grid; gap: 18px; margin-top: 18px; padding: 0; list-style: none; counter-reset: step; }
+.doc ol > li { position: relative; padding-left: 52px; color: var(--accent-text); font-size: 17.5px; line-height: 1.65; counter-increment: step; }
+.doc ol > li::before {
+  content: counter(step); position: absolute; left: 0; top: -2px; display: grid; place-items: center; width: 34px; height: 34px;
+  border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.24); font-size: 16px; font-weight: 650; color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.doc ol > li > * + * { margin-top: 10px; }
+.doc b { color: var(--text); font-weight: 650; }
+.doc code { white-space: normal; overflow-wrap: anywhere; font-size: 0.88em; }
+.doc samp {
+  display: block; padding: 12px 16px; border-left: 2px solid rgba(255, 255, 255, 0.4); border-radius: 0 8px 8px 0;
+  background: var(--well); font-family: var(--mono); font-size: 16px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere;
+}
+.doc .notes { display: grid; gap: 10px; margin-top: 20px; color: var(--muted); font-size: 17px; }
+.doc .notes a, .doc ol a { color: var(--text); }
+.empty { padding: 28px 0; color: var(--muted); font-size: 17px; }
+.docs-end { margin-top: 64px; padding-top: 30px; border-top: 1px solid var(--hairline); color: var(--muted); font-size: 16.5px; text-align: center; }
+.docs-end a { color: var(--text); }
+
+@media (hover: hover) and (pointer: fine) {
+  .versions a:hover, .doc .meta a:hover, .copy-link:hover { color: var(--text); }
+  .toc a:hover .t { text-decoration: underline; text-underline-offset: 4px; }
+}
+@media (max-width: 640px) {
+  .page-head { padding-top: 20px; }
+  .doc ol > li { padding-left: 46px; }
+  .group li { padding-left: 26px; }
+}
+</style>
+</head>
+<body class="docs-page">
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="./">
+      <span class="mark" aria-hidden="true"><svg aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><defs><linearGradient id="rim-58" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.55"/><stop offset="0.5" stop-color="#fff" stop-opacity="0.12"/><stop offset="1" stop-color="#fff" stop-opacity="0.26"/></linearGradient><clipPath id="tile-58"><rect width="256" height="256" rx="56"/></clipPath></defs><rect width="256" height="256" rx="56" fill="#14143F"/><g clip-path="url(#tile-58)"><path d="M0 96L64 96L64 160L176 160L176 208L0 208Z" fill="#9999FF"/><path d="M80 96L256 96L256 208L192 208L192 144L80 144Z" fill="#C2C2FF"/></g><path d="M96 32H160V64L136 88V224H120V88L96 64Z" fill="#FF7A1A"/><rect width="256" height="256" rx="56" fill="none" stroke="url(#rim-58)" stroke-width="2"
+        vector-effect="non-scaling-stroke" clip-path="url(#tile-58)"/></svg></span>
+      <span class="name">Premiere Pro Agent Bridge</span>
+    </a>
+    <nav class="links" aria-label="页面导航">
+      <a class="n1" href="./#how">工作原理</a>
+      <a class="n1" href="./#what">能做什么</a>
+      <a class="n2" href="./#start">开始使用</a>
+      <a class="n1" href="./#faq">常见问题</a>
+      <a class="n3" href="docs.html" aria-current="page">使用文档</a>
+      <a class="n3" href="changelog.html">更新记录</a>
+      <a class="gh" href="https://github.com/ZeusSheen/ppro-agent-bridge"><span class="ic" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path stroke-dasharray="32" d="M12 4c1.67 0 2.61 0.4 3 0.5c0.53 -0.43 1.94 -1.5 3.5 -1.5c0.34 1 0.29 2.22 0 3c0.75 1 1 2 1 3.5c0 2.19 -0.48 3.58 -1.5 4.5c-1.02 0.92 -2.11 1.37 -3.5 1.5c0.65 0.54 0.5 1.87 0.5 2.5c0 0.73 0 3 0 3M12 4c-1.67 0 -2.61 0.4 -3 0.5c-0.53 -0.43 -1.94 -1.5 -3.5 -1.5c-0.34 1 -0.29 2.22 0 3c-0.75 1 -1 2 -1 3.5c0 2.19 0.48 3.58 1.5 4.5c1.02 0.92 2.11 1.37 3.5 1.5c-0.65 0.54 -0.5 1.87 -0.5 2.5c0 0.73 0 3 0 3"><animate fill="freeze" attributeName="stroke-dashoffset" dur="0.6s" values="32;0"/></path><path stroke-dasharray="10" stroke-dashoffset="10" d="M9 19c-1.41 0 -2.84 -0.56 -3.69 -1.19c-0.84 -0.63 -1.09 -1.66 -2.31 -2.31"><animate fill="freeze" attributeName="stroke-dashoffset" begin="0.7s" dur="0.2s" to="0"/></path></g></svg></span>GitHub</a>
+      <a class="lang" href="../docs.html" hreflang="en" lang="en" data-lang="en">English</a>
+    </nav>
+  </header>
+  <main class="page">
+    <div class="page-head">
+      <h1>使用文档</h1>
+      <p class="lead">一步一步的说明，一篇讲一件事。每篇都有自己的链接，可以复制下来发给别人。</p>
+    </div>
+    <div class="search" data-search hidden>
+      <label class="sr" for="doc-search">搜索文档</label>
+      <input id="doc-search" type="search" placeholder="搜索：更新、卸载、端口 8017" autocomplete="off" spellcheck="false" aria-describedby="doc-count">
+      <p class="search-count" id="doc-count" aria-live="polite"></p>
+    </div>
+    <nav aria-label="文章">
+      <ul class="toc">
+        <li data-doc="update-uninstall"><a href="#update-uninstall"><span class="t">怎么更新，怎么卸载</span><span class="s">更新：换掉桥的文件夹，再启动一次。卸载：删掉快捷方式、面板和文件夹。最后列出哪些东西会留下。</span></a></li>
+        <li data-doc="not-connected"><a href="#not-connected"><span class="t">面板显示“未连接”</span><span class="s">按顺序一项一项查。多数时候第一步就解决了。</span></a></li>
+        <li data-doc="what-we-keep"><a href="#what-we-keep"><span class="t">我们在你电脑上放了什么、放在哪、留多久</span><span class="s">桥在它自己的文件夹以外写下的所有东西：放在哪，什么时候消失。不用注册账号，没有追踪，这些东西桥一样都不上传。</span></a></li>
+      </ul>
+    </nav>
+    <article class="doc" id="update-uninstall" aria-labelledby="update-uninstall-h" data-doc="update-uninstall">
+      <h2 id="update-uninstall-h">怎么更新，怎么卸载</h2>
+      <p class="meta"><span>更新于 <time datetime="2026-11-06">2026 年 11 月 6 日</time></span><a href="#update-uninstall">#&nbsp;链接</a><button type="button" class="copy-link" data-copy="update-uninstall" hidden>复制链接</button></p>
+      <p class="summary">更新：换掉桥的文件夹，再启动一次。卸载：删掉快捷方式、面板和文件夹。最后列出哪些东西会留下。</p>
+      <h3 id="update">更新（从本网站下载的 zip）</h3>
+      <ol>
+        <li><p>从<a href="./#start">首页</a>下载新的 zip。右键点它，选<b>「全部解压缩」</b>。</p></li>
+        <li><p>关掉桥的窗口，也就是标题为 <b>Premiere Agent Bridge</b> 的黑色窗口。</p></li>
+        <li><p>用新 zip 里的 <code>ppro-agent-bridge</code> 文件夹替换旧的。放在原来的位置，快捷方式就还能用。</p></li>
+        <li><p>双击 <b>Premiere Agent Bridge</b> 快捷方式（或者 zip 里的 <code>2 Start Premiere Agent Bridge.bat</code>）。它会自动把新面板加载进 Premiere。</p></li>
+        <li><p>检查：面板显示<b>「已连接」</b>；AI 助手检查桥的时候，会看到 <code>"compatible": true</code>。</p></li>
+      </ol>
+      <div class="notes">
+        <p>整个文件夹一起更新：桥、面板和 AI 助手用的命令行必须是同一个版本。</p>
+        <p>换了存放位置？先删掉旧的 <b>Premiere Agent Bridge</b> 快捷方式，再双击 <code>1 Install Premiere Agent Bridge.bat</code>，打开<b>「桌面快捷方式」</b>重新建。桌面上已经有快捷方式时，安装窗口不会替换它。</p>
+        <p>配对令牌和请求日志还在原处（<code>%USERPROFILE%\.ppro-agent-bridge</code>），不用重新配对。</p>
+      </div>
+      <h3 id="uninstall">卸载</h3>
+      <ol>
+        <li><p>关掉桥的窗口，并在 Premiere 里关掉 Agent Bridge 面板。</p></li>
+        <li><p>如果设置过开机自动启动，先关掉：双击桥文件夹里的 <code>setup_bridge.bat</code>，关掉<b>「开机自动启动」</b>。或者删掉“启动”文件夹里的 <b>Premiere Agent Bridge</b> 快捷方式。</p></li>
+        <li><p>删掉桌面上和开始菜单里的 <b>Premiere Agent Bridge</b> 快捷方式。</p></li>
+        <li><p>在 UXP Developer Tool 里卸载（Unload）Agent Bridge 面板。如果你以前用 <b>Add Plugin</b> 手动加过它，也把它从列表里移除。</p></li>
+        <li><p>删掉 <code>ppro-agent-bridge</code> 文件夹。</p></li>
+        <li><p>愿意的话，把 <code>%USERPROFILE%\.ppro-agent-bridge</code> 文件夹也删掉。里面是配对令牌和请求日志（见<a href="#what-we-keep">我们在你电脑上放了什么</a>）。</p></li>
+      </ol>
+      <div class="notes">
+        <p>会留下来的，因为别的程序可能也要用：Python 和安装时装的 Python 组件、UXP Developer Tool、开发者模式（UXP Developer Tool 和 Premiere 里各一处），以及你自己装的 FFmpeg。没有别的程序用的话，按 Windows 平常的方法卸载即可。</p>
+        <p>AI 助手做出来的东西也会留下：它工作文件夹里的转录稿、导出的画面和剪辑计划；项目里的还原点序列（名字带“[restore 日期 时间]”）；以及从 0.7 起，在 FLAC、Opus、Vorbis 音乐旁边生成的 WAV。</p>
+      </div>
+      <h3 id="ccx">如果面板是用 .ccx 安装包装的</h3>
+      <ol>
+        <li><p>关掉 Premiere。</p></li>
+        <li><p>用 Creative Cloud 的插件安装程序运行 <code>/remove "Agent Bridge"</code>。安装程序是 <code>UnifiedPluginInstallerAgent.exe</code>，位于 <code>Common Files\Adobe\Adobe Desktop Common\RemoteComponents\UPI\UnifiedPluginInstallerAgent\</code>。</p></li>
+        <li><p>如果是要更新：先按上面的方法移除，再用 <code>/install</code> 加新的 .ccx 文件安装，同样要关着 Premiere。直接装在旧版本上面不会重新加载。</p></li>
+      </ol>
+      <div class="notes">
+        <p>.ccx 这条路还没有在真机上测试过。安装程序一次只运行一条命令：连续快速调用可能让它卡住，要重启 Creative Cloud 才恢复。</p>
+      </div>
+    </article>
+    <article class="doc" id="not-connected" aria-labelledby="not-connected-h" data-doc="not-connected">
+      <h2 id="not-connected-h">面板显示“未连接”</h2>
+      <p class="meta"><span>更新于 <time datetime="2026-11-06">2026 年 11 月 6 日</time></span><a href="#not-connected">#&nbsp;链接</a><button type="button" class="copy-link" data-copy="not-connected" hidden>复制链接</button></p>
+      <p class="summary">按顺序一项一项查。多数时候第一步就解决了。</p>
+      <ol>
+        <li><p><b>桥的窗口开着吗？</b>面板的状态栏会显示下面这句（英文版 Premiere 里是 Disconnected — broker not running?）：</p><samp>未连接：桥没有在运行？</samp><p>点面板上的<b>「启动桥」</b>，或者双击 <b>Premiere Agent Bridge</b> 快捷方式；剪辑期间别关那个黑色的桥窗口。第一次点「启动桥」时，会问你是否允许面板启动它：选允许。面板大约 20 秒内连上：图标从变淡变成全彩，状态显示<b>「已连接」</b>。</p></li>
+        <li><p><b>桥的窗口一打开就关了，或者报了端口 8017 的错？</b>说明别的程序已经占用了桥的端口。窗口里会写着类似这样的话：</p><samp>Cannot listen on 127.0.0.1:8017 (…). It is held by PID 1234 (python.exe). Is another broker running? Close that program, then start the broker again.</samp><p>通常是已经有一个桥窗口在运行了：用那个就行，或者把它关掉再重新启动。如果写的是别的程序，就关掉那个程序。（如果是 <code>[::1]:8017</code>，提示会长一点，意思一样。）桥故意不和别的程序共用端口：否则面板会连到那个程序上，而不是桥。</p></li>
+        <li><p><b>AI 助手报 <code>AUTH_FAILED</code>？</b>说明桥拒绝了它的配对令牌。提示是这样开头的：</p><samp>This broker (0.6.0) needs the pairing token and got no pairing token. …</samp><p>这说明 AI 助手用的桥和桥窗口里运行的不是同一份或同一个版本（0.5 以前的命令行根本不发令牌），或者是用另一个 Windows 用户运行的，或者它设置了桥那边没有的 <code>PPRO_BRIDGE_TOKEN</code>。让它用面板第一句话里写的那个桥文件夹，也就是桥窗口运行的那个文件夹。令牌本身千万不要粘贴、复制或发给别人。</p></li>
+        <li><p><b>面板过期了？</b>AI 助手检查桥时，会看到 <code>"compatible": false</code>，以及类似这样的提示：</p><samp>Panel is ppro-agent-bridge 0.5.1, CLI is 0.6.0: reload the Agent Bridge panel in UXP Developer Tool.</samp><samp>The panel is stale — its code differs from this checkout's plugin folder: Reload it in UXP Developer Tool.</samp><p>关掉桥的窗口再启动一次：它会自动把当前版本的面板加载进 Premiere。也可以在 UXP Developer Tool 里（要开着）点 Agent Bridge 面板的 <b>Reload</b>。如果面板显示卡住了（stuck），先保存项目，再重新加载。</p></li>
+        <li><p><b>面板因为已经有另一个面板连着而被拒绝？</b>状态栏会显示：</p><samp>Refused: A live Agent Bridge panel is already connected — retrying in 30 s</samp><p>桥一次只能给一个面板用。另一个 Premiere 窗口（比如 Premiere Pro Beta）或者面板的第二个副本占着它。退出另一个 Premiere，或者在 UXP Developer Tool 里卸载那个面板：只关掉面板不够，关掉的面板仍然连着。之后这个面板会在 30 秒内接上，点<b>「重新连接」</b>可以马上接上。</p></li>
+        <li><p><b>还是连不上？</b>双击桥文件夹里的 <code>setup_bridge.bat</code>：安装窗口会把 Python、Premiere、UXP Developer Tool 和开发者模式重新检查一遍。然后<a href="https://github.com/ZeusSheen/ppro-agent-bridge/issues">到 GitHub 上告诉我</a>。从 0.7 起，AI 助手可以生成一份问题报告贴在那里，里面绝不会有你的令牌。</p></li>
+      </ol>
+      <div class="notes">
+        <p>如果 AI 助手报 <code>NO_BROKER</code>（“Cannot reach broker at … Is broker.py running?”），说明桥窗口没在运行：从第 1 步开始。如果报 <code>NO_PANEL</code>（“No Premiere panel connected. Is Premiere open with the Agent Bridge panel loaded?”），说明桥在运行，但面板不在：在 Premiere 里用<b>窗口 → UXP 增效工具 → Agent Bridge</b> 打开它。菜单里没有的话，运行安装窗口：多半是没装 UXP Developer Tool，或者没开开发者模式。</p>
+        <p>关掉面板不会停掉桥，也不会断开连接：在 Premiere 27.1 上，面板关着也在运行，重新打开还是原来的样子。</p>
+      </div>
+    </article>
+    <article class="doc" id="what-we-keep" aria-labelledby="what-we-keep-h" data-doc="what-we-keep">
+      <h2 id="what-we-keep-h">我们在你电脑上放了什么、放在哪、留多久</h2>
+      <p class="meta"><span>更新于 <time datetime="2026-11-06">2026 年 11 月 6 日</time></span><a href="#what-we-keep">#&nbsp;链接</a><button type="button" class="copy-link" data-copy="what-we-keep" hidden>复制链接</button></p>
+      <p class="summary">桥在它自己的文件夹以外写下的所有东西：放在哪，什么时候消失。不用注册账号，没有追踪，这些东西桥一样都不上传。</p>
+      <ol>
+        <li><p><b>配对令牌：</b><code>%USERPROFILE%\.ppro-agent-bridge\token</code>。桥第一次启动时生成的一串随机密钥。AI 助手的命令行每次请求都会带上它，这样别的程序控制不了桥。它会一直留着，直到你删掉；删掉后，桥下次启动会再生成一个。千万不要给别人。</p></li>
+        <li><p><b>请求日志：</b><code>%USERPROFILE%\.ppro-agent-bridge\audit\audit-YYYY-MM-DD.jsonl</code>，每天一个文件。每个请求一行：要做什么（文件路径这类长内容会截短）、作用在哪个序列、结果如何、用了多久。<b>保留 30 天：</b>桥启动时会删掉更早的文件。AI 助手靠它了解之前发生了什么。想关掉的话，设置环境变量 <code>PPRO_AUDIT_DIR=off</code>。</p></li>
+        <li><p><b>快捷方式：</b>桌面上和开始菜单里的 <b>Premiere Agent Bridge</b>；如果打开了<b>「开机自动启动」</b>，“启动”文件夹里也有一个。它们会一直留着，直到你删掉；安装窗口里也可以再关掉开机自动启动。</p></li>
+        <li><p><b>Premiere 里的面板：</b>每次 Premiere 启动，桥都会通过 UXP Developer Tool 把它加载进去，和在那里点 Load 一样。UXP Developer Tool 和开发者模式会一直装着、开着。如果面板是用 .ccx 装的，Creative Cloud 会一直保留它，直到你移除（见<a href="#uninstall">怎么卸载</a>）。</p></li>
+        <li><p><b>音乐的 WAV 副本（从 0.7 起）：</b>Premiere 读不了 FLAC、Opus、Vorbis。导入这类文件时，会在它旁边写一个 48 kHz 24 位的 WAV（<code>song.wav</code>；如果那里已经有一个不同的 <code>song.wav</code>，就叫 <code>song (48k).wav</code>），然后导入这个 WAV。旁边已经有同样长度的 WAV 时直接复用。它会留着，因为你的项目在用它。</p></li>
+        <li><p><b>渲染留下的临时文件：</b>Premiere 渲染 H.264 视频时，会先在目标文件旁边写临时文件（文件名后面加一串长代码，扩展名是 <code>.m4v</code> 和 <code>.aac</code>），最后才写出 <code>.mp4</code>。这些是 Premiere 自己的文件，桥不会删它们。如果渲染中途停了，可以手动删掉。</p></li>
+        <li><p><b>更新检查的设置（从 0.7 起）：</b><code>%USERPROFILE%\.ppro-agent-bridge\settings.json</code>。桥每天向 GitHub 查一次最新版本号，好让面板在有新版本时告诉你。它不发送任何账号、机器或用户标识。这项检查默认打开，可以关掉；你选择跳过的版本也记在这个文件里。</p></li>
+        <li><p><b>AI 助手做出来的东西：</b>转录稿、导出的画面、剪辑计划和回听检查用的音频，都放在你打开 Claude Code 或 Codex 的那个文件夹里。项目里的还原点是额外的序列，名字是“… [restore YYYY-MM-DD HH:MM]”；每个序列保留最新的 5 个。不需要了就删掉。</p></li>
+        <li><p><b>Whisper 模型</b>（如果你在本机转录）：第一次运行时会下载模型文件。faster-whisper 把它们放在自己的下载目录里，位置不是桥决定的。</p></li>
+      </ol>
+      <div class="notes">
+        <p>Python 和它的组件、UXP Developer Tool、FFmpeg 都是你自己装的程序，卸载之前会一直在。怎么移除桥本身：见<a href="#uninstall">怎么卸载</a>。</p>
+      </div>
+    </article>
+    <p class="empty" id="doc-empty" hidden>没找到。换个词试试，或者到 GitHub 上问。</p>
+    <p class="docs-end">缺了什么或者写错了？<a href="https://github.com/ZeusSheen/ppro-agent-bridge/issues">到 GitHub 上告诉我</a>。</p>
+  </main>
+  <footer class="site">
+    <nav class="more" aria-label="更多"><a href="./">首页</a> <a href="docs.html">使用文档</a> <a href="changelog.html">更新记录</a> <a href="../docs.html" hreflang="en" lang="en" data-lang="en">English</a> <a href="https://github.com/ZeusSheen/ppro-agent-bridge">GitHub</a></nav>
+    <p>Premiere Pro Agent Bridge 免费开源（MIT 许可证）。<a href="https://github.com/ZeusSheen/ppro-agent-bridge">GitHub 上的源代码</a>。</p>
+    <p>本项目并非由 Adobe、Anthropic 或 OpenAI 制作，也未获其认可。Premiere Pro 是 Adobe 的商标。</p>
+    <p>图标：Material Line Icons，作者 Vjacheslav Trushkin（MIT）。文字排版：<a href="https://github.com/chenglou/pretext">Pretext</a>，作者 Cheng Lou（MIT）。</p>
+    <p>动画：<a href="https://gsap.com">GSAP</a>（按 GreenSock 标准许可免费使用）。</p>
+  </footer>
+</div>
+<script>
+/* Search and copy-link: without this script every article is listed and each has a plain # link. The search box
+   hides the articles (and their contents entries) that do not hold every word typed; / or Ctrl+K jumps to it. */
+(function () {
+  var TEXT = {"count_all": "共 {n} 篇", "count_some": "找到 {n} 篇，共 {total} 篇", "copy": "复制链接", "copied": "已复制"};
+  var box = document.querySelector('[data-search]');
+  var input = document.getElementById('doc-search');
+  var count = document.getElementById('doc-count');
+  var empty = document.getElementById('doc-empty');
+  var docs = Array.prototype.slice.call(document.querySelectorAll('article.doc'));
+  var toc = Array.prototype.slice.call(document.querySelectorAll('.toc li'));
+  function norm(s) { return (s.normalize ? s.normalize('NFKC') : s).toLowerCase(); }
+  var hay = docs.map(function (d) { return norm(d.textContent); });
+  function apply() {
+    var words = norm(input.value).split(/\s+/).filter(Boolean), shown = 0;
+    docs.forEach(function (d, i) {
+      var hit = words.every(function (w) { return hay[i].indexOf(w) >= 0; });
+      d.hidden = !hit;
+      if (toc[i]) toc[i].hidden = !hit;
+      if (hit) shown++;
+    });
+    empty.hidden = shown > 0;
+    count.textContent = !words.length ? TEXT.count_all.replace('{n}', docs.length)
+      : shown ? TEXT.count_some.replace('{n}', shown).replace('{total}', docs.length) : '';
+  }
+  if (box && input) {
+    box.hidden = false;
+    input.addEventListener('input', apply);
+    apply();
+    document.addEventListener('keydown', function (e) {
+      var typing = /^(input|textarea|select)$/i.test((document.activeElement || {}).tagName || '');
+      if ((e.key === '/' && !typing) || ((e.ctrlKey || e.metaKey) && (e.key || '').toLowerCase() === 'k')) {
+        e.preventDefault();
+        input.focus();
+        input.select();
+      }
+    });
+    // a link to an article the search has hidden clears the search first
+    window.addEventListener('hashchange', function () {
+      var target = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+      var article = target && target.closest('article.doc');
+      if (article && article.hidden) { input.value = ''; apply(); target.scrollIntoView(); }
+    });
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    document.querySelectorAll('.copy-link').forEach(function (b) {
+      b.hidden = false;
+      b.addEventListener('click', function () {
+        var url = location.href.split('#')[0] + '#' + b.getAttribute('data-copy');
+        navigator.clipboard.writeText(url).then(function () {
+          b.textContent = TEXT.copied;
+          b.classList.add('done');
+          setTimeout(function () { b.textContent = TEXT.copy; b.classList.remove('done'); }, 1600);
+        }, function () {});
+      });
+    });
+  }
+})();
+</script>
+</body>
+</html>

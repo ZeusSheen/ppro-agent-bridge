@@ -48,3 +48,4 @@ reports/
 # Repo data that the patterns above would otherwise hide
 !tests/**/*.json
 !ppro_bridge/*.json
+!docs/img/*.png
