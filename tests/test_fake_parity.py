@@ -1598,6 +1598,8 @@ class OpsCallsTest(FakeCase):
         self.assertEqual(sorted(cases), sorted(spec.command_names()))
         for name, (kwargs, setup) in cases.items():
             with self.subTest(command=name):
+                if name in ("review_cuts", "export_audio") and not shutil.which("ffmpeg"):
+                    continue  # they decode audio with it (GitHub's runner has none)
                 fake.reset()
                 if setup:
                     setup()

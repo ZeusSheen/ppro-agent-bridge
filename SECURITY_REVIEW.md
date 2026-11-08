@@ -241,6 +241,10 @@ prints VULNERABLE before the fix and SAFE after it unless noted.
 
 ## 5. Accepted risks
 
+- **UDT after this review (found in real use, 8 Nov 2026).** One failed `tasklist` (the process list) sent the broker
+  into the old way meant for systems without one: UDT started, not closed, and restarted when it went away, for the
+  broker's lifetime (seen in the audit log: open at least 11 minutes). Fixed: on Windows a list that cannot be read
+  starts nothing until it reads again (`tests/test_devloader.py`, UdtWindowTest).
 - **UXP Developer Tool while it loads the panel (RA-5 residual).** UDT's service (Adobe's, 127.0.0.1:14001, any
   Origin, no credential) is up for the seconds the bridge needs to load the panel into a Premiere that started (live:
   9.3 s; bounds in the code: 60 s for UDT to come up, 120 s for Premiere to connect, 20 s for the panel to answer). A

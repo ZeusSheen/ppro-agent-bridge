@@ -902,6 +902,12 @@ def pad_cut_points(words, keep, *, pre_roll: float = 0.25, post_roll: float = 0.
 
 # ---------------------------------------------------------------- orchestration
 
+def check_preset_path(preset) -> None:
+    """A preset path the caller gave, checked first: a network path is BAD_PARAMS with or without ffmpeg."""
+    if preset:
+        paths.check(_clean_path(preset), what="preset", ext=".epr")
+
+
 def resolve_preset(preset=None) -> str:
     """The encoder preset for export_sequence: `preset`, else Premiere's own WAV preset (media.find_wav_preset:
     PPRO_WAV_PRESET or next to the running Premiere). FILE_NOT_FOUND when there is none or it does not exist —
@@ -924,6 +930,8 @@ def export_audio(rpc, *, output, tracks=("A1",), render: bool = False, preset=No
     full-rate render is kept next to it (`preset`: see resolve_preset). Returns {wav, source, notes, …}. The shadow
     mix refuses clips without readable media (NO_MEDIA, nothing written): it never falls back to the render."""
     paths.check(output, what="output", ext=".wav")
+    if render:
+        check_preset_path(preset)
     _require_ffmpeg()
     out = paths.resolved(output)  # a mapped drive keeps its letter (the panel refuses a UNC path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -983,6 +991,8 @@ def review_cuts(rpc, *, tracks=("A1",), pre_roll: float = 0.25, post_roll: float
     for name, v in (("pre_roll", pre_roll), ("post_roll", post_roll)):
         if not _num(v) or v < 0:
             raise _bad(f"{name} must be >= 0 seconds, not {v!r}")
+    if render:
+        check_preset_path(preset)
     _require_ffmpeg()
     word_list = word_timings(words) if words is not None else None
     if render:

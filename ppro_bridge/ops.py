@@ -579,21 +579,72 @@ def import_media(rpc, *, path, bin=None, force=False, probe_media=None, convert_
     return reply
 
 
-def insert_clip(rpc, *, item, at=0.0, vtrack=0, atrack=0, mode="overwrite", in_s=None, out_s=None, label=None,
-                expect_seq=None) -> dict:
+def _free_audio_track(rpc, at, end, half) -> int:
+    """The highest audio track with nothing between at and end (end None: to the end of the sequence)."""
+    tracks = rpc("list_items", {"kinds": ["audio"]}).get("audio", [])
+    for t in sorted(tracks, key=lambda t: t["index"], reverse=True):
+        if not any(i.get("start") is not None and i.get("end") is not None and i["end"] > at + half
+                   and (end is None or i["start"] < end - half) for i in t["items"]):
+            return t["index"]
+    raise BridgeError(f"--video-only: no audio track is free from {at}s, and the clip's audio has to land somewhere "
+                      "before it is taken off. Name one with --atrack, or free a track.",
+                      code="PRECONDITION_FAILED", outcome="not_committed")
+
+
+def insert_clip(rpc, *, item, at=0.0, vtrack=0, atrack=None, mode="overwrite", in_s=None, out_s=None, label=None,
+                expect_seq=None, video_only=False) -> dict:
+    """Place a project item (or the source range in_s-out_s). video_only: the picture without its sound: the audio leg
+    is placed on a free audio track (--atrack names another) and taken off again in one more undo step."""
     if (in_s is None) != (out_s is None):
         raise _bad("--in and --out must be given together.")
     if mode not in ("overwrite", "insert"):
         raise _bad(f'mode must be overwrite or insert, not "{mode}"')
-    items.check_expect_seq(rpc, expect_seq)
+    if video_only and mode != "overwrite":
+        raise _bad("--video-only needs --mode overwrite: insert would push that audio track along for a leg that goes.")
+    seq = items.check_expect_seq(rpc, expect_seq)
     picked = items.resolve_item(item, rpc=rpc)
+    half = None
+    if video_only:
+        half = _half_frame(seq or rpc("get_sequence"))
+        if atrack is None:
+            length = out_s - in_s if in_s is not None else picked.get("duration")
+            atrack = _free_audio_track(rpc, at, at + length if length else None, half)
+    atrack = 0 if atrack is None else atrack
     params = {"itemName": picked["name"], "binPath": picked.get("bin") or "", "atSeconds": at,
               "videoTrack": vtrack, "audioTrack": atrack, "mode": mode}
     if in_s is not None:
         params["inSeconds"], params["outSeconds"] = in_s, out_s
     if label:
         params["undoLabel"] = label
-    return rpc("insert_clip", params)
+    result = rpc("insert_clip", params)
+    if not video_only:
+        return result
+    return _take_off_audio_leg(rpc, result, picked["name"], at, atrack, half, label)
+
+
+def _take_off_audio_leg(rpc, result, name, at, atrack, half, label) -> dict:
+    """After a --video-only placement: remove exactly the clip's own audio leg, found by track, position and name."""
+    tracks = rpc("list_items", {"kinds": ["audio"]}).get("audio", [])
+    on_track = next((t["items"] for t in tracks if t["index"] == atrack), [])
+    legs = [i for i in on_track if i.get("start") is not None and abs(i["start"] - at) <= half
+            and name in (i.get("projectItem"), i.get("name"))]
+    result = dict(result, videoOnly=True, audioTrack=atrack, audioRemoved=False)
+    if not legs:  # media without sound: nothing landed there
+        return result
+    leg = legs[0]
+    try:
+        gone = rpc("remove_items", {"videoTracks": [], "audioTracks": [atrack], "fromSeconds": leg["start"] - half,
+                                    "toSeconds": leg["end"] + half, "mode": "inside", "ripple": False, "dryRun": False,
+                                    "undoLabel": f"{label or 'Agent'}: picture only"})
+    except BridgeError as e:
+        raise BridgeError(f"[remove audio leg] {e} The picture is placed; its audio leg is still on A{atrack + 1}.",
+                          code=e.code, outcome="partial", data={"completed": ["insert_clip"], "placed": result}) from e
+    removed = gone.get("removed") or []
+    if len(removed) != 1 or removed[0].get("name") != leg.get("name"):
+        raise BridgeError(f"Removing the audio leg on A{atrack + 1} removed {len(removed)} clip(s), expected that one.",
+                          code="VERIFY_FAILED", outcome="committed", data={"placed": result, "removed": removed})
+    result["audioRemoved"] = True
+    return result
 
 
 def apply_plan(rpc, *, plan, dry_run=False, media_root=None, bin=None, no_bin=False, only=None, overwrite=False,
@@ -990,15 +1041,21 @@ def list_sequences(rpc) -> dict:
     return rpc("list_sequences")
 
 
-def clone_sequence(rpc, *, name=None, guid=None, keep=5, dry_run=False, label=None) -> dict:
+def clone_sequence(rpc, *, name=None, guid=None, keep=5, dry_run=False, label=None, as_name=None) -> dict:
     """A restore point before a risky edit: the panel clones the active sequence (or `name` / `guid`), renames the
     clone "<name> [restore YYYY-MM-DD HH:MM]", tags it, and deletes the oldest restore points of that same sequence
     beyond `keep` (the new one counts; never an untagged, renamed or active sequence). The clone is not made active:
-    set_active_sequence --guid <clone.guid> opens it. A dry run gives the name and what pruning would delete."""
+    set_active_sequence --guid <clone.guid> opens it. A dry run gives the name and what pruning would delete.
+    as_name: a plain copy under that name instead (another language version, say): not tagged, nothing pruned, refused
+    when a sequence already has the name; two undo steps as well."""
     if keep is None or keep < 1:
         raise _bad("--keep must be at least 1: the new restore point always stays")
     items.require_command(rpc, "clone_sequence")
     params = {"keep": int(keep), "dryRun": bool(dry_run)}
+    if as_name is not None:
+        if not str(as_name).strip():
+            raise _bad("--as is empty")
+        params["asName"] = str(as_name).strip()
     if guid:
         params["guid"] = guid
     elif name:
@@ -1060,7 +1117,7 @@ def _clip_keys(timeline: dict) -> dict:
 
 
 def remove_items(rpc, *, track, from_s, to_s, mode="inside", ripple=False, confirm_ripple=False, dry_run=False,
-                 label=None, expect_seq=None) -> dict:
+                 label=None, expect_seq=None, only_name=None) -> dict:
     if ripple and not dry_run and not confirm_ripple:
         raise BridgeError("--ripple moves later clips, which can push graphics and music out of sync with the "
                           "picture. Run it with --dry-run to see what may move, then add --confirm-ripple.",
@@ -1078,6 +1135,14 @@ def remove_items(rpc, *, track, from_s, to_s, mode="inside", ripple=False, confi
     if label:
         params["undoLabel"] = label
     items.check_expect_seq(rpc, expect_seq)  # a dry run against another sequence would plan the wrong timeline
+    allowed = _as_list(only_name)
+    if allowed:  # the user moves tracks while the agent works: a track number alone once deleted their graphic
+        planned = rpc("remove_items", dict(params, dryRun=True)).get("removed") or []
+        others = [r for r in planned if r.get("name") not in allowed]
+        if others:
+            raise BridgeError(f"--only-name: the range also holds {', '.join(sorted({r.get('name') or '?' for r in others}))}. "
+                              "Nothing was removed; read the track again (the user may have moved clips).",
+                              code="PRECONDITION_FAILED", outcome="not_committed", data={"others": others})
     if not ripple:
         return rpc("remove_items", params)
 
@@ -1143,7 +1208,7 @@ def _read_components(json_file) -> list:
     return doc
 
 
-def set_params(rpc, *, track, at, json_file, label=None, expect_seq=None) -> dict:
+def set_params(rpc, *, track, at, json_file, label=None, expect_seq=None, dry_run=False) -> dict:
     """Effect params/keyframes on the clip under `at`, from a JSON file (a components list or {"components": …}).
     Keyframes need a timeBase (media, clip or sequence); the whole request is checked before anything is sent."""
     kind, idx = _track(track)  # V… or A… (audio: components the clip already has, e.g. its Volume)
@@ -1151,6 +1216,8 @@ def set_params(rpc, *, track, at, json_file, label=None, expect_seq=None) -> dic
     params = {("audioTrack" if kind == "audio" else "videoTrack"): idx, "atSeconds": at, "components": components}
     if label:
         params["undoLabel"] = label
+    if dry_run:
+        params["dryRun"] = True
     problems = spec.check_params("set_params", params)
     for ci, comp in enumerate(components):
         for pi, p in enumerate((comp.get("params") or []) if isinstance(comp, dict) else []):
@@ -1494,11 +1561,12 @@ def _render_checker(render_check, render_dir, preset, dry_run):
     writes anything (a real run only)."""
     if not render_check:
         return None
-    if not dry_run:
-        _review._require_ffmpeg()
-        preset = _review.resolve_preset(preset)
     if render_dir:
         paths.check(render_dir, what="--render-dir")
+    if not dry_run:
+        _review.check_preset_path(preset)
+        _review._require_ffmpeg()
+        preset = _review.resolve_preset(preset)
 
     def check(rpc, pieces):
         return _rendercheck.check(rpc, pieces, out_dir=render_dir, preset=preset)
@@ -1834,8 +1902,9 @@ def _resume_export(rpc, job_id, *, preset, output, format, detach, stall_seconds
     except BridgeError:  # the preset file is gone: check the length only
         info = {"name": Path(str(job.get("preset"))).stem, "title": None, "format": None, "kind": None,
                 "source": "path", "path": job.get("preset"), "extensions": []}
-    same = os.path.normcase
-    if preset and same(str(_presets.resolve(preset, format)["path"])) != same(str(info["path"])):
+    def same(p):  # the file, however it is written (an 8.3 short name, a junction, ..)
+        return os.path.normcase(str(paths.resolved(p)))
+    if preset and same(_presets.resolve(preset, format)["path"]) != same(info["path"]):
         raise _bad(f"--preset {preset!r} is not the preset job {job_id} renders with ({info['path']}). "
                    "Nothing was sent.")
     seq = rpc("get_sequence")
@@ -2191,17 +2260,54 @@ def list_effects(rpc, *, kind=None) -> dict:
     return rpc("list_effects", {"kind": kind} if kind else {})
 
 
-def add_audio_effect(rpc, *, track, at, name, dry_run=False, label=None, expect_seq=None) -> dict:
+def add_audio_effect(rpc, *, track, name, at=None, from_s=None, to_s=None, mode="inside", dry_run=False, label=None,
+                     expect_seq=None) -> dict:
     """Append an audio effect to the audio clip under `at`, by its display name as list_effects shows it (Premiere's UI
     language: "降噪" on a Chinese UI) or by a match name: one undo step, verified by reading the chain back. An
     unknown name is refused with the closest names (data.closeNames). The reply's `component` lists the new effect's
     params by index, for set_params --track A1; a param Premiere animates from the start (`keyframed`) refuses a
-    static value there (KEYFRAMED), and `note` says which."""
+    static value there (KEYFRAMED), and `note` says which. from_s / to_s: every clip entirely inside that range
+    instead (half a frame of slack; mode="overlap": every clip touching it), one undo step each; a failure after the
+    first is `partial` with data.completed."""
     _, idx = _track(track, "audio", "add_audio_effect works on audio tracks (A1, A2, …)")
     if not str(name or "").strip():
         raise _bad("--name is empty")
+    if (at is None) == (from_s is None) or (from_s is None) != (to_s is None):
+        raise _bad("Give --at <sec>, or --from <sec> and --to <sec>")
+    if mode not in RANGE_MODES:
+        raise _bad(f'mode must be inside or overlap, not "{mode}"')
     items.require_command(rpc, "add_audio_effect")
-    items.check_expect_seq(rpc, expect_seq)
+    seq = items.check_expect_seq(rpc, expect_seq)
+    if at is None:
+        return _add_audio_effect_range(rpc, seq, idx, name, from_s, to_s, mode, dry_run, label)
+    return _add_audio_effect(rpc, idx, at, name, dry_run, label)
+
+
+def _add_audio_effect_range(rpc, seq, idx, name, frm, to, mode, dry_run, label) -> dict:
+    doc = rpc("inspect_items", {"audioTracks": [idx], "fromSeconds": frm, "toSeconds": to})
+    clips, skipped = [c for t in doc.get("tracks") or [] for c in t.get("clips") or []], []
+    if mode == "inside":
+        clips, skipped = _split_inside(clips, frm, to, _half_frame(seq or rpc("get_sequence")))
+    if not clips:
+        raise _none_inside(f"A{idx + 1}", frm, to, skipped)
+    rows, last = [], {}
+    for clip in clips:
+        row = {"name": clip.get("name"), "start": clip.get("start"), "end": clip.get("end")}
+        try:
+            last = _add_audio_effect(rpc, idx, (clip["start"] + clip["end"]) / 2, name, dry_run, label)
+        except BridgeError as e:
+            if not rows:
+                raise
+            raise BridgeError(f"{e} ({len(rows)} of {len(clips)} clips were done.)", code=e.code, outcome="partial",
+                              data={"completed": rows, "failedOn": row}) from e
+        row["verified"] = last.get("verified")
+        rows.append(row)
+    return {"dryRun": bool(dry_run), "count": len(rows), "clips": rows, "skipped": skipped,
+            "component": last.get("component"), "note": last.get("note"),
+            "verified": not dry_run and all(r["verified"] for r in rows), "undoSteps": 0 if dry_run else len(rows)}
+
+
+def _add_audio_effect(rpc, idx, at, name, dry_run, label) -> dict:
     params = {"audioTrack": idx, "atSeconds": at, "name": str(name).strip(), "dryRun": bool(dry_run)}
     if label:
         params["undoLabel"] = label

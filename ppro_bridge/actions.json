@@ -4381,6 +4381,10 @@
      "type": "string",
      "doc": "Guid of the sequence to clone (wins over name)"
     },
+    "asName": {
+     "type": "string",
+     "doc": "A plain copy under this name instead of a restore point: not tagged, nothing pruned, refused when a sequence already has the name"
+    },
     "keep": {
      "type": "integer",
      "minimum": 1,
@@ -7143,7 +7147,7 @@
    "requirePanel": true,
    "minProtocol": 2,
    "dryRun": true,
-   "doc": "A restore point before risky edits: clone a sequence, name and tag the clone, delete the oldest restore points of it beyond --keep"
+   "doc": "A restore point before risky edits: clone a sequence, name and tag the clone, delete the oldest restore points of it beyond --keep; --as makes a plain named copy instead"
   },
   {
    "name": "save_project",
@@ -7163,12 +7167,14 @@
    "calls": [
     "get_sequence",
     "list_project_items",
-    "insert_clip"
+    "insert_clip",
+    "list_items",
+    "remove_items"
    ],
    "requirePanel": false,
    "minProtocol": 1,
    "dryRun": false,
-   "doc": "Place a project item, or only a source range of it (--in/--out), at a sequence time on existing tracks"
+   "doc": "Place a project item, or only a source range of it (--in/--out), at a sequence time on existing tracks; --video-only drops its audio leg"
   },
   {
    "name": "set_scale",
@@ -7232,7 +7238,7 @@
    "requirePanel": false,
    "minProtocol": 1,
    "dryRun": true,
-   "doc": "Remove clips in a range (default: only clips entirely inside); --ripple closes the gap and reports what moved"
+   "doc": "Remove clips in a range (default: only clips entirely inside); --only-name refuses when anything else is in it; --ripple closes the gap and reports what moved"
   },
   {
    "name": "remove_project_items",
@@ -7257,7 +7263,8 @@
     "import_media",
     "insert_clip",
     "set_scale",
-    "add_marker"
+    "add_marker",
+    "remove_items"
    ],
    "requirePanel": true,
    "minProtocol": 1,
@@ -7292,7 +7299,7 @@
    ],
    "requirePanel": true,
    "minProtocol": 2,
-   "dryRun": false,
+   "dryRun": true,
    "doc": "Effect params and keyframes (timeBase media, clip or sequence) on the clip under a time, from a JSON file"
   },
   {
@@ -7559,12 +7566,13 @@
    "kind": "write",
    "calls": [
     "get_sequence",
+    "inspect_items",
     "add_audio_effect"
    ],
    "requirePanel": true,
    "minProtocol": 2,
    "dryRun": true,
-   "doc": "Add an audio effect by its (localised) display name or match name to the audio clip under a time, in one undo step; verified by reading the chain back"
+   "doc": "Add an audio effect by its (localised) display name or match name to the audio clip under a time, or to the clips in a range (one undo step per clip); verified by reading the chain back"
   },
   {
    "name": "probe_api",

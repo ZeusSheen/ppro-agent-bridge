@@ -108,6 +108,10 @@ class TokenTest(unittest.TestCase):
         """DOC-6: the file (and a folder ensure_token makes) gets an ACL of its own - this user and SYSTEM, nothing
         inherited - before the token is written; measured with icacls on a temp folder only."""
         import subprocess
+        # The real folder (under the user's profile) passes permissions on. A temp folder that passes none on (GitHub's
+        # runner) gives new folders Windows' default ACL, which /inheritance:r does not remove: an administrator can
+        # read any file anyway (restrict_to_owner), so the test asks for the folder it means.
+        subprocess.run(["icacls", str(self.dir), "/grant", f"*{auth._user_sid()}:(OI)(CI)F"], capture_output=True, check=True)
         auth.ACL_ERRORS.clear()
         auth.ensure_token()
         self.assertEqual([e for e in auth.ACL_ERRORS if e], [])

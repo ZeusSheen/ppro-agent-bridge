@@ -214,6 +214,8 @@ def build_parser(only: str | None = None) -> argparse.ArgumentParser:
     pcs = add("clone_sequence", help="Restore point: clone a sequence as \"<name> [restore date time]\", prune old ones")
     pcs.add_argument("--name", default=None, help="Sequence to clone (default: the active one)")
     pcs.add_argument("--guid", default=None, help="Sequence guid (when two sequences share a name)")
+    pcs.add_argument("--as", dest="as_name", default=None,
+                     help="A plain copy under this name instead of a restore point (not tagged, nothing pruned)")
     pcs.add_argument("--keep", type=int, default=5,
                      help="Restore points of that sequence to keep, the new one included (default 5); the oldest "
                           "bridge restore points beyond it are deleted")
@@ -226,7 +228,10 @@ def build_parser(only: str | None = None) -> argparse.ArgumentParser:
     pc.add_argument("--expect-seq", **expect_seq)
     pc.add_argument("--at", type=float, default=0.0, help="Sequence time in seconds (default 0)")
     pc.add_argument("--vtrack", type=int, default=0, help="Video track, 0-based (0 = V1)")
-    pc.add_argument("--atrack", type=int, default=0, help="Audio track, 0-based (0 = A1)")
+    pc.add_argument("--atrack", type=int, default=None, help="Audio track, 0-based (default 0 = A1; with --video-only "
+                    "a free one)")
+    pc.add_argument("--video-only", action="store_true",
+                    help="The picture without its sound: the audio leg lands on a free audio track and is taken off")
     pc.add_argument("--mode", choices=["overwrite", "insert"], default="overwrite")
     pc.add_argument("--in", dest="in_s", type=float, default=None, help="Source in point, seconds")
     pc.add_argument("--out", dest="out_s", type=float, default=None, help="Source out point, seconds")
@@ -283,6 +288,8 @@ def build_parser(only: str | None = None) -> argparse.ArgumentParser:
     pr.add_argument("--to", dest="to_s", type=float, required=True)
     pr.add_argument("--mode", choices=["inside", "overlap"], default="inside",
                     help="inside (default): only clips entirely in the range")
+    pr.add_argument("--only-name", action="append", default=None,
+                    help="Refuse unless every clip it would remove has this clip name (repeatable)")
     pr.add_argument("--ripple", action="store_true", help="Close the gap (moves later clips; needs --confirm-ripple)")
     pr.add_argument("--confirm-ripple", action="store_true", help="Confirm a real --ripple run")
     pr.add_argument("--dry-run", action="store_true")
@@ -339,6 +346,7 @@ def build_parser(only: str | None = None) -> argparse.ArgumentParser:
     psp.add_argument("--json", dest="json_file", required=True,
                      help='A components list or {"components": [...]}; keyframes need "timeBase": '
                           "media | clip | sequence")
+    psp.add_argument("--dry-run", action="store_true", help="Check the whole request against the clip; change nothing")
     psp.add_argument("--label", default=None)
     psp.add_argument("--expect-seq", **expect_seq)
 
@@ -542,7 +550,11 @@ def build_parser(only: str | None = None) -> argparse.ArgumentParser:
 
     pae = add("add_audio_effect", help="Add an audio effect by its (localised) display name to the clip under a time")
     pae.add_argument("--track", required=True, help="Audio track, e.g. A1")
-    pae.add_argument("--at", type=float, required=True, help="Any sequence time inside the clip")
+    pae.add_argument("--at", type=float, default=None, help="Any sequence time inside the clip")
+    pae.add_argument("--from", dest="from_s", type=float, default=None, help="With --to: every clip in this range")
+    pae.add_argument("--to", dest="to_s", type=float, default=None)
+    pae.add_argument("--mode", choices=["inside", "overlap"], default="inside",
+                     help="With --from/--to: inside (default) only clips entirely in the range")
     pae.add_argument("--name", required=True,
                      help='Display name as list_effects shows it, in the UI language (e.g. "降噪"), or a match name')
     pae.add_argument("--dry-run", action="store_true")

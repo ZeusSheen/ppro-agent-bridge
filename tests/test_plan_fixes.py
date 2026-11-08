@@ -271,5 +271,58 @@ class RunPlanTest(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
+class VideoOnlyTest(unittest.TestCase):
+    """"video_only": the B-roll picture without its audio leg (three times by hand on the 7-8 Nov 2026 jobs)."""
+
+    STEP = {"command": "insert_clip", "id": "b1", "track": "V2", "timeline_at": 2.0, "src": "b1.mp4", "src_in": 0,
+            "src_out": 4.0, "video_only": True}
+
+    def probe(self):
+        return probe_for(hasAudio=True, hasVideo=True, duration=10.0, frames=600, fps=SEQ_FPS, width=1080, height=1920)
+
+    def test_the_audio_leg_goes_and_the_picture_stays(self):
+        rpc, fake, calls = fake_rpc()
+        report = run_plan([self.STEP], rpc, self.probe())
+        step = report["steps"][0]
+        self.assertEqual((step["status"], step["videoOnly"], step["audioLeg"]), ("placed", True, "removed"), step)
+        self.assertEqual(len(fake.STATE["video"][1]), 1)
+        self.assertEqual(fake.STATE["audio"][3], [])
+        self.assertEqual(len(fake.STATE["audio"][0]), 1)  # the dialogue stays
+        removals = [p for a, p in calls if a == "remove_items"]
+        self.assertEqual((len(removals), removals[0]["audioTracks"], removals[0]["videoTracks"]), (1, [3], []))
+        self.assertTrue(report["ok"])
+
+    def test_dry_run_only_says_so(self):
+        rpc, fake, calls = fake_rpc()
+        report = run_plan([self.STEP], rpc, self.probe(), dry_run=True)
+        self.assertTrue(report["steps"][0]["videoOnly"])
+        self.assertFalse([a for a, _ in calls if a in ("insert_clip", "remove_items")])
+
+    def test_a_clip_inside_the_leg_stops_the_removal(self):
+        rpc, fake, calls = fake_rpc()
+        real = fake.HANDLERS["insert_clip"]
+
+        def with_a_stowaway(p):  # something else ends up within the leg's span on its track
+            out = real(p)
+            fake.STATE["audio"][p["audioTrack"]].append({"name": "sfx.wav", "start": 3.0, "end": 3.5, "inPoint": 0.0,
+                                                         "outPoint": 0.5})
+            return out
+        fake.HANDLERS["insert_clip"] = with_a_stowaway
+        report = run_plan([self.STEP], rpc, self.probe())
+        self.assertEqual(report["steps"][0]["status"], "unverified", report["steps"][0])
+        self.assertIn("sfx.wav", report["steps"][0]["why"])
+        self.assertFalse([a for a, _ in calls if a == "remove_items"])
+        self.assertFalse(report["ok"])
+
+    def test_refused_while_planning(self):
+        rpc, fake, calls = fake_rpc()
+        bad = dict(self.STEP, video_only="yes")
+        self.assertEqual(run_plan([bad], rpc, self.probe(), dry_run=True)["steps"][0]["status"], "error")
+        music = probe_for(hasAudio=True, hasVideo=False, duration=10.0)
+        step = run_plan([dict(self.STEP, src="m.wav")], rpc, music, dry_run=True)["steps"][0]
+        self.assertEqual(step["status"], "error", step)
+        self.assertIn("no picture", step["why"])
+
+
 if __name__ == "__main__":
     unittest.main()

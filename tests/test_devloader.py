@@ -351,8 +351,9 @@ class UdtWindowTest(unittest.TestCase):
 
         return start, stop
 
-    def run_watch(self, udt, script, user_udt=False, **patches):
+    def run_watch(self, udt, script, user_udt=False, processes=None, **patches):
         start, stop = self.fake_udt(udt)
+        processes = processes or (lambda: set(self.pids))
 
         async def panel_state():
             return self.panel
@@ -372,7 +373,7 @@ class UdtWindowTest(unittest.TestCase):
             helper = asyncio.create_task(on_load_reply())
             task = asyncio.create_task(devloader.watch(self.plugin, self.port, start=True, on_event=self.events.append,
                                                        stop=stop_event, panel_state=panel_state,
-                                                       processes=lambda: set(self.pids)))
+                                                       processes=processes))
             try:
                 await script()
             finally:
@@ -417,6 +418,39 @@ class UdtWindowTest(unittest.TestCase):
         self.assertIn("Closed the UXP Developer Tool the bridge started (the panel is loaded and answering).",
                       devloader.describe(closed[0]))
         self.assertEqual(self.states().count("starting"), 2)
+
+    def test_a_process_list_that_fails_once_never_starts_or_keeps_udt(self):
+        """8 Nov 2026: one failed tasklist put the broker in the old way: UDT started, never closed, restarted."""
+        udt = FakeUdt({7: PREMIERE})
+        real = set
+        reads = {"n": 0}
+
+        def flaky():  # unreadable three times, then the normal list
+            reads["n"] += 1
+            return None if reads["n"] <= 3 else real(self.pids)
+
+        async def script():
+            await self.until(lambda: reads["n"] >= 3)
+            self.assertEqual(self.starts, [])  # nothing started while the list cannot be read
+            await self.until(lambda: self.stops)
+            await asyncio.sleep(0.3)
+
+        self.run_watch(udt, script, processes=flaky, PROCESS_LIST_EXPECTED=True)
+        self.assertEqual((len(self.starts), len(self.stops)), (1, 1))  # then the normal window: started and closed
+        self.assertEqual(self.states().count("no-process-list"), 1)    # said once
+        self.assertNotIn("disconnected", self.states())                # the old way is the only path that says this
+        said = [e for e in self.events if e.get("state") == "no-process-list"][0]
+        self.assertIn("not starting UXP Developer Tool", devloader.describe(said))
+
+    def test_a_process_list_that_never_reads_starts_nothing(self):
+        udt = FakeUdt({7: PREMIERE})
+
+        async def script():
+            await asyncio.sleep(0.4)
+
+        self.run_watch(udt, script, processes=lambda: None, PROCESS_LIST_EXPECTED=True)
+        self.assertEqual(self.starts, [])
+        self.assertEqual(self.states(), ["no-process-list"])
 
     def test_a_failed_load_closes_it_too(self):
         udt = FakeUdt({7: PREMIERE}, reply={"error": "Plugin validation failed"})

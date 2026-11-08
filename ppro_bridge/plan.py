@@ -11,6 +11,7 @@ Plan format (what an editor or agent writes before cutting):
       {"command": "insert_clip", "id": "b01", "track": "V3", "timeline_at": 2.0,
        "src": "stock/b01.mp4", "src_in": 9.0, "src_out": 14.0,
        "atrack": "A4",                   # optional; default: a free audio track
+       "video_only": true,               # optional: the picture only, its audio leg is taken off again
        "scale": "fill"},                 # optional: "fit" | "fill" | percent
       {"command": "insert_clip", "id": "g01", "track": "V4", "timeline_at": 9.2,
        "src": null, "type": "graphic", ...},   # src null → built by hand, skipped
@@ -305,6 +306,14 @@ def run(args, *, rpc, require_panel, parse_track, probe_media, fit_scale, conver
                 continue
             aidx = free[0] if free else n_audio - 1
         step["atrack"] = f"A{aidx + 1}" if has_audio else f"A{aidx + 1} (no audio in file)"
+        if c.get("video_only") is not None and not isinstance(c["video_only"], bool):
+            step.update(status="error", why="video_only must be true or false")
+            continue
+        if c.get("video_only"):
+            if media.audio_only(info):
+                step.update(status="error", why="video_only on a file with no picture")
+                continue
+            step["videoOnly"] = True
 
         if c.get("scale") is not None:
             s = c["scale"]
@@ -483,3 +492,36 @@ def _execute(args, plan, steps, to_import, bin_name, rpc, report, convert_audio)
         if legs:
             s.update(status="unverified", why=f"Not found at the expected position/length after placing: "
                                               f"{' and '.join(legs)} leg")
+
+    removed_any = False
+    for s in steps:  # picture only: exactly each clip's own audio leg goes, once both legs are known to be there
+        if s.get("status") != "placed" or not s.get("videoOnly"):
+            continue
+        on_track = audio.get(s["_a"], [])
+        leg = next((i for i in on_track if i.get("start") is not None and abs(i["start"] - s["at"]) <= half
+                    and i.get("projectItem") == s["item"]), None)
+        if leg is None:  # media without sound
+            s["audioLeg"] = "none"
+            continue
+        others = [i for i in on_track if i is not leg and i.get("start") is not None
+                  and i["start"] >= leg["start"] - half and i["end"] <= leg["end"] + half]
+        if others:
+            s.update(status="unverified", why=f"Audio leg left on A{s['_a'] + 1}: other clips lie within it "
+                                              f"({', '.join(i.get('name') or '?' for i in others)})")
+            continue
+        try:
+            rpc("remove_items", {"videoTracks": [], "audioTracks": [s["_a"]], "fromSeconds": leg["start"] - half,
+                                 "toSeconds": leg["end"] + half, "mode": "inside", "ripple": False, "dryRun": False,
+                                 "undoLabel": f"{label_root}: {s['id']} picture only"})
+            s["audioLeg"], removed_any = "removed", True
+        except Exception as e:
+            s.update(status="unverified", why=f"Placed, but its audio leg on A{s['_a'] + 1} could not be removed: {e}")
+    if removed_any:
+        after = rpc("list_items", {"kinds": ["video", "audio"]})
+        video = {t["index"]: t["items"] for t in after.get("video", [])}
+        audio = {t["index"]: t["items"] for t in after.get("audio", [])}
+        for s in steps:
+            if s.get("audioLeg") != "removed":
+                continue
+            if lands(audio.get(s["_a"], []), s, False) or not lands(video.get(s["_v"], []), s, True):
+                s.update(status="unverified", why="After taking the audio leg off, the picture or the audio is not as planned")

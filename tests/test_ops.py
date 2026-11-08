@@ -2027,6 +2027,12 @@ class ExportJobTest(unittest.TestCase):
         self.assertEqual((args.job, args.detach, args.stall_seconds, args.preset, args.output),
                          ("export-1", True, 600.0, None, None))
 
+    def test_resume_takes_the_same_preset_written_another_way(self):
+        folder, name = os.path.split(self.epr)
+        rpc = self.panel([self.view(preset=os.path.join(folder, "..", os.path.basename(folder), name))])
+        look = ops.export_video(rpc, job="export-1", preset=self.PRESET, detach=True, sleep=self.sleeps.append)
+        self.assertEqual((look["detached"], look["resumed"]), (True, True))
+
     def test_refusals(self):
         rpc = self.panel([self.view()])
         for kw in ({"job": "export-1", "output": str(self.out.with_name("other.mp4"))},
@@ -2482,6 +2488,132 @@ class CliRunTest(unittest.TestCase):
     def test_legacy_json_message_becomes_see_data(self):
         reply = BridgeError(json.dumps({"frames": []})).to_reply()
         self.assertEqual(reply, {"ok": False, "error": "see data", "data": {"frames": []}})
+
+
+class RealJobAdditionsTest(unittest.TestCase):
+    """What the 7-8 Nov 2026 jobs asked for: a name check on removals, a dry run of set_params, a plain named copy of a
+    sequence, an audio effect over a range, and the picture of a clip without its sound."""
+
+    def clip(self, name, start, end):
+        return {"name": name, "start": start, "end": end, "inPoint": 0.0, "outPoint": end - start}
+
+    def failure(self, code, outcome, fn, *a, **kw):
+        with self.assertRaises(BridgeError) as cm:
+            fn(*a, **kw)
+        self.assertEqual((cm.exception.code, cm.exception.outcome), (code, outcome), str(cm.exception))
+        return cm.exception
+
+    def test_remove_items_only_name(self):
+        rpc, fake, _ = fake_rpc()
+        fake.STATE["video"][2] = [dict(self.clip("gradient.png", 0.0, 10.0), scale=100.0)]  # the user moved it here
+        e = self.failure("PRECONDITION_FAILED", "not_committed", ops.remove_items, rpc, track="V3", from_s=0.0, to_s=10.0,
+                         only_name=["caps_v1.mov"])
+        self.assertIn("gradient.png", str(e))
+        self.assertEqual([c["name"] for c in fake.STATE["video"][2]], ["gradient.png"])
+        self.assertEqual(e.data["others"][0]["name"], "gradient.png")
+        fake.STATE["video"][2] = [dict(self.clip("caps_v1.mov", 0.0, 10.0), scale=100.0)]
+        dry = ops.remove_items(rpc, track="V3", from_s=0.0, to_s=10.0, only_name=["caps_v1.mov"], dry_run=True)
+        self.assertTrue(dry["dryRun"])
+        self.assertEqual(len(fake.STATE["video"][2]), 1)
+        ops.remove_items(rpc, track="V3", from_s=0.0, to_s=10.0, only_name=["caps_v1.mov"])
+        self.assertEqual(fake.STATE["video"][2], [])
+        args = cli.build_parser().parse_args(["remove_items", "--track", "V3", "--from", "0", "--to", "1", "--only-name", "a",
+                                              "--only-name", "b"])
+        self.assertEqual(args.only_name, ["a", "b"])
+
+    def test_set_params_dry_run_checks_and_changes_nothing(self):
+        rpc, fake, calls = fake_rpc()
+        fx = write_json([{"matchName": "AE.ADBE Motion", "params": [{"index": 1, "value": 150}]}])
+        dry = ops.set_params(rpc, track="V1", at=5.0, json_file=fx, dry_run=True)
+        self.assertTrue(dry["dryRun"])
+        self.assertEqual(fake.TRANSACTIONS, [])
+        late = write_json([{"matchName": "AE.ADBE Motion", "params": [
+            {"index": 1, "timeBase": "sequence", "keyframes": [{"t": 1.0, "value": 100}, {"t": 61.0, "value": 120}]}]}])
+        self.failure("KEYFRAME_OUT_OF_RANGE", "not_committed", ops.set_params, rpc, track="V1", at=5.0, json_file=late,
+                     dry_run=True)
+        self.assertEqual(fake.TRANSACTIONS, [])
+
+    def test_clone_sequence_as_a_plain_copy(self):
+        rpc, fake, _ = fake_rpc()
+        old = ops.clone_sequence(rpc, keep=1)  # a restore point that a restore-point clone with keep=1 would prune
+        dry = ops.clone_sequence(rpc, as_name="Second cut", keep=1, dry_run=True)
+        self.assertEqual((dry["cloneName"], dry["prune"]), ("Second cut", []))
+        self.assertEqual(len(fake.STATE["otherSequences"]), 1)
+        done = ops.clone_sequence(rpc, as_name="Second cut", keep=1)
+        self.assertEqual((done["clone"]["name"], done["pruned"], done["verified"]), ("Second cut", [], True))
+        self.assertEqual(done["undoSteps"][1].endswith("[2/2 name]"), True)
+        rows = {s["name"]: s for s in rpc("list_sequences")["sequences"]}
+        self.assertIsNone(rows["Second cut"]["restorePoint"])
+        self.assertIsNotNone(rows[old["clone"]["name"]]["restorePoint"])  # not pruned by a copy
+        self.failure("PRECONDITION_FAILED", "not_committed", ops.clone_sequence, rpc, as_name="Second cut")
+        self.failure("BAD_PARAMS", "not_committed", ops.clone_sequence, rpc, as_name="   ")
+        self.assertEqual(cli.build_parser().parse_args(["clone_sequence", "--as", "X"]).as_name, "X")
+
+    def test_add_audio_effect_over_a_range(self):
+        rpc, fake, calls = fake_rpc()
+        fake.STATE["audio"][0] = [self.clip("a.mp4", 0.0, 10.0), self.clip("b.mp4", 10.0, 20.0), self.clip("c.mp4", 20.0, 30.0)]
+        dry = ops.add_audio_effect(rpc, track="A1", from_s=0.0, to_s=20.0, name="DeNoise", dry_run=True)
+        self.assertEqual((dry["count"], dry["undoSteps"], dry["verified"]), (2, 0, False))
+        data = ops.add_audio_effect(rpc, track="A1", from_s=0.0, to_s=20.0, name="DeNoise")
+        self.assertEqual((data["count"], data["undoSteps"], data["verified"]), (2, 2, True))
+        self.assertEqual([c["name"] for c in data["clips"]], ["a.mp4", "b.mp4"])
+        self.assertEqual([s["name"] for s in data["skipped"]], ["c.mp4"])
+        ats = [p["atSeconds"] for a, p in calls if a == "add_audio_effect" and not p["dryRun"]]
+        self.assertEqual(ats, [5.0, 15.0])
+        wider = ops.add_audio_effect(rpc, track="A1", from_s=9.0, to_s=11.0, name="DeNoise", mode="overlap")
+        self.assertEqual(wider["count"], 2)
+        for kw in ({}, {"at": 1.0, "from_s": 0.0, "to_s": 2.0}, {"from_s": 0.0}, {"to_s": 2.0}):
+            self.failure("BAD_PARAMS", "not_committed", ops.add_audio_effect, rpc, track="A1", name="DeNoise", **kw)
+
+    def test_add_audio_effect_range_stopping_half_way_is_partial(self):
+        rpc, fake, _ = fake_rpc()
+        fake.STATE["audio"][0] = [self.clip("a.mp4", 0.0, 10.0), self.clip("b.mp4", 10.0, 20.0)]
+        real, seen = fake.HANDLERS["add_audio_effect"], []
+
+        def second_fails(p):
+            seen.append(p)
+            if len(seen) == 2:
+                raise fake.Coded("INTERNAL", "boom")
+            return real(p)
+        fake.HANDLERS["add_audio_effect"] = second_fails
+        e = self.failure("INTERNAL", "partial", ops.add_audio_effect, rpc, track="A1", from_s=0.0, to_s=20.0, name="DeNoise")
+        self.assertEqual([c["name"] for c in e.data["completed"]], ["a.mp4"])
+        self.assertEqual(e.data["failedOn"]["name"], "b.mp4")
+
+    def test_video_only_places_the_picture_without_its_sound(self):
+        rpc, fake, calls = fake_rpc()
+        before = list(fake.STATE["audio"][0])
+        data = ops.insert_clip(rpc, item="broll_city.mp4", at=5.0, vtrack=1, in_s=1.0, out_s=3.0, video_only=True, label="B")
+        self.assertEqual((data["videoOnly"], data["audioTrack"], data["audioRemoved"]), (True, 3, True))
+        self.assertEqual([c["name"] for c in fake.STATE["video"][1]], ["broll_city.mp4"])
+        self.assertEqual(fake.STATE["audio"][3], [])
+        self.assertEqual(fake.STATE["audio"][0], before)  # the dialogue is untouched
+        placed = [p for a, p in calls if a == "insert_clip"][0]
+        self.assertEqual(placed["audioTrack"], 3)
+        removed = [p for a, p in calls if a == "remove_items"]
+        self.assertEqual((len(removed), removed[0]["audioTracks"], removed[0]["videoTracks"]), (1, [3], []))
+        self.assertTrue(removed[0]["undoLabel"].endswith("picture only"))
+
+    def test_video_only_refuses_what_it_cannot_do_safely(self):
+        rpc, fake, calls = fake_rpc()
+        for i in range(1, 4):
+            fake.STATE["audio"][i] = [self.clip("music.wav", 0.0, 60.0)]
+        self.failure("PRECONDITION_FAILED", "not_committed", ops.insert_clip, rpc, item="broll_city.mp4", at=5.0, vtrack=1,
+                     video_only=True)
+        self.assertEqual(fake.STATE["video"][1], [])
+        self.failure("BAD_PARAMS", "not_committed", ops.insert_clip, rpc, item="broll_city.mp4", at=5.0, vtrack=1,
+                     mode="insert", video_only=True)
+
+    def test_video_only_on_a_named_track_and_the_default_stays_a1(self):
+        rpc, fake, calls = fake_rpc()
+        data = ops.insert_clip(rpc, item="broll_city.mp4", at=5.0, vtrack=1, in_s=1.0, out_s=3.0, atrack=2, video_only=True)
+        self.assertEqual((data["audioTrack"], data["audioRemoved"]), (2, True))
+        ops.remove_items(rpc, track="V2", from_s=0.0, to_s=60.0)
+        calls.clear()
+        ops.insert_clip(rpc, item="broll_city.mp4", at=61.0, vtrack=1)
+        self.assertEqual([p["audioTrack"] for a, p in calls if a == "insert_clip"], [0])
+        args = cli.build_parser().parse_args(["insert_clip", "--item", "x", "--video-only"])
+        self.assertEqual((args.video_only, args.atrack), (True, None))
 
 
 if __name__ == "__main__":

@@ -27,7 +27,9 @@ pings over 15 s after UDT's processes were killed, same loadedAt). So `watch()`:
   - when UDT is already running (the user opened it), keeps a connection and loads into every Premiere that connects,
     as before, and never closes it; also with --no-start (start=False), which never starts UDT.
   - closes a UDT it started when it is stopped (the broker quits).
-  - where the process list cannot be read (not Windows), keeps the old way: starts UDT when it is down and keeps it.
+  - where there is no process list at all (not Windows), keeps the old way: starts UDT when it is down and keeps it.
+    On Windows a tasklist that fails or times out only means "look again": no UDT is started until the list reads
+    again (one failed tasklist on 8 Nov 2026 used to leave UDT open, and restarted, for the rest of the broker's life).
 
 A load REPLACES a panel with the same plugin id that is already loaded: the old one disconnects ~30 ms before the
 load's reply and the new one registers ~0.35 s later, also when the old one came from another folder (the broker's
@@ -57,6 +59,7 @@ from . import panelhash
 DEFAULT_PORT = 14001
 HOST = "127.0.0.1"
 REQUEST_TIMEOUT = 15.0
+PROCESS_LIST_EXPECTED = os.name == "nt"  # None from premiere_pids is then a failure to read it, never "no list here"
 RETRY_SECONDS = 5.0
 # Seconds to wait for a panel on the broker before loading: a disconnected panel retries every 3 s, and on Windows an
 # attempt that started while the broker was down can take ~1-2 s more to fail or succeed. (23:08, 2 Nov, a fresh
@@ -442,8 +445,16 @@ async def watch(plugin_dir=PLUGIN_DIR, port=DEFAULT_PORT, start=True, on_event=N
     handled: set[int] = set()  # Premiere processes that got their load (or did not need one)
     said = None                # the last "not-needed" / "missing" said, so a retry does not say it again
     initial = None             # Premieres running when the bridge starts: their panel would reconnect within seconds
+    unread = False             # the process list failed to read (said once, until it reads again)
     while not stop.is_set():
         pids = await asyncio.to_thread(processes) if start else None
+        if start and pids is None and PROCESS_LIST_EXPECTED:  # never the old way on a passing failure (RA-5)
+            if not unread:
+                on_event({"event": "udt", "state": "no-process-list"})
+            unread = True
+            await _sleep_or_stop(stop, PREMIERE_POLL)
+            continue
+        unread = False
         if pids is not None and await _up(port):  # a UDT the bridge did not start (the user's): follow, never close
             await _follow(plugin_dir, port, False, on_event, stop, panel_state, until_gone=True)
             handled |= await asyncio.to_thread(processes) or set()  # what that UDT saw needs nothing more from us
@@ -471,7 +482,7 @@ async def watch(plugin_dir=PLUGIN_DIR, port=DEFAULT_PORT, start=True, on_event=N
             await _load_with_own_udt(exe, plugin_dir, port, on_event, stop, panel_state)
             handled |= new
             continue
-        # --no-start (never start UDT), or no process list to watch (the old way: start UDT when down, keep it)
+        # --no-start (never start UDT), or a system with no process list at all (the old way: start UDT when down, keep it)
         await _follow(plugin_dir, port, start, on_event, stop, panel_state, until_gone=False)
 
 
@@ -569,6 +580,8 @@ def describe(event: dict) -> str:
                 "disconnected": "UXP Developer Tool's service went away; retrying.",
                 "missing": f"Cannot load the panel: {event.get('error')}.",
                 "not-needed": f"Not starting UXP Developer Tool: {event.get('reason')}.",
+                "no-process-list": "Could not read the list of running programs (tasklist): not starting UXP Developer "
+                                   "Tool until it can be read; retrying.",
                 "unreachable": f"UXP Developer Tool's service is not answering ({event.get('error')}); retrying."}.get(state, "")
     return ""
 

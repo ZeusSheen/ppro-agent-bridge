@@ -33,7 +33,7 @@ UNC = B * 2 + HOST + B + "share" + B
 # Options that name a file or folder (checked), and the string options that do not.
 PATH_DESTS = {"output", "dir", "sheet", "plan", "media_root", "report", "file", "srt", "render_dir", "preset",
               "json_file", "ops", "path", "to", "words", "out_dir", "diff"}
-NON_PATH_DESTS = {"track", "name", "label", "expect_seq", "expect_fingerprint", "comment", "color", "match_name", "bin",
+NON_PATH_DESTS = {"as_name", "only_name", "track", "name", "label", "expect_seq", "expect_fingerprint", "comment", "color", "match_name", "bin",
                   "only", "locale", "search", "captions", "format", "job", "item", "with_item", "atrack",
                   "skip_effects", "guid", "language", "at", "extend"}
 

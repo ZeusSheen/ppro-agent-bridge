@@ -22,7 +22,8 @@ restart; its window must stay open). UXP Developer Tool runs only while it loads
 for each Premiere that starts, the broker starts UDT minimized, loads the panel,
 waits until it answers and closes UDT again (also after a failed load; the window
 says "Closed the UXP Developer Tool the bridge started"). The panel keeps running
-without UDT. A UDT the user opened is used as it is and never closed. UDT's
+without UDT. A UDT the user opened is used as it is and never closed. If the list of running
+programs cannot be read, no UDT is started until it can be (the window says so). UDT's
 service accepts any connection and can load any folder into Premiere, so do not
 ask the user to keep it open.
 Closing the panel does not stop the bridge: on 27.1 its code keeps running while it
@@ -146,7 +147,7 @@ through Creative Cloud instead, so Premiere loads it without UDT or developer mo
 | `python ppro.py select_items --track A1 (--at s \| --from s --to s) [--mode inside\|overlap] [--clear] [--dry-run] [--expect-seq NAME]` | Select clips in the Timeline (replacing the selection) for what only Premiere's panels do, e.g. Properties › Enhance Audio on every selected clip; read back, no undo step (see "Premiere's own panels") |
 | `python ppro.py list_items [--track V3] [--kind video\|audio]` | Clips on the timeline as JSON: start/end (sequence s), in/out (source s), project item, media path |
 | `python ppro.py inspect_items [--track V5] [--from s --to s] [--output f.json]` | What an editor changed: each clip's effect chain (Motion, Opacity, filters, with `occurrence`) with param values, keyframes (media time); transitions are listed but read their names/positions from `export_otio` |
-| `python ppro.py set_params --track V5 --at s --json f.json [--label "text"] [--expect-seq NAME]` | Effect params and keyframes on the clip under `--at` (see "Effect params and transitions"); on an audio track (`A1`) the params of components the clip already has (add an audio effect with `add_audio_effect`) |
+| `python ppro.py set_params --track V5 --at s --json f.json [--dry-run] [--label "text"] [--expect-seq NAME]` | Effect params and keyframes on the clip under `--at` (see "Effect params and transitions"); on an audio track (`A1`) the params of components the clip already has (add an audio effect with `add_audio_effect`) |
 | `python ppro.py set_volume --track A1 (--at s \| --from s --to s [--mode inside\|overlap]) --db -6 [--dry-run] [--label "text"] [--expect-seq NAME]` | Clip volume in dB as Premiere shows it (0 = as recorded, max +15), one clip or the clips entirely inside a range (`--mode overlap`: every clip touching it); verified |
 | `python ppro.py add_transition --track V5 --at s --match-name NAME --duration s --edge start\|end [--double-sided] [--label "text"] [--expect-seq NAME]` | A video transition on the start or end of the clip under `--at`; refused where that edit point already has one (`TRANSITION_EXISTS`); read back from OTIO |
 | `python ppro.py remove_transition --track V5 --at s --edge start\|end [--dry-run] [--label "text"] [--expect-seq NAME]` | Remove the video transition at that edge of the clip under `--at` (one undo step); found in and verified against OTIO, `owner` says which clip it lay on; none there → `NOT_FOUND` |
@@ -167,7 +168,7 @@ through Creative Cloud instead, so Premiere loads it without UDT or developer mo
 | `python ppro.py export_frames --dir d --at 4,18.5,31.6 [--sheet]` | Several frames at once, optionally a labelled contact sheet (needs Pillow) |
 | `python ppro.py import_media --path f [--path f2 ...] [--bin "Name"] [--force]` | Import media into the root or a top-level bin (created if missing); returns `newItems` names. Audio-only files Premiere cannot read (FLAC — a FLAC hung the panel on 27.1 —, Opus, Vorbis) are converted first to a 48 kHz 24-bit WAV beside the original, which is imported instead (`converted`; a WAV of the same length there is reused, another one is left alone and the new one is `<name> (48k).wav`). Files with a picture Premiere cannot read (VP9, AV1, Opus in a video: YouTube downloads) are refused first with an ffmpeg command each (`UNSUPPORTED`), and so is a failed conversion; `--force` sends every file as it is |
 | `python ppro.py remove_project_items (--bin "Bin[/Sub]" \| --item "bin/name") [...] [--dry-run] [--label "text"]` | Remove bins (with everything inside) and project items from the project in one undo step; media files stay on disk. Refused while any sequence uses an item (`IN_USE`, `data.inUse` says where) or a sequence would go with them (`UNSUPPORTED`); `--dry-run` lists `items`, `inUse`, `wouldRefuse` |
-| `python ppro.py insert_clip --item "name" [--at sec] [--vtrack N] [--atrack N] [--mode overwrite\|insert] [--in sec --out sec] [--expect-seq NAME] [--label "text"]` | Place a clip — with `--in/--out`, only that source range ("cut by sentence") |
+| `python ppro.py insert_clip --item "name" [--at sec] [--vtrack N] [--atrack N] [--video-only] [--mode overwrite\|insert] [--in sec --out sec] [--expect-seq NAME] [--label "text"]` | Place a clip — with `--in/--out`, only that source range ("cut by sentence"); `--video-only`: the picture without its sound (B-roll): the audio leg lands on the highest free audio track, or `--atrack`, and only that clip is taken off again (`audioRemoved`) |
 | `python ppro.py apply_plan plan.json [--dry-run] [--only ids] [--notes-as-markers] [--overwrite] [--any-sequence] [--report r.json]` | Execute a JSON edit plan (see below) |
 | `python ppro.py set_scale --track V3 (--at s \| --from s --to s [--mode inside\|overlap]) (--value % \| --fit \| --fill) [--expect-seq NAME] [--dry-run]` | Motion › Scale; fit/fill computed per clip from the media size as Premiere shows it (ffprobe, rotation applied: a Sony or phone clip stored 3840×2160 with a 90° rotation is 2160×3840, `rotation` in the row); a range takes only clips entirely inside it unless `--mode overlap` |
 | `python ppro.py set_fps --item "name" [--item …] --fps 59.94 [--dry-run]` | Interpret footage: override frame rate (changes the item in every sequence) |
@@ -177,9 +178,9 @@ through Creative Cloud instead, so Premiere loads it without UDT or developer mo
 | `python ppro.py list_markers` | The active sequence's markers in start order: `guid`, name, comments, start / duration (sequence s), type, `colorIndex` and `color` (the name `--color` takes) |
 | `python ppro.py remove_marker (--guid g \| --name "…" [--at s]) [--dry-run] [--label "text"] [--expect-seq NAME]` | Remove ONE marker; a name several markers share needs `--at` (its start, half a frame of tolerance) or `--guid`, else `AMBIGUOUS` and nothing changes; one undo step, read back |
 | `python ppro.py list_sequences` | Every sequence in the project: name, guid, `active`, `restorePoint` (`clone_sequence`'s record: source, created, `renamed`; null for other sequences) |
-| `python ppro.py clone_sequence [--name "Seq" \| --guid g] [--keep 5] [--dry-run] [--label "text"]` | Restore point before a risky edit: a clone named `"<name> [restore YYYY-MM-DD HH:MM]"`, tagged, not made active (`clone.guid` in the reply); then deletes the oldest restore points of that sequence beyond `--keep` (the new one counts; never an untagged, renamed or active sequence) |
+| `python ppro.py clone_sequence [--name "Seq" \| --guid g] [--as "New name"] [--keep 5] [--dry-run] [--label "text"]` | Restore point before a risky edit: a clone named `"<name> [restore YYYY-MM-DD HH:MM]"`, tagged, not made active (`clone.guid` in the reply); then deletes the oldest restore points of that sequence beyond `--keep` (the new one counts; never an untagged, renamed or active sequence). `--as`: a plain copy under that name for another version of the cut (not tagged, nothing pruned; a name already taken is `PRECONDITION_FAILED`) |
 | `python ppro.py save_project` | Save the project (`Project#save`) and check that the project file's time stamp changed (`VERIFY_FAILED` when it did not) |
-| `python ppro.py remove_items --track V3 [--track V4] --from s --to s [--mode inside\|overlap] [--ripple --confirm-ripple] [--expect-seq NAME] [--dry-run]` | Remove clips in a range (default: only clips entirely inside); `--ripple` closes the gap and reports what moved |
+| `python ppro.py remove_items --track V3 [--track V4] --from s --to s [--mode inside\|overlap] [--only-name "clip" ...] [--ripple --confirm-ripple] [--expect-seq NAME] [--dry-run]` | Remove clips in a range (default: only clips entirely inside); `--only-name`: refused (`PRECONDITION_FAILED`, `data.others`) unless every clip it would remove has that clip name; `--ripple` closes the gap and reports what moved |
 | `python ppro.py split_clip --track V1 --at s [--render-check [--render-dir d]] [--dry-run] [--label "text"] [--expect-seq NAME]` | Split the clip under `--at` without a razor (5 undo steps, no clip moved); both halves keep every clip attribute; `--render-check` proves both play in Premiere's render |
 | `python ppro.py cut_range --from s --to s [--track V1 ...] [--no-ripple] [--captions V3 --srt f.srt [--srt-offset s]] [--render-check [--render-dir d]] [--dry-run] [--label "text"] [--expect-seq NAME]` | Remove a time range from every track (or the `--track` ones) and close the gap on all of them in sync |
 | `python ppro.py extend_cut --at s [--out s] [--in s] [--track V1 ...] [--extend V1 ...] [--captions V3 --srt f.srt] [--allow-silent] [--render-check [--render-dir d]] [--dry-run] [--label "text"] [--expect-seq NAME]` | Open up a cut (breathing room) with more of the clips' own source; everything after it moves right on all tracks in sync |
@@ -194,7 +195,7 @@ through Creative Cloud instead, so Premiere loads it without UDT or developer mo
 | `python ppro.py export_aaf --output f.aaf [--embed-audio\|--no-embed-audio] [--audio-format wav\|aiff] [--sample-rate 48000] [--bits-per-sample 16\|24] [--handle-frames n] [--trim-sources] [--mixdown-video] [--render-audio-effects] [--overwrite] [--dry-run] [--detach] [--stall-seconds 180]` / `export_aaf --job ID [--detach]` | The active sequence as an AAF, as a job with no time limit; the file must be new and not empty. Premiere may hold it with a modal "AAF export log" until the user clicks OK: the reply's `hint` says so; see "Rendering a deliverable" |
 | `python ppro.py export_xml --output f.xml [--overwrite]` | The active sequence as Final Cut Pro 7 XML (no dialog); the file must start with `<?xml` and hold `<xmeml>` |
 | `python ppro.py list_effects [--kind audio\|video]` | Effects Premiere can add: video filters (match + display name), audio filters (display name only, in Premiere's UI language) |
-| `python ppro.py add_audio_effect --track A1 --at s --name "降噪" [--dry-run] [--label "text"] [--expect-seq NAME]` | Add an audio effect by its display name (or match name) to the clip under `--at`: one undo step, verified; an unknown name is `NOT_FOUND` with the closest names (`data.closeNames`) |
+| `python ppro.py add_audio_effect --track A1 (--at s \| --from s --to s [--mode inside\|overlap]) --name "降噪" [--dry-run] [--label "text"] [--expect-seq NAME]` | Add an audio effect by its display name (or match name) to the clip under `--at`, or to each clip in a range (`count`, `clips`, `skipped`): one undo step per clip, verified; an unknown name is `NOT_FOUND` with the closest names (`data.closeNames`) |
 | `python ppro.py list_effect_presets [--search text] [--file f.prfpset] [--locale zh_CN]` | Effect presets (`.prfpset`) on disk: Premiere's own (Factory, Lumetri, in its UI language) and the user's, with bin path, effects, animation, anchoring and `replay` (full / partial with reasons / none) for `apply_preset`; works without the bridge |
 | `python ppro.py apply_preset --track V2 (--at s \| --from s --to s [--mode inside\|overlap]) --preset "name" [--file f.prfpset] [--locale zh_CN] [--dry-run] [--label "text"] [--expect-seq NAME]` | Apply an effect preset by translating it to `set_params` (one request per clip, keyframes in clip time per the preset's anchoring); what UXP cannot write is skipped and reported; verified (see "Effect presets") |
 | `python ppro.py apply_ops --json ops.json [--label "text"] [--dry-run] [--expect-seq NAME]` | Several whitelisted small writes (`ops`: markers, clip name / disabled, a static param value, sequence in / out and playhead, track and bin names) in ONE transaction and one undo step; each op read back (see "Generic operations") |
@@ -314,6 +315,10 @@ empty shell: the clip ends up without words and the reply is
 `TRANSCRIPT_NOT_IMPORTED` (outcome `committed`). That is a Premiere bug, not the
 file: tell the user and offer the manual route — import the JSON in Premiere's Text
 panel (Transcript tab). The digest never needs the import.
+
+**Captions on a cut someone else finished.** Transcribe the timeline's own audio (`export_audio --render`, then
+`transcribe.py`): times are sequence seconds, and what the editor cut is gone. A line that starts at a cut changes on
+the cut (Whisper put such starts up to 0.6 s early); elsewhere take the start from the audio's energy after the pause.
 
 ## The three layers and their coordinate systems
 
@@ -603,6 +608,10 @@ that param's animation off in the same undo step (live 27.1) — or adds keyfram
 param with real keyframes is refused (`KEYFRAMED`). Video effects are added by
 `set_params` itself (match names from `list_effects --kind video`).
 
+A mic recorded on one channel (a wireless lav on the right channel of a camera, the left silent): `add_audio_effect
+--track A1 --from 0 --to <end> --name "Fill Left with Right"` (the name in Premiere's UI language: 用右侧填充左侧) on
+the dialogue clips. The shadow mix does not apply effects, so `review_cuts --render` is the one to listen with.
+
 ## Premiere's own panels (`select_items`)
 
 Some features exist only in Premiere's panels. Enhance Audio (增强音频, Firefly audio
@@ -646,7 +655,8 @@ track), write it as a plan and execute it instead of placing clips one by one:
   means "built by hand" and is skipped; `note` commands are reported. With
   `--notes-as-markers` both become sequence markers the editor sees.
 - Optional per command: `atrack` (e.g. "A4"; default: a free audio track, highest
-  first — A1 dialogue is never the default), `scale` ("fit", "fill" or a percent).
+  first — A1 dialogue is never the default), `scale` ("fit", "fill" or a percent), `video_only`
+  (`true`: the picture only; once both legs are verified that clip's audio leg is taken off, step `audioLeg`).
 - Always `--dry-run` first. It resolves media, matches/plans imports (into a bin
   named after the plan's `sequence`, or `--bin`), snaps both edges of every clip
   to the sequence frame grid, and reports `conflict` wherever the target track is
@@ -745,7 +755,7 @@ the file is a list of components (or `{"components": [...]}`):
   effects. `replace_clip` on a graphic re-creates its effects in the old order and leaves
   the graphic's own components (Graphic Group, layers) to the new clip
   (`graphicComponents`).
-- The whole request is validated before the first change: keyframes outside the
+- The whole request is validated before the first change (`--dry-run` stops there): keyframes outside the
   clip (half a frame of tolerance) → `KEYFRAME_OUT_OF_RANGE`; a param that has
   keyframes refuses a static value or new keyframes (`KEYFRAMED`; animation switched on
   with no keys is fine, a static value switches it off); `clip`/`sequence`
@@ -1073,7 +1083,8 @@ so finish the swap by hand or undo the listed steps. Lessons it encodes:
   `set_volume` is one per clip, `apply_preset` one to three per clip (as `set_params`), `split_clip` five (`[1/5]`…`[5/5]`), `extend_cut` one plus one per
   extended clip, `snap_edges` one per moved or trimmed clip edge, and `replace_clip`, `cut_range` (five per split, one
   per trim, one for the removal, one for the ripple) and `conform_captions` several labelled steps (`undoSteps` in the
-  reply). `--render-check` adds none (a render changes nothing).
+  reply). `--render-check` adds none (a render changes nothing). `insert_clip --video-only` and a plan's `video_only` add one per clip (taking the
+  audio leg off), `add_audio_effect --from/--to` is one per clip, `clone_sequence --as` two.
 - Restore point before a risky edit (a re-cut, a batch of `cut_range` / `extend_cut` /
   `replace_clip` on a sequence the user has worked on): `clone_sequence` copies the
   sequence as `"<name> [restore YYYY-MM-DD HH:MM]"` and leaves the original active, so
@@ -1084,7 +1095,11 @@ so finish the swap by hand or undo the listed steps. Lessons it encodes:
   that cannot be found, named or tagged afterwards is `VERIFY_FAILED` (committed):
   look in the Project panel.
 - Before writing to a track, `list_items --track Vn` (or an `apply_plan --dry-run`)
-  to see what is already there; overwrite mode replaces whatever is underneath.
+  to see what is already there; overwrite mode replaces whatever is underneath. The user moves clips and tracks while
+  you work (on a real job a caption track and a graphic swapped places within minutes, and a removal by track number
+  deleted the graphic): never chain a listing and a removal in one command. Read the listing, then remove with
+  `--only-name "<your clip>"` and `--expect-fingerprint` from that same read; swap your own overlay with `replace_clip
+  --track <where it is now>`.
 - Media with an audio stream placed with `--atrack 0` lands on A1 — usually the
   dialogue. Route B-roll audio to a free track, or let `apply_plan` choose.
 - Clean up what you imported for a test or a discarded draft with

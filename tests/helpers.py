@@ -33,6 +33,11 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+# The CLI hands Premiere resolved paths. Where TEMP is written another way (GitHub's runner has an 8.3 short name; a
+# junction) a test comparing them with the folder it made needs the resolved form from the start.
+tempfile.tempdir = os.path.realpath(tempfile.gettempdir())
+os.environ["TEMP"] = os.environ["TMP"] = tempfile.tempdir
+
 DEAD_URL = f"ws://127.0.0.1:{free_port()}"
 os.environ["PPRO_BRIDGE_URL"] = DEAD_URL
 

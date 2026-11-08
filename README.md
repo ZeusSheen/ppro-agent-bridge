@@ -209,7 +209,7 @@ only, nothing touches Premiere): `python -m unittest discover -s tests`.
 | `select_items --track A1 --from 0 --to 60` | Select clips in the Timeline for what only Premiere's panels do (Properties › Enhance Audio); `--clear` |
 | `list_items [--track V3]` | Timeline clips as JSON (sequence start/end, source in/out, media path) — no OTIO round-trip |
 | `inspect_items [--track V5]` | Effect chains (params, keyframes in media time, added filters with `occurrence`) of timeline clips — what the editor changed |
-| `set_params --track V5 --at s --json fx.json` | Effect params and keyframes on one clip, with an explicit time base (`media`, `clip`, `sequence`), and keyframe interpolation (`"interpolation"`: new or existing keys); validated as a whole before anything changes. Audio tracks too (`A1`: the clip's own Volume) |
+| `set_params --track V5 --at s --json fx.json [--dry-run]` | Effect params and keyframes on one clip, with an explicit time base (`media`, `clip`, `sequence`), and keyframe interpolation (`"interpolation"`: new or existing keys); validated as a whole before anything changes. Audio tracks too (`A1`: the clip's own Volume) |
 | `set_volume --track A1 --at s --db -6` | Clip volume in dB as Premiere shows it, on one clip or the clips entirely inside `--from/--to` (`--mode overlap`: every clip touching it); verified |
 | `add_transition --track V5 --at s --match-name NAME --duration s --edge start\|end` | A video transition on a clip's start or end, read back from OTIO; refused where the edit point already has one (`TRANSITION_EXISTS`) |
 | `remove_transition --track V5 --at s --edge start\|end [--dry-run]` | Remove the video transition at a clip's start or end in one undo step; found in and verified against OTIO, saying which clip it lay on |
@@ -229,7 +229,7 @@ only, nothing touches Premiere): `python -m unittest discover -s tests`.
 | `export_frame --dir d [--at sec] [--width W --height H]` | One frame of the program output (default: the sequence's frame size) |
 | `export_frames --dir d --at 4,18.5,31.6 [--sheet]` | Several frames, optionally a labelled contact sheet |
 | `import_media --path f [...] [--bin "Name"] [--force]` | Import media into the root or a bin (created if missing); returns the new item names. Converts audio-only files Premiere cannot read (FLAC, Opus, Vorbis) to a 48 kHz 24-bit WAV beside them and imports that; refuses video in codecs it cannot read (VP9, AV1, Opus) with an ffmpeg command for each |
-| `insert_clip --item "name" [--at sec] [--vtrack N] [--atrack N] [--mode overwrite\|insert] [--in sec --out sec] [--label "text"]` | Place a clip — or, with `--in/--out`, just that source range ("cut by sentence") |
+| `insert_clip --item "name" [--at sec] [--vtrack N] [--atrack N] [--video-only] [--mode overwrite\|insert] [--in sec --out sec] [--label "text"]` | Place a clip — or, with `--in/--out`, just that source range ("cut by sentence") |
 | `apply_plan plan.json [--dry-run] [--notes-as-markers] [--any-sequence] [--report r.json]` | Execute a JSON edit plan: imports, frame-snapped placements, free audio-track routing, conflict check, verification of both legs |
 | `set_scale --track V3 --at sec (--fit \| --fill \| --value %)` | Motion › Scale, fit/fill computed per clip from the media size |
 | `set_fps --item "name" --fps 59.94 [--dry-run]` | Interpret footage (frame-rate override; affects every sequence) |
@@ -239,9 +239,9 @@ only, nothing touches Premiere): `python -m unittest discover -s tests`.
 | `list_markers` | The active sequence's markers: guid, name, comments, start, duration, type, colour |
 | `remove_marker (--guid g \| --name "…" [--at s]) [--dry-run]` | Remove one marker (a name several markers share needs `--at` or the guid); one undo step, read back |
 | `list_sequences` | Every sequence in the project: name, guid, active, and whether it is a bridge restore point |
-| `clone_sequence [--name "Seq"] [--keep 5] [--dry-run]` | Restore point before a risky edit: a tagged clone `"<name> [restore YYYY-MM-DD HH:MM]"` (not made active); the oldest restore points of that sequence beyond `--keep` are deleted |
+| `clone_sequence [--name "Seq"] [--as "New name"] [--keep 5] [--dry-run]` | Restore point before a risky edit: a tagged clone `"<name> [restore YYYY-MM-DD HH:MM]"` (not made active); the oldest restore points of that sequence beyond `--keep` are deleted |
 | `save_project` | Save the project and check that the project file's time stamp changed |
-| `remove_items --track V3 --from s --to s [--ripple --confirm-ripple] [--dry-run]` | Remove clips in a range (default: only those entirely inside) |
+| `remove_items --track V3 --from s --to s [--only-name "clip"] [--ripple --confirm-ripple] [--dry-run]` | Remove clips in a range (default: only those entirely inside) |
 | `split_clip --track V1 --at s [--render-check] [--dry-run]` | Split a clip without a razor (clone, trim, clone back; no clip is moved); both halves keep volume, scaling and effects |
 | `cut_range --from s --to s [--track V1 …] [--captions V3 --srt f.srt] [--render-check] [--dry-run]` | Remove a time range from every track and close the gap on all of them in sync, in one undo step for the ripple; optionally conform a caption movie |
 | `extend_cut --at s [--out s] [--in s] [--extend V1 …] [--render-check] [--dry-run]` | Open up a cut (breathing room) with more of the clips' own source, everything after it moving right on all tracks in one step |
@@ -257,7 +257,7 @@ only, nothing touches Premiere): `python -m unittest discover -s tests`.
 | `export_aaf --output f.aaf [--embed-audio] [--audio-format wav\|aiff] [--detach]` / `export_aaf --job ID` | The active sequence as an AAF, as a job with no time limit; the file must be new and not empty. Premiere may hold it with its modal "AAF export log" until someone clicks OK: the reply says so |
 | `export_xml --output f.xml [--overwrite]` | The active sequence as Final Cut Pro 7 XML (no dialog), checked for `<?xml` and `<xmeml>` |
 | `list_effects [--kind audio\|video]` | Effects Premiere can add: video filters (match + display name), audio filters (display name, in the UI language) |
-| `add_audio_effect --track A1 --at s --name "降噪" [--dry-run]` | Add an audio effect by its display name to the clip under a time: one undo step, verified; an unknown name lists the closest |
+| `add_audio_effect --track A1 (--at s \| --from s --to s) --name "降噪" [--dry-run]` | Add an audio effect by its display name to the clip under a time: one undo step, verified; an unknown name lists the closest |
 | `list_effect_presets [--search text] [--file f.prfpset]` | Effect presets (`.prfpset`) on disk, Premiere's own and yours, with their effects, animation and how much `apply_preset` can replay; no panel needed |
 | `apply_preset --track V2 (--at s \| --from s --to s) --preset "name" [--dry-run]` | Apply an effect preset through `set_params`, keeping its timing anchor; what UXP cannot write (masks, colours, Lumetri curves) is skipped and reported; verified |
 | `apply_ops --json ops.json --label "text" [--dry-run]` | Several whitelisted small writes in ONE transaction and one undo step: markers (add, rename, comment, colour, duration, type, move, remove), clip name / disabled (video), a static param value, sequence in / out and playhead, video track and bin names. Every target is resolved and every action built before anything commits; each op is read back |
@@ -636,6 +636,14 @@ and Reload the panel in UXP Developer Tool.
   convert audio-only files Premiere cannot read (FLAC — a music download got a modal dialog and
   hung the panel on 27.1 —, Opus, Vorbis) to a 48 kHz 24-bit WAV beside them and import that
   instead, reusing a WAV of the same length (live).
+  **From the first real jobs on 0.7 (7-8 Nov 2026):** one failed `tasklist` used to put the broker back in its old
+  way, UXP Developer Tool started, kept and restarted (seen once in the audit log); now a list that cannot be read
+  starts nothing until it can. `remove_items --only-name` refuses a removal that would take anything else (a removal
+  by track number had just deleted a graphic the editor had moved there). `insert_clip --video-only` and a plan's
+  `video_only` place the picture without its sound, `clone_sequence --as` makes a plain named copy of a sequence for
+  another version of the cut, `set_params --dry-run` checks a request without changing anything, and
+  `add_audio_effect --from/--to` adds an effect to every clip in a range. A network path as a preset is refused
+  before the ffmpeg check, and the test suite no longer depends on ffmpeg or on how TEMP is written.
 - **0.6.0** — An icon: an L-cut (the picture cutting before the
   sound) under an orange playhead on a deep purple tile (`ppro_bridge/bridge.svg`,
   `bridge.ico` with every Windows size drawn on its own pixel grid by

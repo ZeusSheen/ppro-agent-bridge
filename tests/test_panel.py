@@ -1087,6 +1087,24 @@ class PanelHarnessTest(unittest.TestCase):
         self.assertEqual(active["guid"], "harness-sequence-guid")
         self.assertEqual(len(out["transactions"]), 6)
 
+    def test_clone_sequence_as_a_plain_named_copy(self):
+        """asName: the same clone, renamed only: no restore-point tag, nothing pruned, a taken name refused."""
+        out = batch([
+            {"action": "clone_sequence", "params": {}},
+            {"action": "clone_sequence", "params": {"asName": "Second cut", "keep": 1, "dryRun": True}},
+            {"action": "clone_sequence", "params": {"asName": "Second cut", "keep": 1}},
+            {"action": "clone_sequence", "params": {"asName": "Second cut"}},
+            {"action": "list_sequences", "params": {}},
+        ])
+        first, dry, copy, taken, listing = out["replies"]
+        self.assertEqual((dry["data"]["cloneName"], dry["data"]["prune"]), ("Second cut", []))
+        self.assertEqual((copy["data"]["clone"]["name"], copy["data"]["pruned"], copy["data"]["verified"]), ("Second cut", [], True))
+        self.assertTrue(copy["data"]["undoSteps"][1].endswith("[2/2 name]"), copy)
+        self.assertEqual((taken["ok"], taken["code"], taken["outcome"]), (False, "PRECONDITION_FAILED", "not_committed"))
+        rows = {s["name"]: s for s in listing["data"]["sequences"]}
+        self.assertIsNone(rows["Second cut"]["restorePoint"])
+        self.assertIsNotNone(rows[first["data"]["clone"]["name"]]["restorePoint"])
+
     CLONE_SCRIPT = r"""
 const h = require(process.argv[1]);
 (async () => {

@@ -976,6 +976,9 @@ module.exports = {
     "guid": {
      "type": "string"
     },
+    "asName": {
+     "type": "string"
+    },
     "keep": {
      "type": "integer",
      "minimum": 1,

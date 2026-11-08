@@ -228,6 +228,10 @@ module.exports = function (deps) {
         if (!active) throw new BridgeError("NO_SEQUENCE", "Project has no active sequence: name the one to clone.");
         source = before.find(isActive);
       }
+      const plainName = typeof params.asName === "string" ? params.asName.trim() : "";
+      if (plainName && before.some((e) => e.name === plainName)) {
+        throw new BridgeError("PRECONDITION_FAILED", `A sequence named "${plainName}" already exists; nothing was cloned.`);
+      }
       if (!source) {
         throw new BridgeError("NOT_FOUND", `No sequence ${params.guid ? "with guid " + params.guid : '"' + (params.name || "active") + '"'} in this project.`,
           { data: { sequences: before.map((e) => e.name) } });
@@ -248,18 +252,18 @@ module.exports = function (deps) {
         if (tag && tag.sourceGuid === source.guid && !tag.renamed && !isActive(e)) points.push({ e, tag });
       }
       points.sort((a, b) => (a.tag.created < b.tag.created ? -1 : a.tag.created > b.tag.created ? 1 : 0));
-      const doomed = points.slice(0, Math.max(0, points.length + 1 - keep));
+      const doomed = plainName ? [] : points.slice(0, Math.max(0, points.length + 1 - keep));
       const prune = doomed.map((p) => ({ name: p.e.name, guid: p.e.guid, created: p.tag.created }));
 
       const now = new Date();
       const st = stamps(now);
       const taken = new Set(before.map((e) => e.name));
-      let cloneName = `${source.name} [restore ${st.minute}]`;
+      let cloneName = plainName || `${source.name} [restore ${st.minute}]`;
       if (taken.has(cloneName)) cloneName = `${source.name} [restore ${st.second}]`;
       for (let n = 2; taken.has(cloneName); n++) cloneName = `${source.name} [restore ${st.second} #${n}]`;
 
-      const label = params.undoLabel || `Agent: restore point of "${source.name}"`;
-      const steps = [`${label} [1/2 clone]`, `${label} [2/2 name + tag]`];
+      const label = params.undoLabel || (plainName ? `Agent: copy of "${source.name}"` : `Agent: restore point of "${source.name}"`);
+      const steps = [`${label} [1/2 clone]`, plainName ? `${label} [2/2 name]` : `${label} [2/2 name + tag]`];
       const out = { dryRun: !!params.dryRun, source: { name: source.name, guid: source.guid }, cloneName, keep, prune, undoSteps: steps };
       if (params.dryRun) {
         if (prune.length) out.notes = NOT_AN_UNDO_STEP;
@@ -286,12 +290,12 @@ module.exports = function (deps) {
       const tag = { v: 1, guid: clone.guid, name: cloneName, sourceGuid: source.guid, sourceName: source.name, created: now.toISOString() };
       try {
         const item = await clone.seq.getProjectItem();
-        const props = await ppro.Properties.getProperties(clone.seq);
-        if (!item || !props) throw new BridgeError("INTERNAL", "the clone's project item or custom properties are unreadable");
-        core.runTransaction(project, steps[1], () => [
+        const props = plainName ? null : await ppro.Properties.getProperties(clone.seq);
+        if (!item || (!plainName && !props)) throw new BridgeError("INTERNAL", "the clone's project item or custom properties are unreadable");
+        core.runTransaction(project, steps[1], () => (plainName ? [item.createSetNameAction(cloneName)] : [
           item.createSetNameAction(cloneName),
           props.createSetValueAction(RESTORE_KEY, JSON.stringify(tag), persistent()),
-        ], ctx);
+        ]), ctx);
       } catch (e) {
         throw new BridgeError(core.codeOf(e), `[name + tag] ${core.errorMessage(e)}. The clone "${premiereName}" ` +
           `(${clone.guid}) exists but is not named or tagged as a restore point, so it will never be pruned.`,
@@ -305,13 +309,13 @@ module.exports = function (deps) {
       } catch (e) {
         readError = core.errorMessage(e);
       }
-      const backTag = back ? await restoreTag(back) : null;
+      const backTag = back && !plainName ? await restoreTag(back) : null;
       const problems = [];
       if (readError) problems.push(readError);
       else if (!back) problems.push("it is gone from the sequence list");
       else {
         if (back.name !== cloneName) problems.push(`its name reads "${back.name}"`);
-        if (!backTag || backTag.sourceGuid !== source.guid) problems.push("its restore-point tag does not read back");
+        if (!plainName && (!backTag || backTag.sourceGuid !== source.guid)) problems.push("its restore-point tag does not read back");
       }
       if (problems.length) {
         throw verifyFailed(`Restore point of "${source.name}" cloned (${clone.guid}), but ${problems.join(" and ")}. ` +

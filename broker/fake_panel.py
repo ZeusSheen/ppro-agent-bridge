@@ -1995,23 +1995,26 @@ def h_clone_sequence(p):
     if source is None:
         what = f'with guid {p["guid"]}' if p.get("guid") else f'"{p.get("name")}"'
         raise Coded("NOT_FOUND", f"No sequence {what} in this project.", data={"sequences": [s["name"] for s in before]})
+    plain = (p.get("asName") or "").strip()
+    if plain and any(s["name"] == plain for s in before):
+        raise Coded("PRECONDITION_FAILED", f'A sequence named "{plain}" already exists; nothing was cloned.')
     keep = p["keep"] if is_num(p.get("keep")) else 5
     points = [(s, t) for s in before for t in [_restore_tag(s)]
               if t and t["sourceGuid"] == source["guid"] and not t["renamed"] and s is not active]
     points.sort(key=lambda st: st[1]["created"])
-    doomed = points[:max(0, len(points) + 1 - keep)]
+    doomed = [] if plain else points[:max(0, len(points) + 1 - keep)]
     prune = [{"name": s["name"], "guid": s["guid"], "created": t["created"]} for s, t in doomed]
     now = time.localtime()
     minute, second = time.strftime("%Y-%m-%d %H:%M", now), time.strftime("%Y-%m-%d %H:%M:%S", now)
     taken = {s["name"] for s in before}
-    clone_name = f'{source["name"]} [restore {minute}]'
+    clone_name = plain or f'{source["name"]} [restore {minute}]'
     if clone_name in taken:
         clone_name = f'{source["name"]} [restore {second}]'
     n = 2
     while clone_name in taken:
         clone_name, n = f'{source["name"]} [restore {second} #{n}]', n + 1
-    label = p.get("undoLabel") or f'Agent: restore point of "{source["name"]}"'
-    steps = [f"{label} [1/2 clone]", f"{label} [2/2 name + tag]"]
+    label = p.get("undoLabel") or (f'Agent: copy of "{source["name"]}"' if plain else f'Agent: restore point of "{source["name"]}"')
+    steps = [f"{label} [1/2 clone]", f"{label} [2/2 name]" if plain else f"{label} [2/2 name + tag]"]
     out = {"dryRun": bool(p.get("dryRun")), "source": {"name": source["name"], "guid": source["guid"]},
            "cloneName": clone_name, "keep": keep, "prune": prune, "undoSteps": steps}
     if p.get("dryRun"):
@@ -2025,8 +2028,11 @@ def h_clone_sequence(p):
     transact(steps[1])
     premiere_name, clone["name"] = clone["name"], clone_name
     created = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    clone["props"][RESTORE_KEY] = json.dumps({"v": 1, "guid": clone["guid"], "name": clone_name, "created": created,
-                                              "sourceGuid": source["guid"], "sourceName": source["name"]})
+    if plain:
+        clone["props"].pop(RESTORE_KEY, None)  # a copy of a restore point is not one
+    else:
+        clone["props"][RESTORE_KEY] = json.dumps({"v": 1, "guid": clone["guid"], "name": clone_name, "created": created,
+                                                  "sourceGuid": source["guid"], "sourceName": source["name"]})
     out.update(clone={"name": clone_name, "guid": clone["guid"], "premiereName": premiere_name}, verified=True,
                undoLabel=label, pruned=[])
     if doomed:
