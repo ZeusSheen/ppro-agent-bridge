@@ -96,6 +96,9 @@ module.exports = function (deps) {
      * neighbour's opposite edge is asked (one more undo step, "[neighbour]"; which side Premiere files a
      * neighbour's single-sided fade under is unmeasured). Which transition it was (name, seconds either side of the
      * cut, owner) comes from OTIO: ops.remove_transition finds it there first and verifies it is gone.
+     * byOtio: on 27.1 a transition added over UXP is not among the track's transition items (count 0, live), so the count
+     * cannot refuse or prove anything: the call is made anyway and `removed: null` leaves the proof to the caller's OTIO
+     * export. side "neighbour": only the neighbour's opposite edge is asked (the caller saw the first call change nothing).
      */
     async remove_transition(params, ctx) {
       const dryRun = !!params.dryRun;
@@ -122,7 +125,8 @@ module.exports = function (deps) {
       const out = { dryRun, track: label, edge: params.edge, cut, clip: clipView(d),
                     neighbour: neighbour ? clipView(neighbour.desc) : null, removed: false, via: null,
                     transitionCount: { before } };
-      if (before === 0) return refuse(out, dryRun, `${label} has no transitions; nothing was changed.`);
+      const byOtio = params.byOtio === true;
+      if (before === 0 && !byOtio) return refuse(out, dryRun, `${label} has no transitions; nothing was changed.`);
       if (dryRun) return out;
 
       const undo = params.undoLabel || `Agent: remove the transition at the ${params.edge} of ${label} @${params.atSeconds}s`;
@@ -132,9 +136,18 @@ module.exports = function (deps) {
           core.runTransaction(project, lbl, () => item.createRemoveVideoTransitionAction(transitionPosition(edge)), ctx);
         } catch (e) { problems.push(core.errorMessage(e)); }
       };
+      if (params.side === "neighbour") {
+        if (!neighbour) throw new BridgeError("NOT_FOUND", `No clip touches the ${params.edge} of ${d.name} on ${label}; nothing was changed.`);
+        attempt(neighbour.it, atStart ? "end" : "start", undo + " [neighbour]");
+        const n = await count();
+        return Object.assign(out, { removed: n < before ? true : null, via: "neighbour", problems, transitionCount: { before, after: n }, undoLabel: undo });
+      }
       attempt(it, params.edge, undo);
       let after = await count();
       let via = after < before ? "clip" : null;
+      if (!via && byOtio && before === 0) {             // nothing to count: the caller's OTIO export says whether it went
+        return Object.assign(out, { removed: null, via: "clip", problems, transitionCount: { before, after }, undoLabel: undo });
+      }
       if (!via && neighbour && core.isFn(neighbour.it, "createRemoveVideoTransitionAction")) {
         attempt(neighbour.it, atStart ? "end" : "start", undo + " [neighbour]");
         after = await count();

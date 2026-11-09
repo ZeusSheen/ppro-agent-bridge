@@ -130,7 +130,7 @@ if str(REPO) not in sys.path:
 from ppro_bridge import audit, auth, devloader, spec  # noqa: E402  (stdlib + websockets)
 from ppro_bridge import update as updates  # noqa: E402  (stdlib)
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 HOST = "127.0.0.1"   # localhost only — this is a security boundary
 HOST6 = "::1"        # the same on IPv6: UXP's ws://localhost may try ::1 first
 PLUGIN_ID = "org.pproagentbridge.panel"  # plugin/manifest.json "id"; the panel's hello names it

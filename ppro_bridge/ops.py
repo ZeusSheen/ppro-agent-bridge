@@ -6,12 +6,14 @@ It returns the reply data (a dict) or raises BridgeError (code, outcome, data). 
 nothing has a default transport: a forgotten injection fails instead of reaching a live Premiere.
 """
 
+import gzip
 import json
 import math
 import os
 import re
 import sys
 import time
+import zlib
 from pathlib import Path
 
 from . import paths, spec
@@ -214,6 +216,82 @@ def set_active_sequence(rpc, *, name=None, guid=None, sleep=time.sleep) -> dict:
                       hint="Run get_project to see which sequence is active, then set_active_sequence again (or ask "
                            "the user to open it in Premiere) before any write; --expect-seq / a sequence guard "
                            "refuses a write on the wrong one.")
+
+
+_PROJECT_SCAN_LIMIT = 16 * 1024 ** 3      # decompressed bytes: the largest real project here is a few hundred MB
+_PROJECT_PATH_TEXT = re.compile(rb">\s*(?:<!\[CDATA\[\s*)?([\\/]{2}[^<\]\r\n]{0,400}|\\\?\?\\[^<\]\r\n]{0,400})")
+_PROJECT_SLASH_REF = re.compile(rb"&#(?:0*(?:92|47)|[xX]0*(?:5[cC]|2[fF]));")
+
+
+def _refuse_project(target, why, **kw):
+    return BridgeError(f"{target.name}: {why}", code="PRECONDITION_FAILED", outcome="not_committed",
+                       hint="If you trust this project, open it yourself in Premiere (File > Open): the bridge will not. "
+                            "Media on a share: map a drive letter and relink it.", **kw)
+
+
+def _check_project_file(target):
+    """Read a .prproj (gzip'd XML) before Premiere does. Opening one makes Premiere go to the media it names with no dialog
+    in between, and a network path there would offer the user's Windows credentials to that computer, the reason a
+    network path is refused everywhere else. Refused: an element whose text is a network or device path, a backslash or
+    slash written as a character reference (only a hand-made file has one), and a file that is not a Premiere project
+    (with every dialog off Premiere still opens a modal error for one, and nothing runs until someone clicks OK: 27.1 b41,
+    live 9 Nov 2026). A stream, so a large project costs seconds and a zip bomb stops at the limit."""
+    with open(target, "rb") as raw:
+        packed = raw.read(2) == b"\x1f\x8b"
+    found, total, tail = [], 0, b""
+    try:
+        with (gzip.open if packed else open)(target, "rb") as f:
+            while True:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                if not total and b"<PremiereData" not in chunk[:4096]:
+                    raise _refuse_project(target, "this is not a Premiere project file: Premiere would stop on an error window "
+                                          "that waits for someone to click OK.")
+                total += len(chunk)
+                if total > _PROJECT_SCAN_LIMIT:
+                    raise _refuse_project(target, f"more than {_PROJECT_SCAN_LIMIT // 1024 ** 3} GB of XML: it could not be checked.")
+                buf = tail + chunk
+                if _PROJECT_SLASH_REF.search(buf):
+                    raise _refuse_project(target, "a slash is written as an XML character reference, which hides what the project points at.")
+                for m in _PROJECT_PATH_TEXT.finditer(buf):
+                    text = m.group(1).decode("utf-8", "replace").strip()
+                    if paths.remote_kind(text) and text not in found:
+                        found.append(text)
+                tail = buf[-4096:]
+    except (OSError, EOFError, zlib.error) as e:
+        raise _refuse_project(target, f"the file could not be read: {e}") from e
+    if found:
+        raise _refuse_project(target, f"it points at {len(found)} network or device path(s), the first {found[0]}: opening it could make "
+                              "Windows offer your credentials to that computer.", data={"references": found[:10], "count": len(found)})
+    return total
+
+
+def open_project(rpc, *, path, sleep=time.sleep) -> dict:
+    """Open a .prproj, or bring one that is already open to the front, so later commands work on it. No dialogs; projects
+    already open stay open; nothing is saved or closed. A file that points at a network path is refused first
+    (_check_project_file). Then get_project must report that file (`confirmed`), else VERIFY_FAILED (committed)."""
+    target = paths.resolved(paths.check(path, what="--path", ext=".prproj"))
+    if not target.is_file():
+        raise BridgeError(f"No project file at {target}", code="FILE_NOT_FOUND", outcome="not_committed")
+
+    def same(p):
+        text = str(p or "")
+        return os.path.normcase(text[4:] if text.startswith("\\\\?\\") else text) == os.path.normcase(str(target))
+    if not same((rpc("get_project") or {}).get("path")):          # the active project is already open: nothing to vet
+        _check_project_file(target)
+    data = rpc("open_project", {"path": str(target)})
+    reads = []
+    for delay in (0.0, *SWITCH_CONFIRM_DELAYS):
+        if delay:
+            sleep(delay)
+        reads.append((rpc("get_project") or {}).get("path"))
+        if same(reads[-1]):
+            data.update(confirmed=True, confirmReads=len(reads))
+            return data
+    raise BridgeError(f"open_project replied that {target} is active, but get_project still reports {reads[-1]}.",
+                      code="VERIFY_FAILED", outcome="committed", data={"reply": data, "active": reads[-1]},
+                      hint="Run get_project before any write; --expect-seq or a project guard refuses a write on the wrong one.")
 
 
 def select_items(rpc, *, track=None, at=None, from_s=None, to_s=None, mode="inside", clear=False, dry_run=False,
@@ -1453,7 +1531,8 @@ def remove_transition(rpc, *, track, at, edge, dry_run=False, label=None, expect
     target = {"matchName": near[0]["matchName"], "name": near[0]["name"], "at": round(near[0]["at"], 6),
               "before": round(near[0]["before"], 6), "after": round(near[0]["after"], 6),
               "owner": owned[0]["owner"] if owned else None}
-    params = {"videoTrack": idx, "atSeconds": at, "edge": edge, "dryRun": bool(dry_run)}
+    # byOtio: OTIO has just shown it; the panel's own count misses a transition added over UXP (27.1, live 9 Nov 2026)
+    params = {"videoTrack": idx, "atSeconds": at, "edge": edge, "dryRun": bool(dry_run), "byOtio": True}
     if label:
         params["undoLabel"] = label
     data = rpc("remove_transition", params)
@@ -1462,6 +1541,11 @@ def remove_transition(rpc, *, track, at, edge, dry_run=False, label=None, expect
         return data
     after = _replace.otio_transitions(rpc, idx)
     still = [t for t in after if abs(t["at"] - cut) <= frame]
+    if still and data.get("removed") is None and data.get("neighbour"):  # Premiere filed it under the neighbour's edge
+        data = dict(data, **rpc("remove_transition", dict(params, side="neighbour")))
+        data.update(report, transition=target)
+        after = _replace.otio_transitions(rpc, idx)
+        still = [t for t in after if abs(t["at"] - cut) <= frame]
     gone = [t for t in before if t is not near[0] and not any(_same_transition(t, a, frame / 2) for a in after)]
     if still or gone:
         what = ([f"a transition is still at {cut:.3f}s ({still[0]['name'] or still[0]['matchName']})"] if still else []) \

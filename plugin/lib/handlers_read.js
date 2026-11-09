@@ -169,6 +169,51 @@ module.exports = function (deps) {
     },
 
     /*
+     * Open a project, or bring one that is already open to the front (Project.open), so later requests work on it. Every
+     * dialog is off (convert, locate media, warnings: nobody is at the keyboard for them). Projects already open stay
+     * open, and nothing is saved or closed. Read back: the active project must become that file (a large project
+     * takes a while).   params: { path }
+     */
+    async open_project(params, ctx) {
+      if (!ppro.Project || !core.isFn(ppro.Project, "open")) {
+        throw new BridgeError("UNSUPPORTED", "This Premiere build cannot open a project over UXP (Project.open).");
+      }
+      refuseBusy();
+      const norm = (p) => String(p || "").replace(/^\\\\\?\\/, "").replace(/\//g, "\\").toLowerCase();
+      const view = (x) => (x ? { name: core.tryGetSync(() => x.name), path: core.tryGetSync(() => x.path) } : null);
+      const want = norm(params.path);
+      const before = await tryGet(() => ppro.Project.getActiveProject());
+      const previous = view(before);
+      const done = async (x, switched) => {
+        const seq = await tryGet(() => x.getActiveSequence());
+        return Object.assign(view(x), { switched, activeSequence: seq ? seq.name : null, previous, guid: core.readGuid(x) });
+      };
+      if (before && norm(previous.path) === want) return done(before, false);
+      let options;
+      if (ppro.OpenProjectOptions) {
+        options = new ppro.OpenProjectOptions();
+        for (const set of ["setShowConvertProjectDialog", "setShowLocateFileDialog", "setShowWarningDialog"]) {
+          if (core.isFn(options, set)) options = options[set](false) || options;
+        }
+      }
+      ctx.sideEffect();
+      try {
+        await ppro.Project.open(params.path, options);
+      } catch (e) {
+        throw new BridgeError("TRANSACTION_FAILED", `Premiere could not open ${params.path}: ${(e && e.message) || e}`,
+          { outcome: "unknown", data: { previous } });
+      }
+      let now = null;
+      for (let i = 0; i < 40; i++) {
+        now = await tryGet(() => ppro.Project.getActiveProject());
+        if (now && norm(core.tryGetSync(() => now.path)) === want) return done(now, true);
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      throw new BridgeError("TRANSACTION_FAILED", `Premiere did not make ${params.path} the active project (active: ${now ? now.name : "none"}).`,
+        { outcome: "unknown", data: { active: view(now), previous } });
+    },
+
+    /*
      * Select clips in the Timeline, replacing the selection (Sequence#setSelection inside the TrackItemSelection
      * callback; synchronous and true on 27.1): on the given tracks, the one clip under atSeconds, or the clips in
      * [fromSeconds, toSeconds] (mode inside / overlap, as remove_items); clear empties it. For what only Premiere's

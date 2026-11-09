@@ -1105,6 +1105,42 @@ class PanelHarnessTest(unittest.TestCase):
         self.assertIsNone(rows["Second cut"]["restorePoint"])
         self.assertIsNotNone(rows[first["data"]["clone"]["name"]]["restorePoint"])
 
+    OPEN_PROJECT_SCRIPT = r"""
+const h = require(process.argv[1]);
+(async () => {
+  const { bridge, mocks } = h.loadPanel({}, h.DEFAULT_MAIN);
+  const same = await h.callOnce(bridge, { action: "open_project", params: { path: "/fake/PAB_TEST_harness.prproj" } });
+  const before = mocks.record.projectOpens.length;
+  const other = await h.callOnce(bridge, { action: "open_project", params: { path: "/fake/other.prproj" } });
+  const wrong = await h.callOnce(bridge, { action: "open_project", params: { path: "/fake/x.mov" } });
+  process.stdout.write(JSON.stringify({ same, before, other, wrong, opens: mocks.record.projectOpens, violations: mocks.record.violations }));
+  process.exit(0);
+})();
+"""
+
+    def test_open_project_opens_with_no_dialogs_and_leaves_the_active_one_alone(self):
+        p = subprocess.run([NODE, "-e", self.OPEN_PROJECT_SCRIPT, str(HARNESS)], capture_output=True, text=True,
+                           encoding="utf-8", timeout=60)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        out = json.loads(p.stdout)
+        self.assertEqual(out["violations"], [])
+        self.assertEqual((out["same"]["data"]["switched"], out["before"]), (False, 0))  # already active: Project.open not called
+        data = out["other"]["data"]
+        self.assertEqual((data["switched"], data["name"], data["path"]), (True, "other.prproj", "/fake/other.prproj"))
+        self.assertEqual(data["previous"]["path"], "/fake/PAB_TEST_harness.prproj")
+        self.assertEqual(out["opens"], [{"path": "/fake/other.prproj", "dialogs": {"convert": False, "locate": False, "warning": False}}])
+        self.assertEqual(out["wrong"]["code"], "BAD_PARAMS")
+
+    def test_open_project_says_when_premiere_could_not_open_it(self):
+        r = call("open_project", {"path": "/fake/bad.prproj"}, mock={"openProjectFails": True})["reply"]
+        self.assertEqual((r["ok"], r["code"], r["outcome"]), (False, "TRANSACTION_FAILED", "unknown"), r)
+        self.assertIn("could not open", r["error"])
+
+    def test_open_project_with_no_project_open(self):
+        r = call("open_project", {"path": "/fake/first.prproj"}, scenario="no-project")["reply"]
+        self.assertTrue(r["ok"], r)
+        self.assertEqual((r["data"]["switched"], r["data"]["name"], r["data"]["previous"]), (True, "first.prproj", None))
+
     CLONE_SCRIPT = r"""
 const h = require(process.argv[1]);
 (async () => {
@@ -1466,6 +1502,7 @@ const h = require(process.argv[1]);
         tj = json.dumps(transcript_doc())
         params = {
             "ping": {}, "get_project": {}, "get_sequence": {}, "set_active_sequence": {"name": "Sequence 01"},
+            "open_project": {"path": "/fake/other.prproj"},
             "select_items": {"videoTracks": [1], "fromSeconds": 9, "toSeconds": 16},
             "list_items": {}, "inspect_items": {},
             "list_project_items": {}, "export_frame": {"dir": "/fake/out"}, "export_otio": {"outputPath": "/fake/t.otio"},
@@ -1811,14 +1848,15 @@ const h = require(process.argv[1]);
         status = {"action": "export_status", "params": {}}
         render = {"action": "export_sequence", "params": {"outputPath": "/fake/out/b.wav", "presetPath": "/fake/w.epr"}}
         xml = {"action": "export_xml", "params": {"outputPath": "/fake/out/cut.xml"}}
-        out = recorded([self.AAF, status, render, self.AAF, xml, dict(status, waitMs=2500), dict(status, waitMs=2000)],
+        switch = {"action": "open_project", "params": {"path": "/fake/other.prproj"}}
+        out = recorded([self.AAF, status, render, self.AAF, xml, switch, dict(status, waitMs=2500), dict(status, waitMs=2000)],
                        mock={"aafJob": {"holdMs": 5000}})
-        start, early, busy_render, busy_aaf, busy_xml, held, done = out["replies"]
+        start, early, busy_render, busy_aaf, busy_xml, busy_switch, held, done = out["replies"]
         self.assertEqual((start["data"]["state"], start["data"]["exported"]), ("running", False))
         job = early["data"]["jobs"][0]
         self.assertEqual((job["kind"], job["state"], job["pending"]), ("aaf", "running", True))
         self.assertNotIn("hint", job)  # not yet 3 s
-        for busy in (busy_render, busy_aaf, busy_xml):
+        for busy in (busy_render, busy_aaf, busy_xml, busy_switch):
             self.assertEqual((busy["code"], busy["outcome"], busy["data"]["jobId"], busy["data"]["kind"]),
                              ("EXPORT_RUNNING", "not_committed", job["jobId"], "aaf"))
             self.assertIn("AAF export log", busy["error"])

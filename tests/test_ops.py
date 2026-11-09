@@ -2,6 +2,7 @@
 replace_clip's keyframe pre-check and partial outcome, set_params/add_transition request shaping, ping's
 compatibility/stale checks, ffprobe failures, and the CLI's error mapping."""
 
+import gzip
 import json
 import os
 import stat
@@ -2614,6 +2615,131 @@ class RealJobAdditionsTest(unittest.TestCase):
         self.assertEqual([p["audioTrack"] for a, p in calls if a == "insert_clip"], [0])
         args = cli.build_parser().parse_args(["insert_clip", "--item", "x", "--video-only"])
         self.assertEqual((args.video_only, args.atrack), (True, None))
+
+
+
+class RemoveTransitionByOtioTest(unittest.TestCase):
+    """27.1 does not list a transition added over UXP among the track's items (live, 9 Nov 2026): the count reads 0 while
+    OTIO has it. remove_transition goes by OTIO and proves the result there."""
+
+    def placed(self):
+        rpc, fake, calls = fake_rpc()
+        ops.add_transition(rpc, track="V1", at=5.0, match_name="AE.ADBE Cross Dissolve New", duration=0.5, edge="start")
+        self.assertEqual(len(fake.STATE["transitions"]), 1)
+        fake.STATE["transitionsInvisible"] = True
+        return rpc, fake, calls
+
+    def test_a_transition_the_panel_cannot_count_is_removed_and_checked_in_otio(self):
+        rpc, fake, calls = self.placed()
+        dry = ops.remove_transition(rpc, track="V1", at=5.0, edge="start", dry_run=True)
+        self.assertNotIn("wouldRefuse", dry)
+        self.assertEqual(len(fake.STATE["transitions"]), 1)
+        data = ops.remove_transition(rpc, track="V1", at=5.0, edge="start", label="take it off")
+        self.assertEqual((data["verified"], data["removed"], data["via"]), (True, None, "clip"))
+        self.assertEqual(fake.STATE["transitions"], [])
+
+    def test_nothing_in_otio_still_sends_nothing(self):
+        rpc, fake, calls = fake_rpc()
+        fake.STATE["transitionsInvisible"] = True
+        self.assertEqual(ops.remove_transition(rpc, track="V1", at=5.0, edge="start", dry_run=True)["wouldRefuse"], "NOT_FOUND")
+        self.assertNotIn("remove_transition", [a for a, _ in calls])
+
+    def test_the_neighbours_edge_is_asked_when_the_clips_own_call_changes_nothing(self):
+        rpc, fake, calls = self.placed()
+        real, sides = fake.HANDLERS["remove_transition"], []
+
+        def filed_under_the_neighbour(p):
+            sides.append(p.get("side"))
+            if p.get("side") == "neighbour":
+                return real(p)
+            return dict(dryRun=False, track="V1", edge=p["edge"], cut=0.0, clip={}, neighbour={"name": "x"}, removed=None,
+                        via="clip", transitionCount={"before": 0, "after": 0})
+        fake.HANDLERS["remove_transition"] = filed_under_the_neighbour
+        data = ops.remove_transition(rpc, track="V1", at=5.0, edge="start")
+        self.assertEqual(sides, [None, "neighbour"])
+        self.assertEqual((data["verified"], data["via"]), (True, "neighbour"))
+
+    def test_still_there_afterwards_is_verify_failed(self):
+        rpc, fake, calls = self.placed()
+        fake.HANDLERS["remove_transition"] = lambda p: dict(dryRun=False, track="V1", edge=p["edge"], cut=0.0, clip={}, neighbour=None,
+                                                            removed=None, via="clip", transitionCount={"before": 0, "after": 0})
+        with self.assertRaises(BridgeError) as cm:
+            ops.remove_transition(rpc, track="V1", at=5.0, edge="start")
+        self.assertEqual((cm.exception.code, cm.exception.outcome), ("VERIFY_FAILED", "committed"))
+
+
+
+class OpenProjectTest(unittest.TestCase):
+    def file(self, name="other.prproj", xml="<PremiereData><Media><FilePath>D" ":\\m\\a.mp4</FilePath></Media></PremiereData>"):
+        p = tmpdir() / name
+        p.write_bytes(gzip.compress(xml.encode("utf-8")))
+        return p
+
+    def test_a_project_pointing_at_the_network_is_refused_before_anything_is_sent(self):
+        share = "\\\\host\\share\\a.mp4"
+        for text in (f"<FilePath>{share}</FilePath>", "<ActualMediaFilePath>//host/share/a.mp4</ActualMediaFilePath>",
+                     "<FilePath>\\\\?\\UNC\\host\\share\\a.mp4</FilePath>", f"<FilePath>  <![CDATA[{share}]]></FilePath>"):
+            rpc, fake, calls = fake_rpc()
+            with self.assertRaises(BridgeError) as cm:
+                ops.open_project(rpc, path=str(self.file(xml=f"<PremiereData>{text}</PremiereData>")), sleep=lambda s: None)
+            self.assertEqual((cm.exception.code, cm.exception.outcome), ("PRECONDITION_FAILED", "not_committed"), text)
+            self.assertEqual(cm.exception.data["count"], 1, text)
+            self.assertNotIn("open_project", [a for a, _ in calls])
+
+    def test_a_hidden_slash_or_a_file_that_is_not_xml_is_refused(self):
+        for raw in (gzip.compress(b"<PremiereData><FilePath>&#92;&#x5C;host</FilePath></PremiereData>"), gzip.compress(b"PK not xml"), gzip.compress(b"<other>xml</other>"), b"\x1f\x8bbroken"):
+            p = tmpdir() / "x.prproj"
+            p.write_bytes(raw)
+            rpc, fake, calls = fake_rpc()
+            with self.assertRaises(BridgeError) as cm:
+                ops.open_project(rpc, path=str(p), sleep=lambda s: None)
+            self.assertEqual(cm.exception.code, "PRECONDITION_FAILED", raw)
+            self.assertNotIn("open_project", [a for a, _ in calls])
+
+    def test_local_paths_a_plain_xml_project_and_a_path_across_chunks_pass(self):
+        rpc, fake, calls = fake_rpc()
+        xml = "<PremiereData><FilePath>\\\\?\\D" ":\\m\\a.mp4</FilePath><RelativePath>.\\m\\a.mp4</RelativePath></PremiereData>"
+        p = tmpdir() / "plain.prproj"
+        p.write_text(xml, encoding="utf-8")
+        self.assertTrue(ops.open_project(rpc, path=str(p), sleep=lambda s: None)["confirmed"])
+        padding = "x" * ((1 << 20) - 16)                     # the path starts just before the 1 MiB read ends
+        rpc, fake, calls = fake_rpc()
+        with self.assertRaises(BridgeError) as cm:
+            ops.open_project(rpc, path=str(self.file(xml=f"<PremiereData>{padding}<a>\\\\host\\s\\b.mp4</a></PremiereData>")), sleep=lambda s: None)
+        self.assertEqual(cm.exception.code, "PRECONDITION_FAILED")
+
+    def test_the_active_project_is_not_read_again(self):
+        rpc, fake, calls = fake_rpc()
+        p = self.file(xml="<PremiereData><FilePath>\\\\host\\s\\a.mp4</FilePath></PremiereData>")
+        fake.STATE["project"]["path"] = str(p)
+        self.assertEqual(ops.open_project(rpc, path=str(p), sleep=lambda s: None)["switched"], False)
+
+    def test_it_becomes_the_active_project_and_is_confirmed(self):
+        rpc, fake, calls = fake_rpc()
+        p = self.file()
+        data = ops.open_project(rpc, path=str(p), sleep=lambda s: None)
+        self.assertEqual((data["switched"], data["confirmed"], data["name"]), (True, True, "other.prproj"))
+        self.assertEqual(data["previous"]["path"], "/tmp/fake.prproj")
+        self.assertEqual([a for a, _ in calls if a == "open_project"], ["open_project"])
+        again = ops.open_project(rpc, path=str(p), sleep=lambda s: None)
+        self.assertEqual((again["switched"], again["confirmed"]), (False, True))
+
+    def test_refused_before_anything_is_sent(self):
+        rpc, fake, calls = fake_rpc()
+        for path, code in ((str(self.file("x.mp4")), "BAD_PARAMS"), (str(tmpdir() / "none.prproj"), "FILE_NOT_FOUND")):
+            with self.assertRaises(BridgeError) as cm:
+                ops.open_project(rpc, path=path, sleep=lambda s: None)
+            self.assertEqual((cm.exception.code, cm.exception.outcome), (code, "not_committed"))
+        self.assertNotIn("open_project", [a for a, _ in calls])
+
+    def test_premiere_staying_on_another_project_is_verify_failed(self):
+        rpc, fake, calls = fake_rpc()
+        p = self.file()
+        real = fake.HANDLERS["open_project"]
+        fake.HANDLERS["open_project"] = lambda q: dict(real(dict(q, path="/tmp/fake.prproj")), path=q["path"], switched=True)
+        with self.assertRaises(BridgeError) as cm:
+            ops.open_project(rpc, path=str(p), sleep=lambda s: None)
+        self.assertEqual((cm.exception.code, cm.exception.outcome), ("VERIFY_FAILED", "committed"))
 
 
 if __name__ == "__main__":

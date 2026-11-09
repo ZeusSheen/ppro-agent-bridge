@@ -123,6 +123,7 @@ class PathGuardTest(unittest.TestCase):
             ("import_transcript", "file"): ["import_transcript", "--item", "x", "--file", UNC + "t.json"],
             ("transcribe_clip", "output"): ["transcribe_clip", "--item", "x", "--output", UNC + "t.json"],
             ("import_media", "path"): ["import_media", "--path", UNC + "a.mp4"],
+            ("open_project", "path"): ["open_project", "--path", UNC + "a.prproj"],
             ("apply_plan", "plan"): ["apply_plan", UNC + "plan.json", "--dry-run"],
             ("apply_plan", "report"): ["apply_plan", str(cls.plan), "--dry-run", "--report", UNC + "r.json"],
             ("apply_plan", "media_root"): ["apply_plan", str(cls.plan), "--dry-run", "--media-root", UNC + "media"],

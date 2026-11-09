@@ -806,6 +806,70 @@
    ]
   },
   {
+   "name": "open_project",
+   "kind": "write",
+   "since": "0.7.1",
+   "timeoutSeconds": 300,
+   "capability": null,
+   "allowedWhenStuck": false,
+   "allowedWhenDenied": false,
+   "readOnly": false,
+   "destructive": false,
+   "idempotent": true,
+   "doc": "Open a Premiere project (.prproj) or bring one that is already open to the front, so the next requests work on it. No dialogs (convert, locate media, warnings); projects already open stay open; nothing is saved or closed.",
+   "params": {
+    "path": {
+     "type": "string",
+     "localPath": true,
+     "extensions": [
+      ".prproj"
+     ],
+     "required": true,
+     "doc": "Absolute path of the .prproj"
+    }
+   },
+   "reply": [
+    "switched",
+    "name",
+    "path",
+    "activeSequence",
+    "previous"
+   ],
+   "replyOptional": [
+    "guid"
+   ],
+   "fakeOnlyReply": [],
+   "errors": [
+    "NOT_FOUND",
+    "UNSUPPORTED",
+    "TRANSACTION_FAILED",
+    "EXPORT_RUNNING"
+   ],
+   "example": {
+    "params": {
+     "path": "/fake/other.prproj"
+    },
+    "reply": {
+     "switched": true,
+     "name": "other.prproj",
+     "path": "/fake/other.prproj",
+     "activeSequence": "Sequence 01",
+     "previous": {
+      "name": "Smoke Test.prproj",
+      "path": "/tmp/fake.prproj"
+     }
+    }
+   },
+   "errorExamples": [
+    {
+     "params": {},
+     "code": "BAD_PARAMS",
+     "outcome": "not_committed",
+     "doc": "path is required"
+    }
+   ]
+  },
+  {
    "name": "select_items",
    "kind": "write",
    "since": "0.6.0",
@@ -3030,6 +3094,20 @@
     "undoLabel": {
      "type": "string",
      "doc": "Label for Premiere's undo history"
+    },
+    "byOtio": {
+     "type": "boolean",
+     "default": false,
+     "doc": "The caller found the transition in an OTIO export: go on even when the track's transition count reads 0 (a transition added over UXP is not counted on 27.1), and let the caller check OTIO afterwards (removed: null)"
+    },
+    "side": {
+     "type": "string",
+     "enum": [
+      "clip",
+      "neighbour"
+     ],
+     "default": "clip",
+     "doc": "neighbour: ask only the neighbouring clip's opposite edge (the caller saw the clip's own call leave the transition in OTIO)"
     }
    },
    "reply": [
@@ -6941,6 +7019,18 @@
    "minProtocol": 2,
    "dryRun": false,
    "doc": "Switch the active sequence by name or guid (opens it in the Timeline) so later commands work on it; the project's content is unchanged; get_project confirms the switch (VERIFY_FAILED when Premiere stays on another sequence)"
+  },
+  {
+   "name": "open_project",
+   "kind": "write",
+   "calls": [
+    "open_project",
+    "get_project"
+   ],
+   "requirePanel": true,
+   "minProtocol": 2,
+   "dryRun": false,
+   "doc": "Open a .prproj, or bring an open one to the front, so later commands work on it; no dialogs, nothing saved or closed; confirmed with get_project"
   },
   {
    "name": "select_items",

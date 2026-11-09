@@ -78,7 +78,7 @@ if str(REPO) not in sys.path:
 from ppro_bridge import auth, items as pitems, spec  # noqa: E402  (stdlib only)
 
 BROKER_URL = os.environ.get("PPRO_BRIDGE_URL", "ws://127.0.0.1:8017")
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 PLUGIN_ID = "org.pproagentbridge.panel"  # the real panel's manifest id: its hello names it, as this one does
 FPS = 60000 / 1001
 TIMEBASE = "4237833600"  # ticks per frame at 59.94
@@ -901,6 +901,20 @@ def _switch_to(target):
     STATE.update(saved, sequence=target, selection=[])
 
 
+def h_open_project(p):
+    """Project.open: the file becomes the active project, or stays it; projects already open are not modelled."""
+    _refuse_busy()
+    proj = STATE.get("project") or {}
+    previous = {"name": project_name(), "path": proj.get("path")} if proj else None
+    switched = proj.get("path") != p["path"]
+    if switched:
+        side_effect()
+        STATE["project"] = {"guid": _next_guid("fake-project"), "path": p["path"], "name": os.path.basename(p["path"].replace("\\", "/"))}
+    seq = STATE.get("sequence")
+    return {"switched": switched, "name": project_name(), "path": p["path"], "activeSequence": seq["name"] if seq else None,
+            "previous": previous, "guid": STATE["project"]["guid"]}
+
+
 def h_set_active_sequence(p):
     """Switch to a sequence of the project: the active one (a switch that changes nothing) or one of the others
     (clone_sequence's restore points; a switch swaps the timelines). STATE["sequenceSwitchLag"] = n: the reply says
@@ -1615,18 +1629,24 @@ def h_remove_transition(p):
     touching = [o for o in track("video", vt)
                 if o is not clip and abs((o["end"] if edge == "start" else o["start"]) - cut) <= EPS]
     neighbour = touching[0] if len(touching) == 1 else None
-    on_track = lambda: sum(t["videoTrack"] == vt for t in transitions())  # noqa: E731
+    # STATE["transitionsInvisible"]: 27.1 does not count a transition added over UXP (live, 9 Nov 2026)
+    on_track = lambda: 0 if STATE.get("transitionsInvisible") else sum(t["videoTrack"] == vt for t in transitions())  # noqa: E731
     before = on_track()
     out = {"dryRun": dry, "track": label_of("video", vt), "edge": edge, "cut": cut, "clip": _clip_view(clip),
            "neighbour": _clip_view(neighbour) if neighbour else None, "removed": False, "via": None,
            "transitionCount": {"before": before}}
-    if before == 0:
+    by_otio = p.get("byOtio") is True
+    if before == 0 and not by_otio:
         return _refuse(out, dry, f"V{vt + 1} has no transitions; nothing was changed.")
     if dry:
         return out
     label = p.get("undoLabel") or f"Agent: remove the transition at the {edge} of V{vt + 1} @{js_num(at)}s"
     transact(label)
     hit = [t for t in transitions() if t["videoTrack"] == vt and abs(t["cut"] - cut) < EPS]
+    if by_otio and before == 0:
+        STATE["transitions"] = [t for t in transitions() if not any(t is h for h in hit)]
+        return dict(out, removed=None, via="neighbour" if p.get("side") == "neighbour" else "clip", problems=[],
+                    transitionCount={"before": 0, "after": 0}, undoLabel=label)
     if hit:
         STATE["transitions"] = [t for t in transitions() if not any(t is h for h in hit)]
     elif neighbour:
@@ -3358,6 +3378,7 @@ HANDLERS = {  # in actions.json order
     "get_project": h_get_project,
     "get_sequence": h_get_sequence,
     "set_active_sequence": h_set_active_sequence,
+    "open_project": h_open_project,
     "select_items": h_select_items,
     "list_items": h_list_items,
     "inspect_items": h_inspect_items,

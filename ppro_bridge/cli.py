@@ -113,6 +113,8 @@ def build_parser(only: str | None = None) -> argparse.ArgumentParser:
     pas = add("set_active_sequence", help="Open another sequence in the Timeline (by name or guid) for the next commands")
     pas.add_argument("--name", default=None, help="Exact sequence name")
     pas.add_argument("--guid", default=None, help="Sequence guid (when two sequences share a name)")
+    pop = add("open_project", help="Open a .prproj, or bring an open one to the front, for the next commands (no dialogs)")
+    pop.add_argument("--path", required=True, help="The .prproj file")
     psl = add("select_items", help="Select clips in the Timeline for Premiere's own panels (e.g. Properties > "
                                    "Enhance Audio on every selected clip); read back")
     psl.add_argument("--track", action="append", default=None, help="V1, A1, … (repeatable)")

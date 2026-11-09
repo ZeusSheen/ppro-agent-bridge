@@ -131,7 +131,7 @@ function createMocks(options) {
   const record = {
     transactions: [], failedTransactions: [], actionsCreated: 0, violations: [], sttCalls: [],
     exports: [], imports: [], textSegmentsCalls: 0, clones: [], times: [], subclips: [], relinks: [], listeners: [],
-    componentActions: [],
+    componentActions: [], projectOpens: [],
   };
   let lockDepth = 0;
   let idCounter = 0;
@@ -995,8 +995,27 @@ function createMocks(options) {
 
   /* ---------- the ppro module ---------- */
 
+  let projectOpened = false;
   const ppro = {
-    Project: { async getActiveProject() { return scenario === "no-project" ? null : project; } },
+    Project: {
+      async getActiveProject() { return scenario === "no-project" && !projectOpened ? null : project; },
+      async open(path, options) {                         // Project.open: that file becomes the active project
+        record.projectOpens.push({ path, dialogs: options ? options.dialogs : null });
+        if (knobs.openProjectFails) throw new Error("Failed to open the project");
+        if (!knobs.openProjectIgnored) {
+          projectOpened = true;
+          project.path = path;
+          project.name = path.split(/[\\/]/).pop();
+        }
+        return project;
+      },
+    },
+    OpenProjectOptions: class {
+      constructor() { this.dialogs = {}; }
+      setShowConvertProjectDialog(v) { this.dialogs.convert = v; return this; }
+      setShowLocateFileDialog(v) { this.dialogs.locate = v; return this; }
+      setShowWarningDialog(v) { this.dialogs.warning = v; return this; }
+    },
     SequenceEditor: { getEditor(seq) { return editorFor(seq); } },
     TrackItemSelection: {
       createEmptySelection(cb) {

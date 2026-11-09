@@ -219,7 +219,7 @@ class SpecShapeTest(unittest.TestCase):
         for a in ACTIONS:
             walk(a["params"], a["name"])
         self.assertEqual(sorted(marked), sorted([
-            "import_media.paths", "export_frame.dir", "export_frame.name", "export_otio.outputPath",
+            "import_media.paths", "open_project.path", "export_frame.dir", "export_frame.name", "export_otio.outputPath",
             "relink.newPath", "export_sequence.outputPath", "export_sequence.presetPath",
             "export_aaf.outputPath", "export_xml.outputPath",
             "api_smoke.copyPath", "api_smoke.outputDir", "api_smoke.mogrtPath"]))

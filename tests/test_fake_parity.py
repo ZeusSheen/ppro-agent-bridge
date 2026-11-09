@@ -1528,6 +1528,7 @@ class OpsCallsTest(FakeCase):
             "get_project": ({}, None),
             "get_sequence": ({}, None),
             "set_active_sequence": ({"name": "Sequence 01"}, None),
+            "open_project": ({"path": str(s / "other.prproj")}, lambda: (s / "other.prproj").write_text("<PremiereData/>", encoding="utf-8")),
             "select_items": ({"track": ["V1", "A1"], "at": 5.0, "expect_seq": "Sequence 01"}, None),
             "list_items": ({"track": "V1"}, None),
             "inspect_items": ({"track": ["V1"], "from_s": 0.0, "to_s": 10.0}, None),

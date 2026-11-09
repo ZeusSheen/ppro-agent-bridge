@@ -3,7 +3,7 @@
 This file follows the AGENTS.md convention (read by Codex and other coding agents).
 Claude Code users: the same content is packaged as a skill at `.claude/skills/ppro-bridge/SKILL.md` and is loaded automatically.
 
-# Premiere Pro Agent Bridge (v0.7.0)
+# Premiere Pro Agent Bridge (v0.7.1)
 
 Control a live Premiere Pro session via CLI. Architecture: `python ppro.py <action>`
 → local broker (localhost:8017) → UXP panel inside Premiere. Every command prints
@@ -144,6 +144,7 @@ through Creative Cloud instead, so Premiere loads it without UDT or developer mo
 | `python ppro.py get_project` | Active project name / path / guid / active sequence |
 | `python ppro.py get_sequence` | Frame size, fps, duration, tracks (name, clip count), player position, guid, `fingerprint` (for `--expect-fingerprint` on writes) |
 | `python ppro.py set_active_sequence --name "Seq" [--guid g]` | Open another sequence of the project in the Timeline so the next commands work on it (read back; changes no content); `get_project` then confirms it for up to ~2 s (`confirmed`): two quick switches once replied switched while Premiere stayed put, so still another sequence is `VERIFY_FAILED` (committed) |
+| `python ppro.py open_project --path "<folder>/x.prproj"` | Open a project, or bring one that is already open to the front, so the next commands work on it (no dialogs; projects already open stay open, nothing is saved or closed); `get_project` then confirms it (`confirmed`). An already open project is only brought forward, not reloaded (27.1 b41, live: a sequence not yet saved was still there after switching away and back); there is no list of open projects over UXP, so name the file. Refused while an export runs (`EXPORT_RUNNING`), and before anything is sent when the file points at a network path, which opening it could offer the user's Windows credentials to (`PRECONDITION_FAILED`, `data.references`: ask the user to open it in Premiere, or to map a drive letter and relink). A file that is not a Premiere project is refused too: with every dialog off Premiere still opens a modal error for one and nothing runs until someone clicks OK (27.1 b41, live). Open only a project the user named |
 | `python ppro.py select_items --track A1 (--at s \| --from s --to s) [--mode inside\|overlap] [--clear] [--dry-run] [--expect-seq NAME]` | Select clips in the Timeline (replacing the selection) for what only Premiere's panels do, e.g. Properties › Enhance Audio on every selected clip; read back, no undo step (see "Premiere's own panels") |
 | `python ppro.py list_items [--track V3] [--kind video\|audio]` | Clips on the timeline as JSON: start/end (sequence s), in/out (source s), project item, media path |
 | `python ppro.py inspect_items [--track V5] [--from s --to s] [--output f.json]` | What an editor changed: each clip's effect chain (Motion, Opacity, filters, with `occurrence`) with param values, keyframes (media time); transitions are listed but read their names/positions from `export_otio` |
@@ -477,8 +478,8 @@ from the clip itself, so attributes survive:
   Live on 27.1 (6 Nov 2026): at a cut with a clip on both sides Premiere centres an added
   transition even when asked for a single-sided one, and drops the half over a neighbour
   that has no media to cover it (a 15-frame fade-in came back as 8 frames); and a transition
-  added after a move is invisible to UXP (`remove_transition`: "V1 has no transitions", also
-  after switching sequences). So a one-sided fade next to a neighbour is planned before
+  added over UXP is not among the track's transition items, moved or not (live, build 41), so only
+  OTIO shows it. So a one-sided fade next to a neighbour is planned before
   anything is added. Premiere drops the half before the cut unless the incoming clip has media
   before its in point, and the half after it unless the outgoing clip has media after its out
   point. A fade-in on the clip's head is therefore asked for centred at twice its length when
@@ -489,8 +490,7 @@ from the clip itself, so attributes survive:
   with a `reason` saying how to add it by hand
   (drag it onto the edge, Effect Controls › Alignment "Start at Cut" / "End at Cut", and the
   duration). The dry run's `readd` says which (`single-sided`, `two-sided`, `centred`, `by
-  hand`). A transition the bridge added that came out wrong cannot be taken off over UXP:
-  ask the user to delete it in the Timeline, or Edit > Undo its step.
+  hand`). A transition the bridge added that came out wrong comes off with `remove_transition`.
 - **Timelines cut before the fix** — with `split_clip` or `cut_range` of bridge 0.4.0 to
   0.5.1, or 0.6.0-dev before 3 Nov 2026 — can hold such pieces (the right piece of each
   split, and clips it passed on its way back). Find them by render, not by listing:
@@ -801,7 +801,8 @@ changed) when it is not there. `--dry-run` first: it says what would go, and
   own). Look at `owner` in the dry run before removing a neighbour's fade. A second
   export afterwards must show it gone and every other transition still there
   (`verified`, else `VERIFY_FAILED`). Should Premiere file it under the neighbour's
-  edge, the panel asks there too (`via: "neighbour"`, one more undo step). Audio
+  edge, the panel asks there too (`via: "neighbour"`, one more undo step). The panel cannot count a
+  transition added over UXP, so `removed` can be null: OTIO is the proof (`verified`). Audio
   transitions are not reachable over UXP.
 - `remove_effect --track V3 --at <s> --match-name "AE.ADBE Gaussian Blur 2"
   [--occurrence 2]` takes the n-th instance in chain order (`inspect_items` lists

@@ -149,7 +149,7 @@ class ParserTest(unittest.TestCase):
     def test_subcommands_are_the_spec_commands(self):
         sub = next(a for a in cli.build_parser()._actions if a.dest == "action")
         self.assertEqual(sorted(sub.choices), sorted(spec.command_names()))
-        self.assertEqual(len(sub.choices), 58)  # 0.7: + export_aaf, export_xml, apply_ops, query
+        self.assertEqual(len(sub.choices), 59)  # 0.7: + export_aaf, export_xml, apply_ops, query; 0.7.1: + open_project
 
     def test_one_subcommand_parser_is_the_same_as_in_the_full_one(self):
         """main builds only the parser of the command argv names (start-up time): same help, same arguments."""
