@@ -16,7 +16,7 @@
 <meta property="og:description" content="Premiere Pro Agent Bridge 每个版本的变化，用大白话写：新增了什么、优化了什么、修复了什么。">
 <meta property="og:url" content="https://zeussheen.github.io/ppro-agent-bridge/zh/changelog.html">
 <meta property="og:locale" content="zh_CN">
-<meta property="og:image" content="https://zeussheen.github.io/ppro-agent-bridge/og-image.png?v=0.7.0">
+<meta property="og:image" content="https://zeussheen.github.io/ppro-agent-bridge/og-image.png?v=0.7.1">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256' width='256' height='256'%3E%3Cdefs%3E%3ClinearGradient id='rim' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23fff' stop-opacity='0.55'/%3E%3Cstop offset='0.5' stop-color='%23fff' stop-opacity='0.12'/%3E%3Cstop offset='1' stop-color='%23fff' stop-opacity='0.26'/%3E%3C/linearGradient%3E%3CclipPath id='tile'%3E%3Crect width='256' height='256' rx='56'/%3E%3C/clipPath%3E%3C/defs%3E%3Crect width='256' height='256' rx='56' fill='%2314143F'/%3E%3Cg clip-path='url(%23tile)'%3E%3Cpath d='M0 96L64 96L64 160L176 160L176 208L0 208Z' fill='%239999FF'/%3E%3Cpath d='M80 96L256 96L256 208L192 208L192 144L80 144Z' fill='%23C2C2FF'/%3E%3C/g%3E%3Cpath d='M96 32H160V64L136 88V224H120V88L96 64Z' fill='%23FF7A1A'/%3E%3Crect width='256' height='256' rx='56' fill='none' stroke='url(%23rim)' stroke-width='2'%0A        vector-effect='non-scaling-stroke' clip-path='url(%23tile)'/%3E%3C/svg%3E">
 <link rel="icon" href="../favicon.ico" sizes="16x16 24x24 32x32 48x48 64x64 128x128 256x256">
@@ -263,7 +263,22 @@ footer.site .more { display: flex; flex-wrap: wrap; justify-content: center; gap
       <h1>更新记录</h1>
       <p class="lead">每个版本用大白话写，最新的在最上面。完整的技术版更新日志在 <a href="https://github.com/ZeusSheen/ppro-agent-bridge#changelog">GitHub 上的 README</a> 里。</p>
     </div>
-    <nav aria-label="版本"><ul class="versions"><li><a href="#v0-7-0">0.7.0</a></li><li><a href="#v0-6-0">0.6.0</a></li><li><a href="#v0-5-1">0.5.1</a></li><li><a href="#v0-5-0">0.5.0</a></li><li><a href="#v0-4-0">0.4.0</a></li><li><a href="#v0-3-3">0.3.3</a></li><li><a href="#v0-3-2">0.3.2</a></li><li><a href="#v0-2">0.2</a></li></ul></nav>
+    <nav aria-label="版本"><ul class="versions"><li><a href="#v0-7-1">0.7.1</a></li><li><a href="#v0-7-0">0.7.0</a></li><li><a href="#v0-6-0">0.6.0</a></li><li><a href="#v0-5-1">0.5.1</a></li><li><a href="#v0-5-0">0.5.0</a></li><li><a href="#v0-4-0">0.4.0</a></li><li><a href="#v0-3-3">0.3.3</a></li><li><a href="#v0-3-2">0.3.2</a></li><li><a href="#v0-2">0.2</a></li></ul></nav>
+    <article class="release" id="v0-7-1" aria-labelledby="v0-7-1-h">
+      <div class="release-head"><h2 id="v0-7-1-h"><a href="#v0-7-1">0.7.1</a></h2><time class="when" datetime="2026-11-09">2026 年 11 月 9 日</time></div>
+      <section class="group">
+        <h3>新增</h3>
+        <ul>
+          <li>AI 助手现在可以切换 Premiere 的项目：打开你指定的项目，或者把已经开着的项目调到最前面。不会保存或关闭任何项目，已经开着的项目也不会重新加载，没保存的内容还在。如果项目用到网络上另一台电脑里的文件，它不会打开，因为那样可能把你的 Windows 登录信息提供给那台电脑：这种项目请你自己在 Premiere 里打开。</li>
+        </ul>
+      </section>
+      <section class="group">
+        <h3>修复</h3>
+        <ul>
+          <li>AI 助手自己加上去的转场，它删不掉：桥会说那里没有转场。现在可以删了，删完还会核对这个转场确实没了，其他转场都还在。</li>
+        </ul>
+      </section>
+    </article>
     <article class="release" id="v0-7-0" aria-labelledby="v0-7-0-h">
       <div class="release-head"><h2 id="v0-7-0-h"><a href="#v0-7-0">0.7.0</a></h2><time class="when" datetime="2026-11-08">2026 年 11 月 8 日</time></div>
       <section class="group">
