@@ -51,6 +51,9 @@
  *   support       stdin {calls: [{fn, args}], ...as call}: lib/support.js functions called with args (awaited)
  *                 -> {ok, results: [return values]}
  * `call` / `batch` add "violations" (mock lock-scope breaches) only when there were any.
+ * hostApi (any command): how require("premierepro") behaves - "broken-class" (Premiere Beta 27.1 builds 46-48: one
+ * class entry throws, the module loads only with lib/hostapi.js's workaround), "dead" (never loads), "no-project"
+ * (loads without Project); `call` / `batch` then add "host": {loads, forEachRestored, log, status}.
  * The panel loads as a dev build whatever plugin/lib/build.js says (so a release export's own tests check the same
  * panel), as a release build with `dev: false`: the one dev flag in build.js (or in a bundle) is rewritten in memory
  * the way scripts/build_ccx.py packages it, and loading fails unless it took. `buildJs` is the whole text of a
@@ -205,8 +208,25 @@ function loadPanel(req, mainPath) {
   const context = vm.createContext(sandbox);
   const modules = {};
   const libRequire = (name) => { throw new Error(`lib modules must not require ("${name}"); use deps`); };
+  /* req.hostApi: how require("premierepro") behaves. Absent: the mock module. "broken-class": what Premiere (Beta)
+     27.1 builds 46-48 do - one entry of the host's class table throws inside a Map.forEach of this realm, so the
+     module loads only while lib/hostapi.js skips it. "dead": every load throws. "no-project": it loads without
+     the Project class. */
+  const host = { loads: 0 };
+  const BROKEN = "Cannot read properties of undefined (reading 'prototype')";
+  const hostModule = () => {
+    host.loads += 1;
+    if (req.hostApi === "dead") throw new TypeError(BROKEN);
+    if (req.hostApi === "broken-class") {
+      vm.runInContext(`new Map([["Project", 1], ["CaptionDataClipTrackItem", 2], ["Sequence", 3]]).forEach((value, key) => {
+        if (key === "CaptionDataClipTrackItem") throw new TypeError(${JSON.stringify(BROKEN)});
+      })`, context);
+    }
+    if (req.hostApi === "no-project") return Object.assign({}, mocks.ppro, { Project: undefined });
+    return mocks.ppro;
+  };
   sandbox.require = function require(name) {
-    if (name === "premierepro") return mocks.ppro;
+    if (name === "premierepro") return hostModule();
     if (name === "uxp") return mocks.uxp;
     if ((name === "os" || name === "fs") && mocks[name]) return mocks[name];  // UXP's modules (the pairing token)
     if (LIB_REQUIRE.test(name)) {
@@ -233,7 +253,11 @@ function loadPanel(req, mainPath) {
     throw new Error(`the panel did not load as a ${dev ? "dev" : "release"} build`);
   }
   const page = { listeners, delays, timers, document: sandbox.document, sockets: StubWebSocket.instances };
-  return { bridge, mocks, page };
+  // Map.prototype.forEach must be the realm's own again once the panel has loaded (lib/hostapi.js swaps it)
+  host.forEachRestored = vm.runInContext('Map.prototype.forEach.name === "forEach"', context) === true;
+  host.log = sandbox.document.getElementById("log").childNodes.map((n) => n.textContent);
+  host.status = sandbox.document.getElementById("statusText").textContent;
+  return { bridge, mocks, page, host };
 }
 
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -344,8 +368,9 @@ async function launcherRun(bridge, mocks, page, req) {
   };
 }
 
-function withViolations(out, mocks) {
+function withViolations(out, mocks, loaded, req) {
   if (mocks.record.violations.length) out.violations = mocks.record.violations.slice();
+  if (loaded && req && req.hostApi !== undefined) out.host = loaded.host;  // {loads, forEachRestored, log, status}
   return out;
 }
 
@@ -381,7 +406,7 @@ async function run(args, req) {
     case "call": {
       applyStuck(bridge, req);
       const reply = await callOnce(bridge, req);
-      return withViolations({ ok: true, reply, transactions: mocks.record.transactions.slice(), sideEffects: sideEffectsOf(bridge) }, mocks);
+      return withViolations({ ok: true, reply, transactions: mocks.record.transactions.slice(), sideEffects: sideEffectsOf(bridge) }, mocks, loaded, req);
     }
     case "batch": {
       applyStuck(bridge, req);
@@ -391,7 +416,7 @@ async function run(args, req) {
         replies.push(await callOnce(bridge, step));
         sideEffects.push(sideEffectsOf(bridge));
       }
-      return withViolations({ ok: true, replies, transactions: mocks.record.transactions.slice(), sideEffects }, mocks);
+      return withViolations({ ok: true, replies, transactions: mocks.record.transactions.slice(), sideEffects }, mocks, loaded, req);
     }
     case "connection": {
       const page = loaded.page;

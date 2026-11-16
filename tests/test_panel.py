@@ -31,7 +31,8 @@ NODE = shutil.which("node")
 SPEC = json.loads((REPO / "ppro_bridge" / "actions.json").read_text(encoding="utf-8"))
 ACTIONS = {a["name"]: a for a in SPEC["actions"]}
 
-MAIN_REQUIRES = ["./lib/spec.js", "./lib/build.js", "./lib/core.js", "./lib/timeline.js", "./lib/project.js",
+MAIN_REQUIRES = ["./lib/hostapi.js",
+                 "./lib/spec.js", "./lib/build.js", "./lib/core.js", "./lib/timeline.js", "./lib/project.js",
                  "./lib/effects.js", "./lib/exportjobs.js", "./lib/capabilities.js", "./lib/support.js",
                  "./lib/pairing.js", "./lib/handlers_read.js",
                  "./lib/handlers_edit.js", "./lib/handlers_items.js", "./lib/handlers_effects.js",
@@ -1425,6 +1426,44 @@ const h = require(process.argv[1]);
         self.assertIs(harness("capabilities", {"hostTable": ranged})["denied"], False)  # no build number: no match
         self.assertIs(harness("capabilities", {"hostTable": {"denied": [{"match": "26.*", "reason": "r"}]}})["denied"], False)
         self.assertIs(harness("capabilities", {})["denied"], False)
+
+    def test_host_api_that_fails_on_one_class_loads_with_the_workaround(self):
+        # Premiere (Beta) 27.1 builds 46-48: require("premierepro") throws on one entry of the host's class table
+        # (plugin/lib/hostapi.js); the panel loads the module without that entry and says so
+        out = batch([{"action": "ping"}, {"action": "get_project"}, {"action": "get_sequence"}], hostApi="broken-class")
+        ping, project, sequence = out["replies"]
+        self.assertTrue(ping["ok"], ping)
+        self.assertEqual(ping["data"]["hostWorkaround"],
+                         {"skipped": ["CaptionDataClipTrackItem"],
+                          "error": "Cannot read properties of undefined (reading 'prototype')"})
+        self.assertIs(ping["data"]["denied"], False)
+        self.assertTrue(project["ok"] and sequence["ok"], (project, sequence))
+        host = out["host"]
+        self.assertEqual(host["loads"], 2)            # the plain load, then the one that skips the failing entry
+        self.assertIs(host["forEachRestored"], True)  # Map.prototype.forEach is the realm's own again
+        self.assertTrue(any("CaptionDataClipTrackItem" in line for line in host["log"]), host["log"])
+
+    def test_host_api_that_does_not_load_is_ping_only(self):
+        for mode, needle in (("dead", "reading 'prototype'"), ("no-project", "loaded without Project")):
+            with self.subTest(mode=mode):
+                out = batch([{"action": "ping"}, {"action": "get_project"},
+                             {"action": "insert_clip", "params": {"itemName": "x"}}], hostApi=mode)
+                ping, project, insert = out["replies"]
+                self.assertTrue(ping["ok"], ping)
+                denied = ping["data"]["denied"]
+                self.assertEqual(denied["match"], "premierepro")
+                self.assertIn(needle, denied["reason"])
+                self.assertNotIn("hostWorkaround", ping["data"])
+                for r in (project, insert):
+                    self.assertEqual((r["ok"], r["code"], r["outcome"]), (False, "HOST_DENIED", "not_committed"))
+                self.assertEqual(out["transactions"], [])
+                self.assertIs(out["host"]["forEachRestored"], True)
+                self.assertTrue(any("does not load in this build" in line for line in out["host"]["log"]))
+
+    def test_host_api_that_loads_plainly_is_loaded_once(self):
+        out = call("ping", {}, hostApi="ok")
+        self.assertNotIn("hostWorkaround", reply_ok(self, out))
+        self.assertEqual((out["host"]["loads"], out["host"]["forEachRestored"]), (1, True))
 
     def test_capabilities_per_scenario(self):
         flags = list(SPEC["capabilities"])

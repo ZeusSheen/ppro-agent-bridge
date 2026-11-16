@@ -3,7 +3,7 @@
 This file follows the AGENTS.md convention (read by Codex and other coding agents).
 Claude Code users: the same content is packaged as a skill at `.claude/skills/ppro-bridge/SKILL.md` and is loaded automatically.
 
-# Premiere Pro Agent Bridge (v0.7.1)
+# Premiere Pro Agent Bridge (v0.7.2)
 
 Control a live Premiere Pro session via CLI. Architecture: `python ppro.py <action>`
 → local broker (localhost:8017) → UXP panel inside Premiere. Every command prints
@@ -82,6 +82,13 @@ Read the ping reply:
 - `"denied"`: this Premiere build is on the panel's denylist (`denied.reason`). The
   panel answers ping only; everything else fails with `HOST_DENIED`. Tell the user
   the reason; do not try to work around it.
+- `hostWorkaround` (0.7.2+, `{skipped, error}`): Premiere's own API module (`require("premierepro")`)
+  failed to load in this build, and the panel loaded it without the classes in `skipped`.
+  Seen on Premiere Pro (Beta) 27.1 builds 46 and 48 (Nov 2026: `CaptionDataClipTrackItem`),
+  a Premiere bug that stops every UXP plugin. Commands work as before; only the items of a
+  caption track cannot be read. `warning` says so: tell the user once. When the module does
+  not load even so, `denied.match` is `"premierepro"` and the panel answers ping only: ask
+  the user to work in another Premiere build (the release one) until Adobe fixes it.
 - `capabilities`: what this Premiere build offers, each flag `true`, `false` or
   `"unknown"` (not probed yet; some flags need an open sequence). `ping --probe`
   probes again. An action whose capability is `false` fails with `UNSUPPORTED` —

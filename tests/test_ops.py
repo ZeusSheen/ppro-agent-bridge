@@ -106,6 +106,19 @@ class PingTest(unittest.TestCase):
                 self.assertFalse(data["compatible"], what)
         self.assertIn("test build", ops.ping(stub_rpc({"ping": cases["denylist"]}))["warning"])
 
+    def test_host_api_workaround_warns_and_a_dead_host_api_is_incompatible(self):
+        # plugin/lib/hostapi.js: Premiere's own API module fails to load on some Beta builds
+        work = ping_reply(hostWorkaround={"skipped": ["CaptionDataClipTrackItem"], "error": "boom"})
+        data = ops.ping(stub_rpc({"ping": work}))
+        self.assertTrue(data["compatible"], data)  # the panel works: a warning, not an incompatibility
+        self.assertIn("CaptionDataClipTrackItem", data["warning"])
+        self.assertIn("boom", data["warning"])
+        dead = ping_reply(denied={"match": "premierepro", "reason": "Premiere's own UXP API does not load: boom."})
+        data = ops.ping(stub_rpc({"ping": dead}))
+        self.assertFalse(data["compatible"])
+        self.assertIn("does not load: boom", data["warning"])
+        self.assertNotIn("denylist", data["warning"])
+
     def test_protocol_mismatch_is_incompatible(self):
         data = ops.ping(stub_rpc({"ping": ping_reply(protocol=spec.protocol() + 1)}))
         self.assertFalse(data["compatible"])

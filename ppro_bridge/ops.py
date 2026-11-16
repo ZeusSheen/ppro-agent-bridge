@@ -148,8 +148,17 @@ def ping(rpc, *, probe=False) -> dict:
                         "save the project, then reload the panel in UXP Developer Tool.")
     if denied:
         reason = denied.get("reason") if isinstance(denied, dict) else None
-        warnings.append(f"This Premiere build is on the panel's denylist ({reason or 'no reason given'}): "
-                        "the panel answers ping only.")
+        if isinstance(denied, dict) and denied.get("match") == "premierepro":  # the host's API module did not load
+            warnings.append(f"{reason or 'Premiere did not load its own UXP API.'} The panel answers ping only.")
+        else:
+            warnings.append(f"This Premiere build is on the panel's denylist ({reason or 'no reason given'}): "
+                            "the panel answers ping only.")
+    workaround = data.get("hostWorkaround")
+    if isinstance(workaround, dict):  # plugin/lib/hostapi.js: the API loaded only without some class entries
+        names = ", ".join(str(n) for n in workaround.get("skipped") or []) or "the failing part"
+        warnings.append(f"This Premiere build's own UXP API fails to load ({workaround.get('error')}); the panel "
+                        f"loaded it without {names}. Commands work as before, except what needs that class. "
+                        "A Premiere bug, not the bridge: it goes away with a fixed Premiere build.")
     local = panelhash.code_hash(PLUGIN_DIR, cache=None if sys.dont_write_bytecode or sys.pycache_prefix
                                 else CODE_HASH_CACHE)
     if local:

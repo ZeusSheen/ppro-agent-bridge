@@ -78,7 +78,7 @@ if str(REPO) not in sys.path:
 from ppro_bridge import auth, items as pitems, spec  # noqa: E402  (stdlib only)
 
 BROKER_URL = os.environ.get("PPRO_BRIDGE_URL", "ws://127.0.0.1:8017")
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 PLUGIN_ID = "org.pproagentbridge.panel"  # the real panel's manifest id: its hello names it, as this one does
 FPS = 60000 / 1001
 TIMEBASE = "4237833600"  # ticks per frame at 59.94

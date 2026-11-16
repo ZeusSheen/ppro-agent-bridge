@@ -3,7 +3,7 @@ name: ppro-bridge
 description: Drive Adobe Premiere Pro through the ppro-agent-bridge CLI for transcript-driven, closed-loop video editing. Use when asked to inspect a Premiere project or timeline, transcribe footage (local Whisper or Premiere Speech-to-Text), read or attach transcripts, export frames / contact sheets / OTIO, import media into bins, place clips or sentence-level cuts, execute a JSON edit plan (B-roll, graphics), scale clips to fit/fill, set effect params and keyframes, add or remove transitions, remove effects or keyframes, swap clips while keeping their effects, interpret footage frame rates, add timeline markers, remove clips, or assemble a rough cut / best-take edit from talking-head footage. Requires the broker running and the Agent Bridge UXP panel loaded in Premiere.
 ---
 
-# Premiere Pro Agent Bridge (v0.7.1)
+# Premiere Pro Agent Bridge (v0.7.2)
 
 Control a live Premiere Pro session via CLI. Architecture: `python ppro.py <action>`
 → local broker (localhost:8017) → UXP panel inside Premiere. Every command prints
@@ -82,6 +82,13 @@ Read the ping reply:
 - `"denied"`: this Premiere build is on the panel's denylist (`denied.reason`). The
   panel answers ping only; everything else fails with `HOST_DENIED`. Tell the user
   the reason; do not try to work around it.
+- `hostWorkaround` (0.7.2+, `{skipped, error}`): Premiere's own API module (`require("premierepro")`)
+  failed to load in this build, and the panel loaded it without the classes in `skipped`.
+  Seen on Premiere Pro (Beta) 27.1 builds 46 and 48 (Nov 2026: `CaptionDataClipTrackItem`),
+  a Premiere bug that stops every UXP plugin. Commands work as before; only the items of a
+  caption track cannot be read. `warning` says so: tell the user once. When the module does
+  not load even so, `denied.match` is `"premierepro"` and the panel answers ping only: ask
+  the user to work in another Premiere build (the release one) until Adobe fixes it.
 - `capabilities`: what this Premiere build offers, each flag `true`, `false` or
   `"unknown"` (not probed yet; some flags need an open sequence). `ping --probe`
   probes again. An action whose capability is `false` fails with `UNSUPPORTED` —

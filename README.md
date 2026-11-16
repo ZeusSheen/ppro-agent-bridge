@@ -5,7 +5,7 @@ Adobe Premiere Pro session for **transcript-driven, closed-loop video editing** 
 built entirely on Premiere's official UXP APIs (GA since 25.6), with fully local
 Whisper transcription.
 
-> **Status: experimental (v0.7.1).** Tested on Premiere Pro 27.1 / Windows 11
+> **Status: experimental (v0.7.2).** Tested on Premiere Pro 27.1 / Windows 11
 > (earlier releases also ran on 26.x). macOS is not supported yet.
 > Forty-seven whitelisted panel operations, checked against one action spec, plus
 > a Python library and CLI on top (edit plans, contact sheets, effect-preserving
@@ -13,9 +13,9 @@ Whisper transcription.
 
 ## Get started in 3 steps
 
-1. **Download** `ppro-agent-bridge-v0.7.1.zip` from
+1. **Download** `ppro-agent-bridge-v0.7.2.zip` from
    [Releases](../../releases), right-click it and choose
-   **Extract All**. (New in 0.7: `PremiereAgentBridge-Setup-0.7.1.exe` on the same page installs
+   **Extract All**. (New in 0.7: `PremiereAgentBridge-Setup-0.7.2.exe` on the same page installs
    everything, Python included, without admin rights — see [Install & run](#install--run).)
 2. **Install:** in the extracted folder, double-click **`1 Install Premiere Agent Bridge.bat`**.
    A window checks your computer, fixes what is missing and puts a **Premiere Agent Bridge**
@@ -25,7 +25,7 @@ Whisper transcription.
    what to send your AI helper (Claude Code or Codex).
 
 **中文：** 1. 从 Releases 下载 zip，右键「全部解压缩」（0.7 起也可以直接运行同一页的安装程序
-`PremiereAgentBridge-Setup-0.7.1.exe`，自带 Python，不要管理员权限；还没有代码签名，Windows 提示时点「更多信息 → 仍要运行」）。2. 双击 `1 Install Premiere Agent Bridge.bat`：
+`PremiereAgentBridge-Setup-0.7.2.exe`，自带 Python，不要管理员权限；还没有代码签名，Windows 提示时点「更多信息 → 仍要运行」）。2. 双击 `1 Install Premiere Agent Bridge.bat`：
 它会检查电脑、补齐缺的东西，并在桌面和开始菜单放一个 **Premiere Agent Bridge** 快捷方式。
 3. 双击这个快捷方式（或 `2 Start Premiere Agent Bridge.bat`），打开 Premiere 和面板
 （窗口 → UXP 增效工具 → Agent Bridge），面板会告诉你该对 AI 助手说什么。
@@ -580,6 +580,18 @@ and Reload the panel in UXP Developer Tool.
 
 ## Changelog
 
+- **0.7.2** — **Premiere Pro (Beta) 27.1 builds 46 to 48:** in these builds Premiere's own API module does not
+  load for any UXP plugin: `require("premierepro")` throws `Cannot read properties of undefined (reading
+  'prototype')` inside UXP's own middleware (the host's class table lists `CaptionDataClipTrackItem`, merged from
+  a class that does not exist), so the 0.7.1 panel showed "Not connected", an empty log, and never reached the
+  bridge. The panel now loads the module through `plugin/lib/hostapi.js`: a plain load first and, only when that
+  throws, once more while `Map.prototype.forEach` skips the class entries that fail (put back before anything
+  else runs). Live on build 48: one entry skipped, 77 exports; project, sequence, clips, capabilities, frame and
+  OTIO export read as on build 41; only the items of a caption track cannot be read (the bridge reads the
+  caption track count only). ping reports it as `hostWorkaround: {skipped,
+  error}` with a `warning`, and the panel's log says it. A build whose module does not load even so is `denied`
+  (`match: "premierepro"`): the panel connects, answers ping only and says why, instead of showing a blank page.
+  The release Premiere (27.0) and Beta build 41 load plainly, as before.
 - **0.7.1** — **Switching projects:** `open_project --path x.prproj` opens a project, or brings one that is already
   open to the front, so the next commands work on it: no dialogs, nothing saved or closed, confirmed with
   `get_project`. An open project is not reloaded (live on 27.1 build 41: a sequence that existed only in memory

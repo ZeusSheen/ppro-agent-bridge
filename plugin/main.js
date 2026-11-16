@@ -18,7 +18,10 @@
  * API usage patterns verified against AdobeDocs/uxp-premiere-pro-samples and live on Premiere 27.1.
  */
 
-const ppro = require("premierepro");
+/* Premiere's API through lib/hostapi.js: some Beta builds throw on a plain require("premierepro") (see there).
+   `ppro` is {} only when the API does not load at all: the panel then answers ping only (state.denied). */
+const hostApi = require("./lib/hostapi.js")({ load: () => require("premierepro") }).loadHostApi();
+const ppro = hostApi.api || {};
 const uxp = require("uxp");
 const spec = require("./lib/spec.js");
 const build = require("./lib/build.js");  // { dev, packaged? }: a release build registers no devOnly action
@@ -103,6 +106,9 @@ const UI = {
     reportNote: "This is the whole report: versions, Premiere's version, capabilities, the connection and recent " +
       "error codes. No project names, paths or token. Click the box, press Ctrl+C, and paste it into a GitHub issue.",
     openReason: "Agent Bridge opens a GitHub page in your browser.",
+    hostWorkaround: (names, error) => `Note: this Premiere build has a bug in its own plugin API (${error}). The ` +
+      `panel loaded the API without ${names}, and commands work as usual; only what needs that part does not ` +
+      "(clips on a caption track). Nothing to do: this note goes away once Adobe fixes the build.",
   },
   zh: {
     connected: "已连接",
@@ -129,6 +135,9 @@ const UI = {
     reportNote: "这就是报告的全部内容：版本、Premiere 版本、功能、连接状态和最近的错误代码。没有项目名、路径和令牌。" +
       "点一下框里，再按 Ctrl+C，贴到 GitHub Issues 里。",
     openReason: "Agent Bridge 将在浏览器里打开一个 GitHub 页面。",
+    hostWorkaround: (names, error) => `提示：这个 Premiere 版本自带的插件接口有个 bug（${error}）。面板已经跳过出错的 ` +
+      `${names} 把接口加载好了，命令照常可用；只有用到这一部分的功能暂时不行（读字幕轨上的片段）。` +
+      "你不用做任何事：等 Adobe 修好这个版本，这条提示就会消失。",
   },
 }[LANG];
 
@@ -258,7 +267,15 @@ const handlerGroups = [
 // Tests that change Premiere exist only in dev builds; a release keeps the read-only diagnostics (probe_api).
 if (build.dev === true) handlerGroups.push(require("./lib/smoke.js")(handlerDeps));
 
-state.denied = capabilities.denied;
+/* Denied by the host table, or because Premiere's own API module does not load in this build (lib/hostapi.js). */
+state.denied = capabilities.denied || (hostApi.api ? false : {
+  match: "premierepro",
+  reason: `Premiere's own UXP API (require("premierepro")) does not load in this build: ${hostApi.error}. `
+    + "A Premiere bug: use another Premiere build until Adobe fixes it.",
+});
+/* The API loaded only with the workaround: which class entries were left out, and what the plain load threw. */
+const hostWorkaround = hostApi.api && hostApi.error
+  ? { skipped: hostApi.skipped.map((s) => s.name), error: hostApi.error } : null;
 
 const hasOwn = core.hasOwn;
 const stuckText = () => `Stuck on "${state.stuck.action}" — save your project, then Reload this panel in UXP Developer Tool`;
@@ -291,6 +308,7 @@ async function ping(params) {
     build: { dev: build.dev === true, packaged: build.packaged === true },
   };
   if (caps.probedAt) data.capabilitiesProbedAt = caps.probedAt;
+  if (hostWorkaround) data.hostWorkaround = { skipped: hostWorkaround.skipped.slice(), error: hostWorkaround.error };
   const hash = await capabilities.codeHashWithin(params.probe ? CODE_HASH_WAIT_MS : 0);
   if (hash) data.codeHash = hash;
   return data;
@@ -821,7 +839,7 @@ document.getElementById("reportClose").addEventListener("click", safely("Close t
 
 /* Test hook (the node harness loads this script in a vm context; `module` is undefined here). */
 GLOBAL.__agentBridge = {
-  handlers, handleMessage, state, spec, build, teardown, safely,
+  handlers, handleMessage, state, spec, build, teardown, safely, hostApi,
   lib: { core, timeline, project: projectLib, effects, capabilities, support, pairing },
 };
 
@@ -830,6 +848,9 @@ log(`Agent Bridge ${VERSION} ready: ${dispatchable().length} commands ` +
 if (state.denied) {
   log(deniedText(), "err");
   setStatus("", deniedText());
+}
+if (hostWorkaround) {  // a note, not an error (no "err" class): the panel works, and the user has nothing to do
+  log(UI.hostWorkaround(hostWorkaround.skipped.join(", ") || "?", hostWorkaround.error));
 }
 capabilities.startCodeHash();
 connect();
